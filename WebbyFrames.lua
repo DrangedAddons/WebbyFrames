@@ -51,6 +51,11 @@ local DEFAULT_SETTINGS = {
     scale = 1, showName = true, healthFade = false, textMode = "always", textFormat = "value", barTexture = "default", font = "default", threatShow = "both",
     -- health bar colour: "smart" (class colour for players, reaction colour for NPCs), "class", "reaction" or "plain"
     colorMode = "smart",
+    -- fade to red: "auto" (class-aware) or "custom" (up to three stops: health % and colour, 0% = off)
+    fadeStyle = "auto", fadeBlend = true,
+    fade1Pct = 60, fade1Color = { 0.93, 0.93, 0.20 },
+    fade2Pct = 35, fade2Color = { 0.96, 0.55, 0.10 },
+    fade3Pct = 20, fade3Color = { 0.89, 0.19, 0.19 },
     npcColor = "reaction",   -- hostile NPCs: "reaction" (red), "green" or "custom" (npcColorRGB = { r, g, b })
     -- buffs and debuffs (off unless a frame's defaults turn them on)
     auraBuffs = false, auraDebuffs = false, auraMine = false,
@@ -544,6 +549,53 @@ local function getFadeCurve(r, g, b)
     return fadeCurves[key] or nil
 end
 
+-- Custom fade: up to three stops (fade1..3Pct, 0 = off, and fade1..3Color). Above the first stop the bar
+-- keeps its colour; with fadeBlend the colours blend from one stop to the next, without it the bar
+-- switches colour right at each stop. Below the last stop it stays that stop's colour.
+local function getCustomFadeCurve(unit, r, g, b)
+    local stops = {}
+    for i = 1, 3 do
+        local pct, col = getSetting(unit, "fade" .. i .. "Pct"), getSetting(unit, "fade" .. i .. "Color")
+        if type(pct) == "number" and pct > 0 and type(col) == "table" then
+            stops[#stops + 1] = { math.min(pct, 100) / 100, col[1] or 1, col[2] or 1, col[3] or 1 }
+        end
+    end
+    if #stops == 0 then return nil end
+    table.sort(stops, function(a, z) return a[1] > z[1] end)
+    local blend = getSetting(unit, "fadeBlend") and true or false
+    local parts = { blend and "b" or "s", string.format("%.2f:%.2f:%.2f", r, g, b) }
+    for _, s in ipairs(stops) do parts[#parts + 1] = string.format("%.2f:%.2f:%.2f:%.2f", s[1], s[2], s[3], s[4]) end
+    local key = "custom|" .. table.concat(parts, "|")
+    local c = fadeCurves[key]
+    if c ~= nil then return c or nil end
+    fadeCurves[key] = false
+    pcall(function()
+        if not (C_CurveUtil and C_CurveUtil.CreateColorCurve and CreateColor) then return end
+        -- the points, from full health down: { health fraction, r, g, b }
+        local pts = { { 1, r, g, b } }
+        for i, s in ipairs(stops) do
+            if not blend then
+                -- hold the colour above until just over the stop, then switch
+                local prev = (i == 1) and { 0, r, g, b } or stops[i - 1]
+                pts[#pts + 1] = { s[1] + 0.001, prev[2], prev[3], prev[4] }
+            end
+            pts[#pts + 1] = s
+        end
+        local last = stops[#stops]
+        pts[#pts + 1] = { 0, last[2], last[3], last[4] }
+        table.sort(pts, function(a, z) return a[1] < z[1] end)
+        local curve = C_CurveUtil.CreateColorCurve()
+        pcall(function() curve:SetType(Enum.LuaCurveType.Linear) end)
+        local lastX
+        for _, p in ipairs(pts) do
+            local x = math.max(0, math.min(1, p[1]))
+            if x ~= lastX then curve:AddPoint(x, CreateColor(p[2], p[3], p[4], 1)); lastX = x end
+        end
+        fadeCurves[key] = curve
+    end)
+    return fadeCurves[key] or nil
+end
+
 -- Returns true when the fade painted the bar.
 local function applyHealthFade(f, r, g, b)
     -- on: the health colour chosen above (class, reaction or plain green) fades to red as health drops
@@ -553,7 +605,12 @@ local function applyHealthFade(f, r, g, b)
     local tapped
     pcall(function() tapped = (not UnitPlayerControlled(f.wfUnit)) and UnitIsTapDenied(f.wfUnit) end)
     if tapped then return false end
-    local curve = getFadeCurve(r or 0.1, g or 0.8, b or 0.1)
+    local curve
+    if getSetting(f.baseUnit, "fadeStyle") == "custom" then
+        curve = getCustomFadeCurve(f.baseUnit, r or 0.1, g or 0.8, b or 0.1)
+    else
+        curve = getFadeCurve(r or 0.1, g or 0.8, b or 0.1)
+    end
     if not curve then return false end
     local ok = pcall(function()
         local color = UnitHealthPercent(f.wfUnit, true, curve)
@@ -3019,7 +3076,8 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "smoothBars", "healPrediction", "absorbs",
-                    "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB" }
+                    "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
+                    "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color" }
 
 function resetFrame(unit)
     if InCombatLockdown() then print("|cff33ccffWebby Frames:|r can't reset in combat."); return end
@@ -3374,8 +3432,30 @@ local function buildSettings()
             if CreateSettingsButtonInitializer then
                 local init = CreateSettingsButtonInitializer(label, text, onClick, tip, true)
                 layout:AddInitializer(init)
-                attach(init)
+                return attach(init)
             end
+        end
+        -- Fade to red with its style and custom stops. read: whose settings to show; set(unit, key, value).
+        function B.fade(read, set, tip)
+            local fade = B.check("healthFade", "Fade to red", tip, false)
+            local function fadeOn() return getSetting(read, "healthFade") and true or false end
+            local style = B.dropdown("fadeStyle", "Fade style", "Automatic: your colour turns to red round the colour wheel (with its own route for shamans, mages and warlocks), fully red from 25%.\n\nCustom: your own stops below, each a health % and a colour.", "auto",
+                { { "auto", "Automatic" }, { "custom", "Custom stops" } })
+            B.under(fade, fadeOn, style)
+            local function custom() return fadeOn() and getSetting(read, "fadeStyle") == "custom" end
+            local pctText = function(v) v = math.floor(v + 0.5); return v <= 0 and "Off" or string.format("%d%%", v) end
+            local inits = { B.check("fadeBlend", "Smooth blend", "On: the colours blend from one stop to the next. Off: the bar switches colour right at each stop.", true) }
+            local names = { "First", "Second", "Third" }
+            for i = 1, 3 do
+                inits[#inits + 1] = B.slider("fade" .. i .. "Pct", names[i] .. " stop", "At this health % the bar reaches this stop's colour. 0 turns the stop off.",
+                    DEFAULT_SETTINGS["fade" .. i .. "Pct"], 0, 100, 5, pctText)
+                inits[#inits + 1] = B.button(names[i] .. " stop colour", "Pick colour", function()
+                    local c = getSetting(read, "fade" .. i .. "Color")
+                    local old = type(c) == "table" and { c[1] or 1, c[2] or 1, c[3] or 1 } or { 1, 1, 1 }
+                    Extras.openPicker(old, function(r, g, b) set(read, "fade" .. i .. "Color", { r, g, b }) end)
+                end, "The bar's colour at the " .. names[i]:lower() .. " stop.")
+            end
+            B.under(style, custom, unpack(inits))
         end
         return B
     end
@@ -3440,7 +3520,7 @@ local function buildSettings()
             B.dropdown("textFormat", "Style", "Totals, percentages, or both.", "value",
                 { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
         B.check("smoothBars", "Smooth bars", "Health and power slide to their new value instead of jumping.", true)
-        B.check("healthFade", "Fade to red", "As health drops, each frame's health colour shifts towards red.", false)
+        B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
         B.dropdown("npcColor", "Enemy NPCs", "The health colour for hostile NPCs on every frame (with the Class / reaction or Reaction colour). Green lets Fade to red show their health dropping.", "reaction",
             { { "reaction", "Red (reaction colour)" }, { "green", "Green" }, { "custom", "Custom" } })
         B.button("Enemy NPC colour", "Pick colour", function() Extras.pickNpcColor("target", setAll) end,
@@ -3510,7 +3590,7 @@ local function buildSettings()
                     "Pick any health colour for hostile NPCs (sets Enemy NPCs to Custom).")
             end
         end
-        B.check("healthFade", "Fade to red", "As health drops, the health colour (whichever you picked above) shifts towards red.", false)
+        B.fade(unit, setSetting, "As health drops, the health colour (whichever you picked above) shifts towards red, or through your own stops.")
         B.check("healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true)
         B.check("absorbs", "Absorbs", "Damage shields past the end of its health, and healing absorbs eating back into it in red.", true)
 

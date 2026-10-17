@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.5
+- Custom health fade: under Fade to red, choose Automatic (the class-aware fade) or Custom stops. Custom gives three stops, each a health % and a colour you pick (yellow at 60%, orange at 35% and red at 20% to start; 0% turns a stop off), and Smooth blend to blend between stops or switch colour right at each one. On every frame page and the All frames page.
+
 ## 1.4
 - Threat is now a choice on target and focus: glow and number, glow only, number only, or off. (If you had threat turned off, it stays off.)
 - Mobs someone else has tagged stay plain grey: no fade to red on their health bar, and the name strip behind their name is grey too.
