@@ -1,4 +1,4 @@
-# Every push to main is a release: the version goes up by one (0.57 -> 0.58), the .toc and CHANGELOG
+# Every push to main is a release: the version goes up by one (1.0 -> 1.1 -> 1.2), the .toc and CHANGELOG
 # get the new number, that is committed back to main and tagged, and the zip is published as a GitHub
 # Release (which the Discord announcement picks up).
 #
@@ -46,7 +46,7 @@ jobs:
             NEW="$TOC"                                     # bumped by hand past the last release
           else
             MAJOR="${LAST%%.*}"; MINOR="${LAST#*.}"
-            NEW=$(printf '%s.%02d' "$MAJOR" "$((10#$MINOR + 1))")
+            NEW="${MAJOR}.$((10#$MINOR + 1))"            # 1.0 -> 1.1 (not zero-padded)
           fi
           if git rev-parse -q --verify "refs/tags/v${NEW}" >/dev/null; then
             echo "Tag v${NEW} already exists" >&2; exit 1
