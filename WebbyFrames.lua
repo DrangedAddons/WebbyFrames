@@ -455,13 +455,36 @@ end
 
 -- Health colour fade (like EllesmereUI): the colour is chosen by a curve the GAME evaluates from the
 -- unit's health percent, so it works with protected values; the result is only ever passed to a setter.
+-- The colour turns round the colour wheel to red the short way, staying saturated (no grey middle):
+-- green passes yellow and orange like Blizzard's bars, blue goes by purple and pink, and white (priests)
+-- just warms up to red. Full colour at full health, red from FADE_RED_AT down.
 local FADE_RED    = { 0.89, 0.19, 0.19 }
-local FADE_YELLOW = { 0.93, 0.93, 0.20 }
-local FADE_ORANGE = { 0.96, 0.55, 0.10 }
+local FADE_RED_AT = 0.25
 local fadeCurves = {}
-local function getFadeCurve(mode, r, g, b)
-    local key = mode
-    if mode == "reactive" then key = string.format("reactive:%.2f:%.2f:%.2f", r, g, b) end
+
+local function toHSV(r, g, b)
+    local mx, mn = math.max(r, g, b), math.min(r, g, b)
+    local d = mx - mn
+    local h = 0
+    if d > 0 then
+        if mx == r then h = ((g - b) / d) % 6 elseif mx == g then h = (b - r) / d + 2 else h = (r - g) / d + 4 end
+        h = h * 60
+    end
+    return h, (mx > 0) and d / mx or 0, mx
+end
+
+local function fromHSV(h, s, v)
+    local c = v * s
+    local x = c * (1 - math.abs((h / 60) % 2 - 1))
+    local m = v - c
+    local r, g, b
+    if h < 60 then r, g, b = c, x, 0 elseif h < 120 then r, g, b = x, c, 0 elseif h < 180 then r, g, b = 0, c, x
+    elseif h < 240 then r, g, b = 0, x, c elseif h < 300 then r, g, b = x, 0, c else r, g, b = c, 0, x end
+    return r + m, g + m, b + m
+end
+
+local function getFadeCurve(r, g, b)
+    local key = string.format("%.2f:%.2f:%.2f", r, g, b)
     local c = fadeCurves[key]
     if c ~= nil then return c or nil end
     fadeCurves[key] = false
@@ -469,20 +492,18 @@ local function getFadeCurve(mode, r, g, b)
         if not (C_CurveUtil and C_CurveUtil.CreateColorCurve and CreateColor) then return end
         local curve = C_CurveUtil.CreateColorCurve()
         pcall(function() curve:SetType(Enum.LuaCurveType.Linear) end)
-        local R, Y, O = FADE_RED, FADE_YELLOW, FADE_ORANGE
-        local top = (mode == "classic") and { 0, 1, 0 } or { r, g, b }
-        curve:AddPoint(0,    CreateColor(R[1], R[2], R[3], 1))
-        curve:AddPoint(0.2,  CreateColor(R[1], R[2], R[3], 1))
-        curve:AddPoint(0.45, CreateColor(O[1], O[2], O[3], 1))
-        curve:AddPoint(0.7,  CreateColor(Y[1], Y[2], Y[3], 1))
-        -- halfway between your colour and yellow, pulled toward grey so a blue class does not pass through green
-        local mr, mg, mb = (Y[1] + top[1]) / 2, (Y[2] + top[2]) / 2, (Y[3] + top[3]) / 2
-        if mode ~= "classic" then
-            local lum = 0.3 * mr + 0.59 * mg + 0.11 * mb
-            mr, mg, mb = mr + (lum - mr) * 0.8, mg + (lum - mg) * 0.8, mb + (lum - mb) * 0.8
+        local h1, s1, v1 = toHSV(r, g, b)
+        local h2, s2, v2 = toHSV(FADE_RED[1], FADE_RED[2], FADE_RED[3])
+        if s1 < 0.05 then h1 = h2 end               -- a grey or white has no hue of its own: just add red
+        local dh = (h2 - h1 + 540) % 360 - 180       -- the short way round
+        curve:AddPoint(0, CreateColor(FADE_RED[1], FADE_RED[2], FADE_RED[3], 1))
+        local steps = 6
+        for i = 0, steps do
+            local p = i / steps                       -- 0 = your colour (full health), 1 = red
+            local hp = 1 - p * (1 - FADE_RED_AT)
+            local cr, cg, cb = fromHSV((h1 + dh * p) % 360, s1 + (s2 - s1) * p, v1 + (v2 - v1) * p)
+            curve:AddPoint(hp, CreateColor(cr, cg, cb, 1))
         end
-        curve:AddPoint(0.85, CreateColor(mr, mg, mb, 1))
-        curve:AddPoint(1,    CreateColor(top[1], top[2], top[3], 1))
         fadeCurves[key] = curve
     end)
     return fadeCurves[key] or nil
@@ -493,16 +514,14 @@ local function applyHealthFade(f, r, g, b)
     -- on: the health colour chosen above (class, reaction or plain green) fades to red as health drops
     if not getSetting(f.baseUnit, "healthFade") then return false end
     if not (UnitHealthPercent and UnitExists(f.wfUnit)) then return false end
-    local curve = getFadeCurve("reactive", r or 0.1, g or 0.8, b or 0.1)
+    local curve = getFadeCurve(r or 0.1, g or 0.8, b or 0.1)
     if not curve then return false end
     local ok = pcall(function()
         local color = UnitHealthPercent(f.wfUnit, true, curve)
         local cr, cg, cb = color:GetRGB()
         f.hp:SetStatusBarColor(cr, cg, cb, 1)
     end)
-    if ok then
-        pcall(function() f.hp:GetStatusBarTexture():SetDesaturated(f.customTex == nil and f.hpCurrent == f.hpAtlas or false) end)
-    end
+    -- (the bar is on its tintable fill while fading, see updateHealthColor: no greying needed)
     return ok
 end
 
@@ -510,7 +529,10 @@ local function updateHealthColor(f)
     local r, g, b
     pcall(function() r, g, b = healthColor(f) end)
     local tex = f.hp:GetStatusBarTexture()
-    local want = (r and f.hpStatusAtlas) or f.hpAtlas
+    -- the tintable fill for a colour or a fade (tinting the green fill meant greying it first, which
+    -- dulled every colour); the plain green fill otherwise
+    local fading = getSetting(f.baseUnit, "healthFade") and true or false
+    local want = ((r or fading) and f.hpStatusAtlas) or f.hpAtlas
     if f.customTex then
         if f.hpCurrent ~= f.customTex then
             f.hpCurrent = f.customTex
@@ -536,7 +558,8 @@ local function updateHealthColor(f)
         f.hp:SetStatusBarColor(r, g, b, 1)
     else
         pcall(function() tex:SetDesaturated(false) end)
-        f.hp:SetStatusBarColor(1, 1, 1, 1)
+        -- the tintable fill (fading) starts out green; the plain green fill as drawn
+        if want == f.hpStatusAtlas then f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) else f.hp:SetStatusBarColor(1, 1, 1, 1) end
     end
     applyHealthFade(f, r, g, b)
 end

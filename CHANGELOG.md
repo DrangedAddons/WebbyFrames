@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2
+- Cleaner Fade to red: no more grey, washed-out look. Each colour now turns to red round the colour wheel the short way, staying bright: green goes through yellow and orange like Blizzard's bars, blue classes through purple and pink, priest white warms through pink. Full colour at full health, red from 25% down.
+
 ## 1.1
 - Enemy NPC health colour: hostile NPCs can be red (as before), green or any colour you pick, so Fade to red shows their health dropping. Per frame, or for every frame on the All frames page. Neutral NPCs stay yellow.
 - New frame colour, "The unit's class colour": the frame art takes the class colour of whoever the frame shows (target, focus and so on), changing with them. NPCs keep the gold art.
