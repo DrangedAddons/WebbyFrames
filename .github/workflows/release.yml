@@ -1,14 +1,25 @@
-# Builds the addon zip and publishes a GitHub Release when a version tag (v*) is pushed.
-# Ordinary pushes to main do nothing - only a deliberately pushed tag cuts a release
-# (and the release is what the Discord announcement picks up).
+# Every push to main is a release: the version goes up by one (0.57 -> 0.58), the .toc and CHANGELOG
+# get the new number, that is committed back to main and tagged, and the zip is published as a GitHub
+# Release (which the Discord announcement picks up).
+#
+# - If the .toc already has a newer version than the last tag (you bumped it by hand), that one is used.
+# - If CHANGELOG.md has no section for the new version, one is written from the commit messages.
+# - Pushing a v* tag yourself still releases that tag as it is (no bump).
+# - The version commit is pushed with the workflow's own token, which doesn't start another run.
 name: Release
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
+    paths-ignore: ['.github/tools/**']
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -16,29 +27,74 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # all tags, to find the previous release for the notes
+          fetch-depth: 0   # all tags and history, for the version and the notes
 
-      - name: Check the tag matches the .toc version
+      - name: Pick the version
+        id: ver
         run: |
-          TOC_VERSION=$(grep -m1 '^## Version:' WebbyFrames.toc | sed 's/^## Version:[[:space:]]*//' | tr -d '\r')
-          if [ "v${TOC_VERSION}" != "${GITHUB_REF_NAME}" ]; then
-            echo "Tag ${GITHUB_REF_NAME} doesn't match WebbyFrames.toc version ${TOC_VERSION}" >&2
-            exit 1
+          LAST=$(git tag -l 'v*' | sed 's/^v//' | sort -V | tail -1)
+          echo "last=${LAST}" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "bump=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          TOC=$(grep -m1 '^## Version:' WebbyFrames.toc | sed 's/^## Version:[[:space:]]*//' | tr -d '\r')
+          if [ -z "$LAST" ]; then
+            NEW="$TOC"                                     # first release: the .toc's version as it is
+          elif [ "$TOC" != "$LAST" ] && [ "$(printf '%s\n%s\n' "$LAST" "$TOC" | sort -V | tail -1)" = "$TOC" ]; then
+            NEW="$TOC"                                     # bumped by hand past the last release
+          else
+            MAJOR="${LAST%%.*}"; MINOR="${LAST#*.}"
+            NEW=$(printf '%s.%02d' "$MAJOR" "$((10#$MINOR + 1))")
+          fi
+          if git rev-parse -q --verify "refs/tags/v${NEW}" >/dev/null; then
+            echo "Tag v${NEW} already exists" >&2; exit 1
+          fi
+          echo "Releasing ${NEW} (last release: ${LAST:-none}, .toc: ${TOC})"
+          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
+          echo "bump=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set the version, commit and tag
+        if: steps.ver.outputs.bump == 'true'
+        env:
+          NEW: ${{ steps.ver.outputs.version }}
+          LAST: ${{ steps.ver.outputs.last }}
+        run: |
+          perl -pi -e 's/^## Version:[^\r\n]*/## Version: $ENV{NEW}/' WebbyFrames.toc
+          if ! tr -d '\r' < CHANGELOG.md | grep -qx "## ${NEW}"; then
+            # a section from the commits since the last release (not merges, not earlier version commits)
+            RANGE="HEAD"; [ -n "$LAST" ] && RANGE="v${LAST}..HEAD"
+            git log --no-merges --format='- %s' "$RANGE" | grep -v '^- Release v' > section.md || true
+            [ -s section.md ] || echo "- Updates" > section.md
+            { echo "## ${NEW}"; cat section.md; echo; } > new.md
+            awk 'NR == FNR { s = s $0 "\n"; next } !done && /^## / { printf "%s", s; done = 1 } { print }
+                 END { if (!done) printf "%s", s }' new.md CHANGELOG.md > CHANGELOG.tmp
+            mv CHANGELOG.tmp CHANGELOG.md
+            rm -f section.md new.md
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add WebbyFrames.toc CHANGELOG.md
+          if ! git diff --cached --quiet; then git commit -m "Release v${NEW}"; fi
+          git tag "v${NEW}"
+          git push origin HEAD:main "v${NEW}"
 
       - name: Build zip
+        env:
+          TAG: v${{ steps.ver.outputs.version }}
         run: |
           mkdir -p build/WebbyFrames
           rsync -a --exclude='.git*' --exclude='.github' --exclude='build' ./ build/WebbyFrames/
-          cd build && zip -qr "../WebbyFrames-${GITHUB_REF_NAME}.zip" WebbyFrames
+          cd build && zip -qr "../WebbyFrames-${TAG}.zip" WebbyFrames
 
       # Every CHANGELOG section since the previous release, so versions that were never tagged on
       # their own still get announced. Each older version gets its own sub-heading.
       - name: Release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
-          PREV="${PREV#v}"
+          PREV=$(git tag -l 'v*' | sed 's/^v//' | sort -V | awk -v v="$VERSION" '$0 == v { exit } { p = $0 } END { print p }')
           echo "Notes from ${VERSION} back to (not including) ${PREV:-the start}"
           tr -d '\r' < CHANGELOG.md | awk -v v="## ${VERSION}" -v p="## ${PREV}" '
             $0 == v { found = 1; next }
@@ -46,12 +102,12 @@ jobs:
             found && /^## / { if (p == "## ") exit; sub(/^## /, "### "); print; next }
             found { print }
           ' > notes.md
-          if [ ! -s notes.md ]; then echo "WebbyFrames ${GITHUB_REF_NAME}" > notes.md; fi
+          if [ ! -s notes.md ]; then echo "WebbyFrames v${VERSION}" > notes.md; fi
           cat notes.md
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.ver.outputs.version }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" "WebbyFrames-${GITHUB_REF_NAME}.zip" \
-            --title "WebbyFrames ${GITHUB_REF_NAME}" --notes-file notes.md
+          gh release create "${TAG}" "WebbyFrames-${TAG}.zip" --title "WebbyFrames ${TAG}" --notes-file notes.md

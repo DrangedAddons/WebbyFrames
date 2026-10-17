@@ -10,19 +10,14 @@
 WebbyFramesDB = WebbyFramesDB or DFFramesForeverDB or {}
 
 local UNITS = { "player", "target", "targettarget", "focus", "focustarget", "pet" }
-local UNIT_LABEL = { player = "Player", target = "Target", targettarget = "Target of Target", focus = "Focus", focustarget = "Focus Target", pet = "Pet", party = "Party" }
--- Party: four small frames (party1-4) stacked in one container; they share the "party" options.
-local PARTY = { "party1", "party2", "party3", "party4" }
-local PARTY_GAP = 10
--- everything with its own options page and Edit Mode mover
-local OPTION_UNITS = { "player", "target", "targettarget", "focus", "focustarget", "pet", "party" }
+local UNIT_LABEL = { player = "Player", target = "Target", targettarget = "Target of Target", focus = "Focus", focustarget = "Focus Target", pet = "Pet" }
+-- (party frames are shelved for now: .github/shelved/party-skin.lua)
 -- Portrait side is fixed per frame: target and focus have it on the right (Retail's target art),
 -- the player and the small frames on the left.
 local function portraitOnLeft(unit) return unit ~= "target" and unit ~= "focus" end
-local function isSmall(unit) return unit == "targettarget" or unit == "focustarget" or unit == "pet" or unit == "party" end
--- only the full-size target and focus frames have the interrupt flash and the threat box
+-- only the full-size target and focus frames have the cast bar, interrupt flash and threat
 local function hasCastAndThreat(unit) return unit == "target" or unit == "focus" end
--- the pointed corner accent is only offered on the player and target frames; the rest keep a round ring
+-- the pointed corner accent is only offered on the player frame; the rest keep a round ring
 local function hasCorner(unit) return unit == "player" end
 
 local COLOR_MODES = {
@@ -32,13 +27,6 @@ local COLOR_MODES = {
     { "plain",    "Plain green" },
 }
 
-local TOT_PREFIX = "UI-HUD-UnitFrame-TargetofTarget-PortraitOn"   -- small frame art (Retail target-of-target)
-local SMALL_MASK_HEALTH = "UI-HUD-UnitFrame-Party-PortraitOn-Bar-Health-Mask"
-local SMALL_MASK_MANA   = "UI-HUD-UnitFrame-Party-PortraitOn-Bar-Mana-Mask"
-
-local PLAYER_PREFIX = "UI-HUD-UnitFrame-Player-PortraitOn"   -- portrait on the left (Retail player frame)
-local TARGET_PREFIX = "UI-HUD-UnitFrame-Target-PortraitOn"   -- portrait on the right (Retail target frame)
-
 local DEFAULT_POS = {
     player = { point = "TOPLEFT", x = 20,  y = -40 },
     target = { point = "TOPLEFT", x = 270, y = -40 },
@@ -47,9 +35,7 @@ local DEFAULT_POS = {
     focustarget = { point = "TOPLEFT", x = 394, y = -260 },
     -- Retail puts target of target at the bottom right of the target frame
     targettarget = { point = "TOPLEFT", x = 394, y = -130 },
-    party  = { point = "TOPLEFT", x = 20,  y = -260 },     -- the party container
 }
-for _, u in ipairs(PARTY) do DEFAULT_POS[u] = DEFAULT_POS.party end
 
 -- per-frame defaults that differ from DEFAULT_SETTINGS (the small frame is too narrow for long numbers)
 local UNIT_DEFAULTS = {
@@ -59,23 +45,26 @@ local UNIT_DEFAULTS = {
     targettarget = { textMode = "off", textFormat = "percent" },
     pet = { textMode = "off", textFormat = "percent" },
     focustarget = { textMode = "off", textFormat = "percent" },
-    -- party: just debuffs, a few small ones to the right of each frame
-    party = { textMode = "off", textFormat = "percent", auraDebuffs = true, auraSize = 18, auraPerRow = 4, auraMax = 4, auraPos = "right" },
 }
 
 local DEFAULT_SETTINGS = {
-    scale = 1, showName = true, healthFade = "off", textMode = "always", textFormat = "value", barTexture = "default", font = "default", flashInterrupt = true, showThreat = true,
+    scale = 1, showName = true, healthFade = false, textMode = "always", textFormat = "value", barTexture = "default", font = "default", showThreat = true,
     -- health bar colour: "smart" (class colour for players, reaction colour for NPCs), "class", "reaction" or "plain"
     colorMode = "smart",
-    cornerAccent = true,   -- the pointed accent on the ring (off = just the level circle)
     -- buffs and debuffs (off unless a frame's defaults turn them on)
     auraBuffs = false, auraDebuffs = false, auraMine = false,
-    auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below", auraTimers = true,
-    -- cast bar (target and focus): Blizzard's own bar, moved under our frame
-    castShow = true, castText = true, castIcon = true, castBorder = "bars",
+    auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below", auraTimer = "both",   -- auraDebuffSize follows auraSize until set
+    -- cast bar (target and focus): Blizzard's own bar drives one built into our frame
+    castShow = true, castText = true, castIcon = true,
+    -- frame art colour: "default" (as drawn), "dark", "silver", "class" or "custom" (frameColor = { r, g, b })
+    frameTint = "default",
     -- health bar extras
     smoothBars = true, healPrediction = true, absorbs = true,
-    combatNumbers = false,   -- damage / heal numbers over the portrait (on for player, target, focus)
+    combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus), one General switch
+    -- icons and extras
+    comboPoints = true,
+    petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (green)
+    petHappy = "corner",     -- hunter pet happiness: "corner" (over the corner accent), "badge" (in the level circle) or "off"
 }
 
 -- fallback power bar art names if PowerBarColor doesn't supply one
@@ -146,14 +135,9 @@ local function useClip(bar, on)
     pcall(tex.RemoveMaskTexture, tex, bar.clip)
     if on and bar.clipInset then tex:AddMaskTexture(bar.clip) end
 end
-local POWER_ATLAS = {
-    MANA = "Mana", RAGE = "Rage", FOCUS = "Focus", ENERGY = "Energy", RUNIC_POWER = "RunicPower",
-    LUNAR_POWER = "LunarPower", MAELSTROM = "Maelstrom", INSANITY = "Insanity", FURY = "Fury", PAIN = "Pain",
-}
 
 local DB, lib
-local frames = {}            -- unit -> frame (frames.party is the party container)
-local partyFrames = {}       -- the four party frames, in order
+local frames = {}            -- unit -> frame
 local activeLayout = "Default"
 local pendingApply = false
 local settingsCategory
@@ -191,6 +175,15 @@ local function getSetting(unit, key)
         if u.reactionColor then return "reaction" end
         return "plain"
     end
+    -- 0.57 test builds had one icon size and a countdown-numbers checkbox
+    if v == nil and key == "auraDebuffSize" then return getSetting(unit, "auraSize") end
+    -- the power bar's texture follows the health bar's until it's set (there used to be one for both)
+    if v == nil and key == "powerTexture" then return getSetting(unit, "barTexture") end
+    -- older builds: the low health fade had styles, aura position had "right of the frame"
+    if key == "healthFade" and type(v) == "string" then return v ~= "off" end
+    if key == "auraPos" and v == "right" then v = "custom" end
+    if v == nil and key == "petHappy" and u and u.petHappiness == false then return "off" end
+    if v == nil and key == "auraTimer" and u and u.auraTimers == false then return "swipe" end
     if v == nil then v = defaultFor(unit, key) end
     return v
 end
@@ -219,13 +212,6 @@ local function hasAtlas(name)
 end
 
 
--- Forever can hand back "secret" numbers, so every touch is wrapped.
-local function setNumber(fs, v)
-    if pcall(function() fs:SetText(AbbreviateLargeNumbers(v)) end) then return end
-    if pcall(function() fs:SetFormattedText("%d", v) end) then return end
-    fs:SetText("")
-end
-
 local function percentOf(kind, u, token)
     local pct
     pcall(function()
@@ -243,7 +229,8 @@ local function percentOf(kind, u, token)
     return pct
 end
 
--- Writes "12.3K", "85%" or "12.3K (85%)" depending on the unit's text format.
+-- Writes "12.3K", "85%" or "12.3K (85%)" depending on the unit's text format. Power other than mana
+-- (rage, energy, focus, runic power, ...) is a small fixed pool, so it always shows its plain value.
 -- Forever can hand back secret numbers, so every touch is wrapped.
 local function setBarText(fs, f, kind)
     local u = f.wfUnit
@@ -251,6 +238,11 @@ local function setBarText(fs, f, kind)
     local cur
     if kind == "hp" then cur = UnitHealth(u) else cur = UnitPower(u) end
     local token = select(2, UnitPowerType(u))
+    if kind == "mp" then
+        local mana = false
+        pcall(function() mana = (token == "MANA") end)
+        if not mana then fmt = "value" end
+    end
     local pct = (fmt ~= "value") and percentOf(kind, u, token) or nil
     local ok = pcall(function()
         local valueText = AbbreviateLargeNumbers(cur)
@@ -306,6 +298,8 @@ local function reactionColorOf(u)
 end
 
 
+local PLAYER_AS_FRAME = { wfUnit = "player", baseUnit = "player" }
+
 local function healthColor(f)
     local u, base = f.wfUnit, f.baseUnit
     local r, g, b
@@ -314,8 +308,15 @@ local function healthColor(f)
     pcall(function() tapped = (not UnitPlayerControlled(u)) and UnitIsTapDenied(u) end)
     if tapped then return 0.5, 0.5, 0.5 end
 
-    -- the pet's selection colour flips around (neutral / friendly / controlled), so the pet bar is always green
-    if base == "pet" then return 0.1, 0.8, 0.1 end
+    -- the pet's own selection colour flips around (neutral / friendly / controlled), so its bar is either
+    -- the player frame's colour (as set on the player page: your class colour, say) or plain green
+    if base == "pet" then
+        if getSetting("pet", "petColor") == "player" then
+            r, g, b = healthColor(PLAYER_AS_FRAME)
+            if r then return r, g, b end
+        end
+        return 0.1, 0.8, 0.1
+    end
 
     local mode = getSetting(base, "colorMode")
     -- friendly pets and guardians (on any frame, e.g. targeting your pet): their selection colour
@@ -368,7 +369,7 @@ end
 -- All textures offered in the dropdowns: "default" first, then built-in files, atlases that exist
 -- on this client, and anything registered with LibSharedMedia (from other addons).
 local function textureChoices()
-    local list = { { "default", previewLabel("Default (Retail art)", nil, hasAtlas("UI-HUD-UnitFrame-Player-PortraitOn-Bar-Health") and "UI-HUD-UnitFrame-Player-PortraitOn-Bar-Health" or nil) } }
+    local list = { { "default", previewLabel("Default", BAR_FILE.player .. "Health") } }
     local lsm = getLSM()
     if lsm then
         pcall(function()
@@ -476,10 +477,10 @@ end
 
 -- Returns true when the fade painted the bar.
 local function applyHealthFade(f, r, g, b)
-    local mode = getSetting(f.baseUnit, "healthFade")
-    if mode ~= "classic" and mode ~= "reactive" then return false end
+    -- on: the health colour chosen above (class, reaction or plain green) fades to red as health drops
+    if not getSetting(f.baseUnit, "healthFade") then return false end
     if not (UnitHealthPercent and UnitExists(f.wfUnit)) then return false end
-    local curve = getFadeCurve(mode, r or 0.1, g or 0.8, b or 0.1)
+    local curve = getFadeCurve("reactive", r or 0.1, g or 0.8, b or 0.1)
     if not curve then return false end
     local ok = pcall(function()
         local color = UnitHealthPercent(f.wfUnit, true, curve)
@@ -582,6 +583,31 @@ local function value(fn, u)
     return v
 end
 
+-- Blizzard's heal prediction calculator (12.x, as EllesmereUI uses it): splits incoming heals into
+-- yours and everyone else's, clamped to the unit's missing health. nil on clients without it.
+local function healCalculator(f)
+    if f.healCalc == nil then
+        f.healCalc = false
+        if CreateUnitHealPredictionCalculator and UnitGetDetailedHealPrediction then
+            pcall(function()
+                local calc = CreateUnitHealPredictionCalculator()
+                local E = Enum or {}
+                if calc.SetIncomingHealClampMode and E.UnitIncomingHealClampMode then
+                    calc:SetIncomingHealClampMode(E.UnitIncomingHealClampMode.MaximumHealth)
+                end
+                if calc.SetHealAbsorbClampMode and E.UnitHealAbsorbClampMode then
+                    calc:SetHealAbsorbClampMode(E.UnitHealAbsorbClampMode.MaximumHealth)
+                end
+                if calc.SetHealAbsorbMode and E.UnitHealAbsorbMode then
+                    calc:SetHealAbsorbMode(E.UnitHealAbsorbMode.ReducedByIncomingHeals)
+                end
+                f.healCalc = calc
+            end)
+        end
+    end
+    return f.healCalc or nil
+end
+
 local function updatePrediction(f)
     if f.previewing then return end            -- /webby test is showing made-up values
     local wantHeals = getSetting(f.baseUnit, "healPrediction")
@@ -593,20 +619,26 @@ local function updatePrediction(f)
         f.predClip:SetAllPoints(f.hp)
         f.predClip:SetClipsChildren(true)
         f.predClip:SetFrameLevel(f.hp:GetFrameLevel() + 1)
-        f.healBar = newOverlay(f, 0.1, 0.9, 0.3, 0.5)          -- incoming heals: green
+        f.healBar = newOverlay(f, 0.1, 0.9, 0.3, 0.6)          -- your incoming heals: green
+        f.otherHealBar = newOverlay(f, 0.05, 0.6, 0.2, 0.5)    -- everyone else's: darker green
         f.absorbBar = newOverlay(f, 0.7, 0.9, 1, 0.7)          -- shields: pale blue
         f.healAbsorbBar = newOverlay(f, 0.9, 0.1, 0.1, 0.6, true)   -- heal absorbs: red, eating back in
     end
-    for _, bar in ipairs({ f.healBar, f.absorbBar, f.healAbsorbBar }) do styleOverlay(f, bar) end
+    for _, bar in ipairs({ f.healBar, f.otherHealBar, f.absorbBar, f.healAbsorbBar }) do styleOverlay(f, bar) end
     local u = f.wfUnit
     local fill = f.hp:GetStatusBarTexture()
     local w = f.hp:GetWidth()
-    -- heals start at the end of the health fill, the shield at the end of the heals
+    -- your heals start at the end of the health fill, then everyone else's, then the shield
     f.healBar:ClearAllPoints()
     f.healBar:SetPoint("TOPLEFT", fill, "TOPRIGHT")
     f.healBar:SetPoint("BOTTOMLEFT", fill, "BOTTOMRIGHT")
     f.healBar:SetWidth(w)
-    local healFill = f.healBar:GetStatusBarTexture()
+    local myFill = f.healBar:GetStatusBarTexture()
+    f.otherHealBar:ClearAllPoints()
+    f.otherHealBar:SetPoint("TOPLEFT", myFill, "TOPRIGHT")
+    f.otherHealBar:SetPoint("BOTTOMLEFT", myFill, "BOTTOMRIGHT")
+    f.otherHealBar:SetWidth(w)
+    local healFill = f.otherHealBar:GetStatusBarTexture()
     f.absorbBar:ClearAllPoints()
     f.absorbBar:SetPoint("TOPLEFT", healFill, "TOPRIGHT")
     f.absorbBar:SetPoint("BOTTOMLEFT", healFill, "BOTTOMRIGHT")
@@ -619,14 +651,26 @@ local function updatePrediction(f)
 
     local max = value(UnitHealthMax, u)
     local dead = unitStatus(u) ~= nil
-    for _, bar in ipairs({ f.healBar, f.absorbBar, f.healAbsorbBar }) do
+    for _, bar in ipairs({ f.healBar, f.otherHealBar, f.absorbBar, f.healAbsorbBar }) do
         if max then pcall(bar.SetMinMaxValues, bar, 0, max) end
     end
-    local heals = (wantHeals and not dead) and value(UnitGetIncomingHeals, u) or nil
+    -- incoming heals: through the calculator when the client has it (yours and others' apart), else
+    -- the older all-in-one total on the first bar
+    local mine, others
+    if wantHeals and not dead then
+        local calc = healCalculator(f)
+        local ok = calc and pcall(function()
+            UnitGetDetailedHealPrediction(u, "player", calc)
+            local _, m, o = calc:GetIncomingHeals()
+            mine, others = m, o
+        end)
+        if not ok then mine, others = value(UnitGetIncomingHeals, u), nil end
+    end
     local absorb = (wantAbsorbs and not dead) and value(UnitGetTotalAbsorbs, u) or nil
     local healAbsorb = (wantAbsorbs and not dead) and value(UnitGetTotalHealAbsorbs, u) or nil
-    -- (a missing value counts as none; the heal bar stays at 0 so the shield still starts at the health end)
-    if not pcall(setBarValue, f, f.healBar, heals) then f.healBar:SetValue(0) end
+    -- (a missing value counts as none; the heal bars stay at 0 so the shield still starts at the health end)
+    if not pcall(setBarValue, f, f.healBar, mine) then f.healBar:SetValue(0) end
+    if not pcall(setBarValue, f, f.otherHealBar, others) then f.otherHealBar:SetValue(0) end
     if not pcall(setBarValue, f, f.absorbBar, absorb) then f.absorbBar:SetValue(0) end
     if not pcall(setBarValue, f, f.healAbsorbBar, healAbsorb) then f.healAbsorbBar:SetValue(0) end
 end
@@ -659,7 +703,7 @@ local function updatePower(f)
     local u = f.wfUnit
     if not UnitExists(u) then return end
     local _, token = UnitPowerType(u)
-    local fill, tinted = f.customTex, true
+    local fill, tinted = f.powerTex, true
     if not fill then
         -- the bundled pre-shaped fill for this power type and frame, drawn untinted
         local kind
@@ -766,11 +810,17 @@ end
 -- Status indicators: combat + resting (player), PvP flag (all three frames)
 ---------------------------------------------------------------------------
 local STATE_ICON = "Interface\\CharacterFrame\\UI-StateIcon"
+-- Forever's own small faction shields (its player frame tucks them against the level circle), then
+-- Retail's badges, then the old Classic files
 local PVP_ICONS = {
-    Horde    = { "UI-HUD-UnitFrame-Player-PVP-HordeIcon",    "Interface\\TargetingFrame\\UI-PVP-Horde" },
-    Alliance = { "UI-HUD-UnitFrame-Player-PVP-AllianceIcon", "Interface\\TargetingFrame\\UI-PVP-Alliance" },
-    FFA      = { "UI-HUD-UnitFrame-Player-PVP-FFAIcon",      "Interface\\TargetingFrame\\UI-PVP-FFA" },
+    Horde    = { "UI-HUD-UnitFrame-SmallCircle-Horde",    "UI-HUD-UnitFrame-Player-PVP-HordeIcon",    "Interface\\TargetingFrame\\UI-PVP-Horde" },
+    Alliance = { "UI-HUD-UnitFrame-SmallCircle-Alliance", "UI-HUD-UnitFrame-Player-PVP-AllianceIcon", "Interface\\TargetingFrame\\UI-PVP-Alliance" },
+    FFA      = { "UI-HUD-UnitFrame-SmallCircle-FFA",      "UI-HUD-UnitFrame-Player-PVP-FFAIcon",      "Interface\\TargetingFrame\\UI-PVP-FFA" },
 }
+-- Forever's shield (24 x 27, its own size) sits just above the level circle, its centre 10.5px in from
+-- the circle's (Forever's frame: the shield at x 22, the 39px circle at x 13). Its frame is taller than
+-- ours, so it's placed from the circle rather than the frame's top. Mirrored on the right-portrait frames.
+local PVP_SHIELD_POS = { -10.5, -20 }      -- from the level circle's top centre (both arts have clear margins)
 
 local function setIcon(tex, atlas, file, l, r, t, b)
     if atlas and hasAtlas(atlas) then
@@ -844,6 +894,10 @@ local function createIndicators(f)
             SetAlpha = function(_, a) sf:SetAlpha(a); cf:SetAlpha(a) end,
             SetVertexColor = function(_, r, g, b)
                 glow:SetVertexColor(r, g, b); halo:SetVertexColor(r, g, b); lit:SetVertexColor(r, g, b)
+            end,
+            -- greyed first when it's tinted to the frame colour, so the art's gold doesn't mix in
+            SetDesaturated = function(_, d)
+                for _, t in ipairs({ glow, halo, lit }) do pcall(t.SetDesaturated, t, d) end
             end,
         }
         -- one pulse animation per frame, started and stopped together
@@ -954,10 +1008,16 @@ local function placeIndicators(f)
         f.restIcon:SetPoint("CENTER", p, "TOPRIGHT", -4, 4)
     end
     if f.pvpIcon then
-        -- just outside the portrait on the frame's outer edge (DragonflightUI's spot), but raised above
-        -- its middle: Forever's level circle sits where DragonflightUI puts the badge, below the middle
         f.pvpIcon:ClearAllPoints()
-        if left then f.pvpIcon:SetPoint("LEFT", p, "LEFT", -22, 14) else f.pvpIcon:SetPoint("RIGHT", p, "RIGHT", 22, 14) end
+        if f.pvpSmall and f.badge then
+            -- Forever's small shield, exactly where Forever's own player frame has it (see PVP_SHIELD_POS)
+            f.pvpIcon:SetPoint("BOTTOM", f.badge, "TOP", left and PVP_SHIELD_POS[1] or -PVP_SHIELD_POS[1], PVP_SHIELD_POS[2])
+        elseif left then
+            -- the larger fallback badge: outside the portrait on the frame's outer edge, raised
+            f.pvpIcon:SetPoint("LEFT", p, "LEFT", -22, 14)
+        else
+            f.pvpIcon:SetPoint("RIGHT", p, "RIGHT", 22, 14)
+        end
     end
     if f.threatGlow then
         -- the same glow art and spot as the interrupt flash (see applyLayout)
@@ -986,7 +1046,7 @@ local function updateIndicators(f)
         if f.combatBack then f.combatBack:SetShown(showC) end
         -- in combat the crossed swords take the accent's place, as on Retail; its glow follows it
         if f.corner and hasCorner(base) and f.layoutLeft then
-            local cornerOn = (getSetting(base, "cornerAccent") and not showC) and true or false
+            local cornerOn = not showC
             f.corner:SetShown(cornerOn)
             if f.cornerBack then f.cornerBack:SetShown(cornerOn) end
         end
@@ -995,13 +1055,24 @@ local function updateIndicators(f)
             local resting = false
             pcall(function() resting = IsResting() and true or false end)
             if showC then
+                f.status:SetDesaturated(false)
                 f.status:SetVertexColor(1, 0, 0)
                 f.status:Show()
                 if f.statusAnim and not f.statusAnim:IsPlaying() then f.statusAnim:Play() end
             elseif resting then
                 if f.statusAnim then f.statusAnim:Stop() end
                 f.status:SetAlpha(1)
-                f.status:SetVertexColor(1, 0.88, 0.25)
+                -- the resting glow takes the frame colour (brightened to full strength, so a dark
+                -- frame still glows), gold when the frame is as drawn
+                local c = f.tintColor
+                if c then
+                    local top = math.max(c[1], c[2], c[3], 0.01)
+                    f.status:SetDesaturated(true)
+                    f.status:SetVertexColor(c[1] / top, c[2] / top, c[3] / top)
+                else
+                    f.status:SetDesaturated(false)
+                    f.status:SetVertexColor(1, 0.88, 0.25)
+                end
                 f.status:Show()
             else
                 if f.statusAnim then f.statusAnim:Stop() end
@@ -1025,36 +1096,21 @@ local function updateIndicators(f)
     end)
     if kind then
         local ic = PVP_ICONS[kind]
-        setIcon(f.pvpIcon, ic[1], ic[2], 0, 0.609375, 0, 0.640625)
+        f.pvpSmall = f.badge and hasAtlas(ic[1]) and true or false
+        if f.pvpSmall then
+            f.pvpIcon:SetTexCoord(0, 1, 0, 1)
+            f.pvpIcon:SetAtlas(ic[1], true)                -- its own size, 24 x 27
+            f.pvpIcon:SetDrawLayer("OVERLAY", 2)           -- over the level circle (-1), under the level number (3)
+        else
+            setIcon(f.pvpIcon, ic[2], ic[3], 0, 0.609375, 0, 0.640625)
+            f.pvpIcon:SetDrawLayer("OVERLAY", 5)
+        end
+        placeIndicators(f)
         f.pvpIcon:Show()
         if f.pvpHit then f.pvpHit:Show() end
     else
         f.pvpIcon:Hide()
         if f.pvpHit then f.pvpHit:Hide() end
-    end
-end
-
--- Pulsing red glow while the unit is casting something you could interrupt
-local function updateFlash(f)
-    if not f.flash then return end
-    local on = false
-    pcall(function()
-        if not getSetting(f.baseUnit, "flashInterrupt") then return end
-        local u = f.wfUnit
-        if not UnitExists(u) or not UnitCanAttack("player", u) then return end
-        local n, _, _, _, _, _, _, ni = UnitCastingInfo(u)
-        if not n then
-            local cn, _, _, _, _, _, ci = UnitChannelInfo(u)
-            n, ni = cn, ci
-        end
-        if n and (ni == false or ni == nil) then on = true end
-    end)
-    if on then
-        if not f.flash:IsShown() then f.flash:Show() end
-        if f.flashAnim and not f.flashAnim:IsPlaying() then f.flashAnim:Play() end
-    else
-        if f.flashAnim then f.flashAnim:Stop() end
-        f.flash:Hide()
     end
 end
 
@@ -1093,17 +1149,16 @@ end
 -- spell icon at its left end and the bar filling the rest. It runs on under the portrait ring, where
 -- Media\castbox-mask-target.tga (made for exactly this box) cuts its end along the ring, halfway through
 -- the ring's gold band, which is drawn on top: so it ends in the ring like the other bars.
--- Hiding Blizzard's target / focus frames also hid their cast bars. Ours is driven by Blizzard's: it
--- keeps running (it handles the protected cast data) but is parked off-screen, and every frame ours
--- copies its progress, fade, cast type, spell name and icon. Values only ever go to setters.
+-- Ours is driven by Blizzard's: Blizzard's target / focus frames keep running, invisible and parked off
+-- the screen (see hideAllBlizzard), so their cast bars handle the protected cast data as usual, and
+-- every frame ours copies the progress, fade, cast type, spell name and icon. Values only go to setters.
 ---------------------------------------------------------------------------
-local castHider = CreateFrame("Frame")
-castHider:Hide()
-local CAST_SLOT = 4      -- extra gap under the frame for the cast box's lower edge, above the auras
 -- The box, in the frame's TOPLEFT coordinates. Its top border line is the frame art's bottom border line
 -- (at y -71, under the mana bar): the cast bar shares that line with the mana bar.
 -- On the target layout it runs on to the level badge, which is drawn on top and hides its end.
-local CAST_BOX = { top = -71, right = { 20.5, 200 }, left = { 77.5, 210 } }
+-- On the player layout it runs from just right of the ring to the end of the bars, with a side line at
+-- each end level with the bars' own ends (x 83.5 and 210).
+local CAST_BOX = { top = -71, right = { 20.5, 200 }, left = { 82, 211.5 } }
 -- Where the border slices come from in the frame art, in the same coordinates (measured from the decoded
 -- art): the art's left cap (its 1px side line at x 22 and the shadow inside it) and a plain stretch of
 -- its lines; the top rows are the line between the health and mana bars (at y -60) and the 4px shadow under
@@ -1118,7 +1173,6 @@ local CAST_ART = {
     -- right of the side line (10px tall, like the mana bar)
     inset = { left = 2.5, top = 1, bottom = 5 },
 }
-local CAST_EDGE = { 0.75, 0.75, 0.72 }  -- the light line colour (outline style, icon divider)
 
 -- fill colour by Blizzard's cast type
 local CAST_COLORS = {
@@ -1146,28 +1200,19 @@ local function newCastBar(f)
     box:SetFrameLevel(f:GetFrameLevel() + 1)
     local cb = CreateFrame("StatusBar", nil, box)
     cb.box = box
-    -- dark trough for the Outline / None styles (the frame-art border has its own trough)
-    cb.inside = box:CreateTexture(nil, "BACKGROUND", nil, 0)
-    cb.inside:SetColorTexture(0, 0, 0, 0.4)
-    -- "Like the bars" border: 3 rows x 2 columns of frame-art slices (left cap, stretched middle)
+    -- the border: 3 rows x 3 columns of frame-art slices (left cap, stretched middle, and the
+    -- left cap mirrored as a right cap: only the player layout uses that, the target's end is under the ring)
     cb.slices = {}
     for r = 1, 3 do
-        for c = 1, 2 do
+        for c = 1, 3 do
             local t = box:CreateTexture(nil, "BACKGROUND", nil, 2)
-            local xs = (c == 1) and CAST_ART.capX or CAST_ART.midX
+            local xs = (c == 2) and CAST_ART.midX or CAST_ART.capX
+            if c == 3 then xs = { xs[2], xs[1] } end
             artSlice(t, xs[1], xs[2], CAST_ART.rows[r][1], CAST_ART.rows[r][2], CAST_ART.rows[r][3])
             t.row, t.col = r, c
             cb.slices[#cb.slices + 1] = t
         end
     end
-    -- "Outline" border: a 1px light line round the box
-    cb.edge = box:CreateTexture(nil, "BACKGROUND", nil, 1)
-    cb.edge:SetAllPoints()
-    cb.edge:SetColorTexture(CAST_EDGE[1], CAST_EDGE[2], CAST_EDGE[3], 1)
-    cb.edgeInside = box:CreateTexture(nil, "BACKGROUND", nil, 1)
-    cb.edgeInside:SetPoint("TOPLEFT", 1, -1)
-    cb.edgeInside:SetPoint("BOTTOMRIGHT", -1, 1)
-    cb.edgeInside:SetColorTexture(0.05, 0.05, 0.05, 1)
     cb.boxMask = box:CreateMaskTexture()
     cb.boxMask:SetAllPoints(box)
     cb:SetFrameLevel(box:GetFrameLevel() + 1)
@@ -1196,22 +1241,23 @@ end
 local function placeCastbar(f)
     local bar, cb = f.castbar, f.cb
     if not (bar and cb) then return end
+    -- Blizzard's bar keeps running in its own (invisible, parked) frame; ours shows its progress
     if not getSetting(f.baseUnit, "castShow") then
-        if bar:GetParent() ~= castHider then bar:SetParent(castHider) end
         cb.box:Hide()
         return
     end
-    -- Blizzard's bar keeps running (and updating) off-screen; ours shows its progress
-    if bar:GetParent() ~= f then bar:SetParent(f) end
-    bar:ClearAllPoints()
-    bar:SetPoint("TOPRIGHT", UIParent, "TOPLEFT", -1000, 1000)
-    local x = f.layoutLeft and CAST_BOX.left or CAST_BOX.right
+    -- the player layout (portrait left) runs from the ring to the frame's right end; the target layout
+    -- from the frame's left end on under the ring
+    local left = f.layoutLeft
+    if left == nil then left = portraitOnLeft(f.baseUnit) end
+    local x = left and CAST_BOX.left or CAST_BOX.right
     local h = castBoxHeight()
     local box = cb.box
     box:ClearAllPoints()
     box:SetPoint("TOPLEFT", f, "TOPLEFT", x[1], CAST_BOX.top)
     box:SetPoint("BOTTOMRIGHT", f, "TOPLEFT", x[2], CAST_BOX.top - h)
     -- the border slices: rows stacked down the box, the cap at the left, the middle stretched to the end
+    -- (or to the right cap, on the player layout)
     local capW = CAST_ART.capX[2] - CAST_ART.capX[1]
     for _, t in ipairs(cb.slices) do
         local y = 0
@@ -1220,25 +1266,27 @@ local function placeCastbar(f)
         if t.col == 1 then
             t:SetPoint("TOPLEFT", box, "TOPLEFT", 0, -y)
             t:SetSize(capW, CAST_ART.rowH[t.row])
+        elseif t.col == 3 then
+            t:SetPoint("TOPRIGHT", box, "TOPRIGHT", 0, -y)
+            t:SetSize(capW, CAST_ART.rowH[t.row])
         else
             t:SetPoint("TOPLEFT", box, "TOPLEFT", capW, -y)
-            t:SetPoint("BOTTOMRIGHT", box, "TOPRIGHT", 0, -(y + CAST_ART.rowH[t.row]))
+            t:SetPoint("BOTTOMRIGHT", box, "TOPRIGHT", left and -capW or 0, -(y + CAST_ART.rowH[t.row]))
         end
     end
     -- the frame's own bar texture (a chosen SharedMedia one, or the default tintable fill) ...
-    local fill = f.customTex or ((f.layoutLeft and BAR_FILE.player or BAR_FILE.target) .. "Health-Status")
+    local fill = f.customTex or ((left and BAR_FILE.player or BAR_FILE.target) .. "Health-Status")
     if cb.fill ~= fill then
         cb.fill = fill
         cb:SetStatusBarTexture(fill)
         cb.fillMasked = nil
     end
     -- target layout: cut the box's end along the portrait ring (once per texture)
-    if not f.layoutLeft then
+    if not left then
         if not cb.boxMaskSet then
             cb.boxMaskSet = true
             cb.boxMask:SetTexture(MEDIA .. "castbox-mask-target", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
             for _, t in ipairs(cb.slices) do t:AddMaskTexture(cb.boxMask) end
-            for _, t in ipairs({ cb.inside, cb.edge, cb.edgeInside }) do t:AddMaskTexture(cb.boxMask) end
         end
         if not cb.fillMasked then
             cb.fillMasked = true
@@ -1248,16 +1296,10 @@ local function placeCastbar(f)
     end
     -- ... and its font, at the size and style of the health bar numbers
     pcall(function() cb.text:SetFont(f.hpText:GetFont()) end)
-    -- border style: "bars" = the frame art's border, "outline" = a 1px light line, "none" = no border
-    local style = getSetting(f.baseUnit, "castBorder")
-    for _, t in ipairs(cb.slices) do t:SetShown(style == "bars") end
-    cb.edge:SetShown(style == "outline")
-    cb.edgeInside:SetShown(style == "outline")
-    cb.inside:SetShown(style ~= "bars")
+    -- the frame art's border (the right cap only on the player layout)
+    for _, t in ipairs(cb.slices) do t:SetShown(t.col ~= 3 or left) end
     local inL, inT, inB = CAST_ART.inset.left, CAST_ART.inset.top, CAST_ART.inset.bottom
-    cb.inside:ClearAllPoints()
-    cb.inside:SetPoint("TOPLEFT", box, "TOPLEFT", inL, -inT)
-    cb.inside:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, inB)
+    local inR = left and inL or 0        -- the player layout's right cap has a side line too
     local showIcon = getSetting(f.baseUnit, "castIcon") and true or false
     local inner = h - inT - inB
     cb.icon:ClearAllPoints()
@@ -1275,13 +1317,13 @@ local function placeCastbar(f)
     cb.dividerShadow:SetShown(showIcon)
     cb:ClearAllPoints()
     cb:SetPoint("TOPLEFT", box, "TOPLEFT", inL + (showIcon and (inner + 1) or 0), -inT)
-    cb:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, inB)
+    cb:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -inR, inB)
     -- the spell name is centred under the health bar (the bar itself runs on to the level badge)
     local fillLeft = x[1] + inL + (showIcon and (inner + 1) or 0)   -- (the shadow sits over the fill's first px)
-    local hpMid = f.layoutLeft and (85 + 124 / 2) or (23 + 126 / 2)
+    local hpMid = left and (85 + 124 / 2) or (23 + 126 / 2)
     cb.text:ClearAllPoints()
     -- (1px up: the font string's box includes room for descenders, so it sits low when centred)
-    cb.text:SetPoint("CENTER", cb, "CENTER", hpMid - (fillLeft + x[2]) / 2, 1)
+    cb.text:SetPoint("CENTER", cb, "CENTER", hpMid - (fillLeft + x[2] - inR) / 2, 1)
     cb.text:SetShown(getSetting(f.baseUnit, "castText") and true or false)
 end
 
@@ -1327,15 +1369,8 @@ local function adoptCastbar(f, barName)
         if r then r:SetParent(holder) end
     end
     f.portraitHolder = holder
-    -- Blizzard's AdjustPosition reads these from the bar's parent (comparing auraRows to numbers), so
-    -- give our frame safe values; after every adjustment the bar is parked off-screen again.
-    f.buffsOnTop, f.auraRows, f.haveToT, f.haveElite = true, 0, false, false
-    local function replace() pcall(placeCastbar, f) end
-    if bar.AdjustPosition then hooksecurefunc(bar, "AdjustPosition", replace) end
-    if _G.Target_Spellbar_AdjustPosition then
-        hooksecurefunc("Target_Spellbar_AdjustPosition", function(self) if self == bar then replace() end end)
-    end
-    bar:HookScript("OnShow", replace)
+    -- (Blizzard's bar stays in its own frame, which hideAllBlizzard keeps running but invisible)
+    bar:HookScript("OnShow", function() pcall(placeCastbar, f) end)
     f:HookScript("OnUpdate", function() mirrorCastbar(f) end)
     placeCastbar(f)
 end
@@ -1344,7 +1379,6 @@ end
 -- Buffs and debuffs. Secret-safe: aura fields only ever go to setters, timers go through duration
 -- objects (SetCooldownFromDurationObject) and stack counts through the display-count API.
 ---------------------------------------------------------------------------
-local DEBUFF_BORDER = "Interface\\Buttons\\UI-Debuff-Overlays"
 local AURA_GAP = 2
 
 local function auraTooltip(self)
@@ -1384,17 +1418,22 @@ local function newAuraButton(parent)
     return b
 end
 
--- Where the aura block starts: below the frame art (default), above it, or to its right.
+-- Where the aura block starts: below the frame art (default), just above its name, or wherever it was
+-- dragged in Edit Mode ("custom": auraX / auraY from the frame's top left; it starts where "below" is).
 local function auraAnchor(f, pos)
+    if pos == "custom" then
+        local cx, cy = getSetting(f.baseUnit, "auraX"), getSetting(f.baseUnit, "auraY")
+        if type(cx) == "number" and type(cy) == "number" then return "TOPLEFT", "TOPLEFT", cx, cy end
+        pos = "below"
+    end
     if f.small then
         if pos == "above" then return "BOTTOMLEFT", "TOPLEFT", 4, 2 end
-        if pos == "right" then return "TOPLEFT", "TOPRIGHT", 2, -4 end
         return "TOPLEFT", "BOTTOMLEFT", 4, 0
     end
     -- tucked under the frame art's bottom edge, from its left edge (on the player frame, just right of the level circle)
     local x = f.layoutLeft and 55 or 22
-    if pos == "above" then return "BOTTOMLEFT", "TOPLEFT", f.layoutLeft and 85 or 22, -14 end
-    if pos == "right" then return "TOPLEFT", "TOPRIGHT", -18, -20 end
+    -- above: sitting right on the frame art's top edge, over the name and lined up with its left end
+    if pos == "above" then return "BOTTOMLEFT", "TOPLEFT", f.layoutLeft and 87 or 23, -15 end
     -- With a cast bar they lock onto its bottom (always, cast or not, so the icons don't jump about),
     -- lined up with its left line.
     if f.castbar and getSetting(f.baseUnit, "castShow") then
@@ -1405,7 +1444,13 @@ local function auraAnchor(f, pos)
     return "TOPLEFT", "TOPLEFT", x, -87
 end
 
-local function updateAuras(f)
+-- The "Time left" option as two switches: the dark sweep and the countdown numbers.
+local function auraTimerParts(base)
+    local mode = getSetting(base, "auraTimer")
+    return mode == "both" or mode == "swipe", mode == "both" or mode == "numbers"
+end
+
+local function updateAurasLegacy(f)
     local base = f.baseUnit
     local showB, showD = getSetting(base, "auraBuffs"), getSetting(base, "auraDebuffs")
     if not (showB or showD) or not C_UnitAuras then
@@ -1419,27 +1464,28 @@ local function updateAuras(f)
         f.auraBox:SetSize(1, 1)
         f.auraButtons = {}
     end
-    local size, perRow, max = getSetting(base, "auraSize"), getSetting(base, "auraPerRow"), getSetting(base, "auraMax")
+    local perRow, max = getSetting(base, "auraPerRow"), getSetting(base, "auraMax")
     local pos = getSetting(base, "auraPos")
     local point, relPoint, x, y = auraAnchor(f, pos)
     f.auraBox:ClearAllPoints()
     f.auraBox:SetPoint(point, f, relPoint, x, y)
     local up = (pos == "above")
-    local timers = getSetting(base, "auraTimers") and true or false
+    local swipe, timers = auraTimerParts(base)
     local u = f.wfUnit
-    local n, col, row = 0, 0, 0
+    local n, col, rowY, size = 0, 0, 0, 0     -- rowY: how far the current row starts from the box edge
 
     local function place(b)
         b:SetSize(size, size)
         b:ClearAllPoints()
-        local bx, by = col * (size + AURA_GAP), row * (size + AURA_GAP)
-        if up then b:SetPoint("BOTTOMLEFT", f.auraBox, "BOTTOMLEFT", bx, by)
-        else b:SetPoint("TOPLEFT", f.auraBox, "TOPLEFT", bx, -by) end
+        local bx = col * (size + AURA_GAP)
+        if up then b:SetPoint("BOTTOMLEFT", f.auraBox, "BOTTOMLEFT", bx, rowY)
+        else b:SetPoint("TOPLEFT", f.auraBox, "TOPLEFT", bx, -rowY) end
         col = col + 1
-        if col >= perRow then col, row = 0, row + 1 end
+        if col >= perRow then col, rowY = 0, rowY + size + AURA_GAP end
     end
 
     local function group(filter, isDebuff)
+        size = getSetting(base, isDebuff and "auraDebuffSize" or "auraSize")
         local count = 0
         for i = 1, 40 do
             if count >= max then break end
@@ -1472,7 +1518,8 @@ local function updateAuras(f)
             else
                 b.edge:SetColorTexture(0, 0, 0, 1)
             end
-            -- countdown numbers and stack count sized to the icon
+            -- sweep, countdown numbers and stack count sized to the icon
+            pcall(b.cd.SetDrawSwipe, b.cd, swipe)
             pcall(b.cd.SetHideCountdownNumbers, b.cd, not timers)
             if timers then
                 pcall(function()
@@ -1488,17 +1535,241 @@ local function updateAuras(f)
             place(b)
             b:Show()
         end
-        if count > 0 and col > 0 then col, row = 0, row + 1 end   -- the next group starts a new row
+        if count > 0 and col > 0 then col, rowY = 0, rowY + size + AURA_GAP end   -- the next group starts a new row
     end
 
     if showB then group("HELPFUL", false) end
     if showD then group(getSetting(base, "auraMine") and "HARMFUL|PLAYER" or "HARMFUL", true) end
     for i = n + 1, #f.auraButtons do f.auraButtons[i]:Hide() end
     -- how tall the aura block is, so the cast bar can sit under it
-    local rows = (col > 0) and (row + 1) or row
-    f.auraHeight = rows * (size + AURA_GAP)
+    f.auraHeight = rowY
     placeCastbar(f)
 end
+
+---------------------------------------------------------------------------
+-- Buffs and debuffs through Blizzard's AuraContainer (12.1, on Forever too). In combat the aura data is
+-- protected, so addons can't read it; the container tracks and filters the unit's auras itself and fills
+-- buttons we've styled: we give each button its icon texture, cooldown swipe, stack count and dispel
+-- border, and set the layout. (updateAurasLegacy above is the fallback for clients without it.)
+---------------------------------------------------------------------------
+local AuraKit = { GROUPS = { "buffs", "debuffs" } }
+
+-- Debuff edge colours by dispel type, as the container wants them (colour objects, "None" for none).
+function AuraKit.dispelColors()
+    if AuraKit.colorMap then return AuraKit.colorMap end
+    local map = {}
+    for name, c in pairs({ Magic = { 0.2, 0.6, 1 }, Curse = { 0.6, 0, 1 }, Disease = { 0.6, 0.4, 0 },
+                           Poison = { 0, 0.6, 0 }, None = { 0.8, 0, 0 } }) do
+        local dc = DebuffTypeColor and DebuffTypeColor[name == "None" and "none" or name]
+        map[name] = CreateColor(dc and dc.r or c[1], dc and dc.g or c[2], dc and dc.b or c[3], 1)
+    end
+    AuraKit.colorMap = map
+    return map
+end
+
+-- Styles one aura button (the container calls this as it creates them); f is the unit frame.
+function AuraKit.styleButton(f, b)
+    -- 1px edge: black behind every icon; on debuffs a second, white edge layer on top that the
+    -- container tints by dispel type (see below)
+    b.webbyBack = b:CreateTexture(nil, "BACKGROUND", nil, 0)
+    b.webbyBack:SetAllPoints()
+    b.webbyBack:SetColorTexture(0, 0, 0, 1)
+    b.webbyEdge = b:CreateTexture(nil, "BACKGROUND", nil, 1)
+    b.webbyEdge:SetAllPoints()
+    b.webbyEdge:SetColorTexture(1, 1, 1, 1)
+    local icon = b:CreateTexture(nil, "ARTWORK")
+    icon:SetPoint("TOPLEFT", 1, -1)
+    icon:SetPoint("BOTTOMRIGHT", -1, 1)
+    icon:SetTexCoord(0.1, 0.9, 0.1, 0.9)
+    b:SetIcon(icon)
+    -- (the template gives it a sweep texture; a bare Cooldown has none, so it drew no sweep)
+    local cd = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
+    cd:SetAllPoints(icon)
+    pcall(cd.SetSwipeTexture, cd, "Interface\\Buttons\\WHITE8X8")
+    pcall(cd.SetDrawSwipe, cd, true)
+    pcall(cd.SetReverse, cd, true)
+    pcall(cd.SetDrawEdge, cd, false)
+    pcall(cd.SetSwipeColor, cd, 0, 0, 0, 0.6)
+    pcall(cd.SetDrawBling, cd, false)            -- no flash when the aura ends
+    pcall(b.SetDurationCooldown, b, cd)
+    b.webbyCD = cd
+    local top = CreateFrame("Frame", nil, b)
+    top:SetAllPoints()
+    top:SetFrameLevel(cd:GetFrameLevel() + 1)
+    local count = top:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    count:SetPoint("BOTTOMRIGHT", 1, 0)
+    pcall(b.SetApplicationCount, b, count)
+    b.webbyCount = count
+    -- Debuffs: the white edge layer, kept as it is (PreserveAsset) and tinted by the container per
+    -- dispel type, red when there's none; it only shows on harmful auras, so buffs keep the black edge.
+    -- (Blizzard's built-in Border style is a heavy old-style frame that didn't match the 1px edges.)
+    local styles = Enum.CustomAuraButtonDispelTypeTextureStyle
+    local ok = pcall(b.AddDispelTypeTexture, b, b.webbyEdge, {
+        style = styles and styles.PreserveAsset,
+        showWhenHarmful = true,
+        showWithoutDispelType = true,
+        customDispelColorMap = AuraKit.dispelColors(),
+    })
+    if not ok then b.webbyEdge:Hide() end
+    AuraKit.sizeButton(f, b)
+end
+
+-- Size, sweep, countdown numbers and stack text to the frame's current options.
+function AuraKit.sizeButton(f, b)
+    local size = getSetting(f.baseUnit, b.webbyDebuff and "auraDebuffSize" or "auraSize")
+    b:SetSize(size, size)
+    local swipe, timers = auraTimerParts(f.baseUnit)
+    if b.webbyCD then
+        pcall(b.webbyCD.SetDrawSwipe, b.webbyCD, swipe)
+        pcall(b.webbyCD.SetHideCountdownNumbers, b.webbyCD, not timers)
+        pcall(function()
+            local fs = b.webbyCD:GetCountdownFontString()
+            fs:SetFont(fs:GetFont() or STANDARD_TEXT_FONT, math.max(8, math.floor(size * 0.45)), "OUTLINE")
+        end)
+    end
+    if b.webbyCount then
+        pcall(function() b.webbyCount:SetFont(b.webbyCount:GetFont() or STANDARD_TEXT_FONT, math.max(8, math.floor(size * 0.5)), "OUTLINE") end)
+    end
+end
+
+-- The frame's container, made on first use; nil if the client doesn't have AuraContainer.
+function AuraKit.container(f)
+    if f.auraContainer ~= nil then return f.auraContainer or nil end
+    local ok, c = pcall(CreateFrame, "AuraContainer", nil, f.ov or f, "CustomAuraContainerTemplate")
+    if not (ok and c) then f.auraContainer = false; return nil end
+    local function initBuff(b) pcall(AuraKit.styleButton, f, b) end
+    local function initDebuff(b) b.webbyDebuff = true; pcall(AuraKit.styleButton, f, b) end
+    local ok2 = pcall(function()
+        c:SetUnit(f.wfUnit)
+        c:AddAuraGroup("buffs", "HELPFUL", { initializeFrame = initBuff })
+        c:AddAuraGroup("debuffs", "HARMFUL", { initializeFrame = initDebuff })
+    end)
+    if not ok2 then c:Hide(); f.auraContainer = false; return nil end
+    f.auraContainer = c
+    return c
+end
+
+local updateAuras     -- (below; the mover calls it)
+
+-- every unit frame
+function AuraKit.allFrames()
+    local list = {}
+    for _, unit in ipairs(UNITS) do if frames[unit] then list[#list + 1] = frames[unit] end end
+    return list
+end
+
+-- Custom position: in Edit Mode a box shows where the buffs and debuffs start (one row's size); drag it
+-- and the block follows. The spot is saved as an offset from the frame's top left (per Edit Mode layout).
+function AuraKit.placeMover(f, w, h)
+    local on = AuraKit.editing and getSetting(f.baseUnit, "auraPos") == "custom"
+        and (getSetting(f.baseUnit, "auraBuffs") or getSetting(f.baseUnit, "auraDebuffs"))
+    if not on then
+        if f.auraMover then f.auraMover:Hide() end
+        return
+    end
+    local m = f.auraMover
+    if not m then
+        m = CreateFrame("Frame", nil, f.ov or f)
+        m:SetFrameLevel((f.ov or f):GetFrameLevel() + 10)
+        local bg = m:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints()
+        bg:SetColorTexture(0.2, 0.55, 1, 0.35)
+        local edge = m:CreateTexture(nil, "BORDER")
+        edge:SetPoint("TOPLEFT", -1, 1); edge:SetPoint("BOTTOMRIGHT", 1, -1)
+        edge:SetColorTexture(0.4, 0.75, 1, 0.9)
+        local inner = m:CreateTexture(nil, "BORDER", nil, 1)
+        inner:SetAllPoints()
+        inner:SetColorTexture(0.05, 0.15, 0.3, 0.6)
+        m.label = m:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        m.label:SetPoint("CENTER")
+        m.label:SetText("Buffs / debuffs")
+        m:SetMovable(true)
+        m:SetClampedToScreen(true)
+        m:EnableMouse(true)
+        m:RegisterForDrag("LeftButton")
+        m:SetScript("OnDragStart", function(self) self:StartMoving() end)
+        m:SetScript("OnDragStop", function(self)
+            self:StopMovingOrSizing()
+            local x = math.floor((self:GetLeft() - f:GetLeft()) * 2 + 0.5) / 2
+            local y = math.floor((self:GetTop() - f:GetTop()) * 2 + 0.5) / 2
+            local u = unitData(f.baseUnit, true)
+            u.auraX, u.auraY = x, y
+            for _, other in ipairs(AuraKit.allFrames()) do
+                if other.baseUnit == f.baseUnit then pcall(updateAuras, other) end
+            end
+        end)
+        m:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText("Buffs and debuffs", 1, 1, 1)
+            GameTooltip:AddLine("Drag to move them. The first row starts here.", 1, 0.82, 0, true)
+            GameTooltip:Show()
+        end)
+        m:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        f.auraMover = m
+    end
+    local point, relPoint, x, y = auraAnchor(f, "custom")
+    m:ClearAllPoints()
+    m:SetPoint(point, f, relPoint, x, y)
+    m:SetSize(math.max(w, 40), math.max(h, 12))
+    m:Show()
+end
+
+-- Edit Mode on / off: show or hide the boxes.
+function AuraKit.setEditing(on)
+    AuraKit.editing = on and true or nil
+    for _, f in ipairs(AuraKit.allFrames()) do pcall(updateAuras, f) end
+end
+
+function updateAuras(f)       -- (the local declared above)
+    local c = AuraKit.container(f)
+    if not c then return updateAurasLegacy(f) end
+    local base = f.baseUnit
+    local showB = getSetting(base, "auraBuffs") and true or false
+    local showD = getSetting(base, "auraDebuffs") and true or false
+    local perRow, max = getSetting(base, "auraPerRow"), getSetting(base, "auraMax")
+    -- rows are as wide as perRow of the bigger icons, so neither group spills past them
+    local size = math.max(showB and getSetting(base, "auraSize") or 0, showD and getSetting(base, "auraDebuffSize") or 0)
+    if size == 0 then size = getSetting(base, "auraSize") end
+    local pos = getSetting(base, "auraPos")
+    local up = (pos == "above")
+    pcall(function() if c:GetUnit() ~= f.wfUnit then c:SetUnit(f.wfUnit) end end)
+    pcall(c.SetAuraGroupEnabled, c, "buffs", showB)
+    pcall(c.SetAuraGroupEnabled, c, "debuffs", showD)
+    pcall(c.SetAuraGroupFilterString, c, "debuffs", getSetting(base, "auraMine") and "HARMFUL|PLAYER" or "HARMFUL")
+    for _, g in ipairs(AuraKit.GROUPS) do
+        pcall(c.SetAuraGroupMaxFrameCount, c, g, max)
+        pcall(c.SetAuraGroupLayout, c, g, { elementSpacing = AURA_GAP, lineSpacing = AURA_GAP, groupSpacing = AURA_GAP, groupLineSpacing = AURA_GAP })
+    end
+    -- flow: rows of perRow icons, growing right and down (up when above the frame)
+    pcall(function()
+        local A = AnchorUtil
+        c:SetFlowLayoutAxis(A.FlowLayoutAxis.Horizontal)
+        c:SetFlowLayoutAnchorPoint(up and "BOTTOMLEFT" or "TOPLEFT")
+        c:SetFlowLayoutGrowthDirection(A.FlowDirection.Right, up and A.FlowDirection.Up or A.FlowDirection.Down)
+        c:SetFlowLayoutMaximumLineSize(perRow * (size + AURA_GAP))
+    end)
+    local point, relPoint, x, y = auraAnchor(f, pos)
+    c:ClearAllPoints()
+    c:SetPoint(point, f, relPoint, x, y)
+    -- one row's size, so the first row sits exactly on the anchor (more rows grow on past it)
+    pcall(c.SetSize, c, perRow * (size + AURA_GAP), size)
+    AuraKit.placeMover(f, perRow * (size + AURA_GAP) - AURA_GAP, size)
+    -- resize the buttons made so far (new ones are sized as they're made)
+    for _, g in ipairs(AuraKit.GROUPS) do
+        local n = 0
+        pcall(function() n = c:GetAuraGroupFrameCount(g) end)
+        for i = 1, n do
+            local b
+            pcall(function() b = c:GetAuraGroupFrame(g, i) end)
+            if b then pcall(AuraKit.sizeButton, f, b) end
+        end
+    end
+    c:SetShown(showB or showD)
+    f.auraBox = c
+    f.auraHeight = 0
+    placeCastbar(f)
+end
+
 
 ---------------------------------------------------------------------------
 -- Combat numbers: damage and healing the unit takes pop up over its portrait and fade, like Blizzard's
@@ -1527,7 +1798,8 @@ end
 
 local function showHit(f, action, indicator, amount)
     -- the General page's master switch, then the frame's own option
-    if DB.combatNumbers == false or not getSetting(f.baseUnit, "combatNumbers") then return end
+    -- one switch on the General page; the numbers show on the player, target and focus frames
+    if DB.combatNumbers == false or not defaultFor(f.baseUnit, "combatNumbers") then return end
     local fs = hitText(f)
     -- (the action and crit flag may be protected too: compared inside pcall, a protected one counts as a hit)
     local crit, word, kind = false, nil, "WOUND"
@@ -1556,6 +1828,280 @@ local function showHit(f, action, indicator, amount)
     fs.anim:Play()
 end
 
+---------------------------------------------------------------------------
+-- Extras: raid markers, the combo point arc, hunter pet happiness and frame colour. Kept in one table so
+-- they add a single name to the main chunk (Lua allows 200 locals there).
+---------------------------------------------------------------------------
+local Extras = {
+    COMBO_MAX = 5,
+    COMBO_RADIUS = 38,                 -- pips sit just outside the portrait ring (gold edge ~29.5px out)
+    -- UI-PetHappiness: unhappy, content, happy
+    HAPPY_COORDS = { { 0.375, 0.5625, 0, 0.359375 }, { 0.1875, 0.375, 0, 0.359375 }, { 0, 0.1875, 0, 0.359375 } },
+    -- Forever's mood icons (as EllesmereUI uses): unhappy, content, happy
+    HAPPY_ATLAS = { "UI-PetMad", "UI-PetNeutral", "UI-PetHappiness" },
+}
+
+Extras.allFrames = AuraKit.allFrames     -- every unit frame
+
+-- Raid markers: at the top of the portrait; side by side with the leader crown when both show.
+function Extras.raid(f)
+    local p = f.portrait
+    if not (p and f.ov) then return end
+    local idx
+    pcall(function() idx = GetRaidTargetIndex(f.wfUnit) end)
+    local icon = f.raidIcon
+    if idx and not icon then
+        icon = f.ov:CreateTexture(nil, "OVERLAY", nil, 6)
+        icon:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcons")
+        f.raidIcon = icon
+    end
+    if idx and not pcall(SetRaidTargetIconTexture, icon, idx) then idx = nil end
+    if icon then icon:SetShown(idx and true or false) end
+    local crown = f.leaderIcon and f.leaderIcon:IsShown() and not f.small
+    if idx then
+        local s = f.small and 14 or 20
+        icon:SetSize(s, s)
+        icon:ClearAllPoints()
+        icon:SetPoint("CENTER", p, "TOP", crown and 10 or 0, f.small and 0 or 2)
+    end
+    if f.leaderIcon and not f.small then
+        f.leaderIcon:ClearAllPoints()
+        f.leaderIcon:SetPoint("CENTER", p, "TOP", idx and -10 or 0, 1)
+    end
+end
+
+-- Combo points (rogues, druids), on the target: five pips in an arc round the right of its portrait.
+-- A protected point count can't be compared, so each pip is a tiny bar covering one point (min i-1,
+-- max i): the game fills it once the count reaches i.
+function Extras.combo(f)
+    local _, class = UnitClass("player")
+    local want = (class == "ROGUE" or class == "DRUID") and getSetting("target", "comboPoints")
+    if not want then
+        if f.comboBox then f.comboBox:Hide() end
+        return
+    end
+    if not f.comboBox then
+        local box = CreateFrame("Frame", nil, f.ov)
+        box:SetAllPoints(f.portrait)
+        box:SetFrameLevel(f.ov:GetFrameLevel() + 2)
+        box.pips = {}
+        for i = 1, Extras.COMBO_MAX do
+            local pip = CreateFrame("StatusBar", nil, box)
+            pip:SetSize(10, 10)
+            -- gold rim, dark socket, glowing fill: all circles
+            local rim = pip:CreateTexture(nil, "BACKGROUND", nil, 0)
+            rim:SetTexture(CIRCLE_FALLBACK)
+            rim:SetPoint("TOPLEFT", -1.5, 1.5); rim:SetPoint("BOTTOMRIGHT", 1.5, -1.5)
+            rim:SetVertexColor(0.8, 0.65, 0.3, 1)
+            local socket = pip:CreateTexture(nil, "BACKGROUND", nil, 1)
+            socket:SetTexture(CIRCLE_FALLBACK)
+            socket:SetAllPoints()
+            socket:SetVertexColor(0.05, 0.05, 0.05, 1)
+            pip:SetStatusBarTexture(CIRCLE_FALLBACK)
+            pip:SetStatusBarColor(1, 0.55, 0.1, 1)
+            pip:SetMinMaxValues(i - 1, i)
+            pip:SetValue(0)
+            local a = math.rad(70 - (i - 1) * 20)        -- from up-and-right, round to just below level
+            pip:SetPoint("CENTER", box, "CENTER", Extras.COMBO_RADIUS * math.cos(a), Extras.COMBO_RADIUS * math.sin(a))
+            box.pips[i] = pip
+        end
+        f.comboBox = box
+    end
+    -- the count goes straight to the pips; fall back to the older API if the first can't be read
+    local function fill(v) for _, pip in ipairs(f.comboBox.pips) do pip:SetValue(v) end end
+    if not pcall(function() fill(UnitPower("player", Enum.PowerType.ComboPoints)) end) then
+        if not pcall(function() fill(GetComboPoints("player", "target")) end) then fill(0) end
+    end
+    f.comboBox:SetShown(UnitExists("target") and true or false)
+end
+
+-- Hunter pet happiness: the mood face, shown like the first buff in the pet's aura row; the tooltip
+-- has the details.
+function Extras.happinessTooltip(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(_G["PET_HAPPINESS" .. self.h] or "Happiness", 1, 1, 1)
+    -- (with the badge, the pet's level: the badge looks like a level circle but holds the face)
+    pcall(function() if self.level then GameTooltip:AddLine((LEVEL or "Level") .. " " .. self.level, 1, 0.82, 0) end end)
+    -- what the pet eats
+    pcall(function()
+        local foods = { C_PetInfo.GetPetFoodTypes() }
+        if #foods > 0 and PET_DIET_TEMPLATE then
+            GameTooltip:AddLine(PET_DIET_TEMPLATE:format(table.concat(foods, PET_FOOD_DELIMIT or ", ")), 1, 1, 1, true)
+        end
+    end)
+    pcall(function()
+        if self.dmg and PET_DAMAGE_PERCENTAGE then GameTooltip:AddLine(string.format(PET_DAMAGE_PERCENTAGE, self.dmg), 1, 0.82, 0) end
+    end)
+    pcall(function()
+        if self.loyalty and self.loyalty > 0 and GAINING_LOYALTY then GameTooltip:AddLine(GAINING_LOYALTY, 0.1, 1, 0.1)
+        elseif self.loyalty and self.loyalty < 0 and LOSING_LOYALTY then GameTooltip:AddLine(LOSING_LOYALTY, 1, 0.1, 0.1) end
+    end)
+    GameTooltip:Show()
+end
+
+function Extras.happiness(f)
+    -- Forever: C_PetInfo.GetPetHappiness (the old global as a fallback); HasPetUI says it's a hunter pet
+    local h, dmg, loyalty, isHunterPet
+    pcall(function() local _, hunter = HasPetUI(); isHunterPet = hunter end)
+    local mode = getSetting("pet", "petHappy")
+    if isHunterPet and mode ~= "off" then
+        pcall(function()
+            if C_PetInfo and C_PetInfo.GetPetHappiness then h, dmg, loyalty = C_PetInfo.GetPetHappiness()
+            elseif GetPetHappiness then h, dmg, loyalty = GetPetHappiness() end
+        end)
+    end
+    local coords, atlas
+    pcall(function()
+        coords = h and Extras.HAPPY_COORDS[h]
+        atlas = h and Extras.HAPPY_ATLAS[h]
+    end)
+    -- Two spots on the pet portrait, scaled from the player frame's (whose portrait is 60px to the pet's
+    -- 37): "corner" at its bottom right, where the player's corner point and combat swords are, on a dark
+    -- round backing like the swords'; "badge" at its bottom left, in a round badge like the player's
+    -- level circle (the tooltip gives the pet's level).
+    if coords and not f.happyIcon then
+        local parent = f.ov or f
+        local ic = CreateFrame("Frame", nil, parent)
+        ic:SetFrameLevel(parent:GetFrameLevel() + 3)
+        ic.back = ic:CreateTexture(nil, "BACKGROUND")
+        ic.back:SetTexture(CIRCLE_FALLBACK)
+        ic.back:SetVertexColor(0, 0, 0, 1)
+        ic.ring = ic:CreateTexture(nil, "BORDER")
+        if hasAtlas("UI-HUD-UnitFrame-SmallCircle") then ic.ring:SetAtlas("UI-HUD-UnitFrame-SmallCircle") else ic.ring:Hide() end
+        ic.tex = ic:CreateTexture(nil, "ARTWORK")
+        ic.tex:SetTexture("Interface\\PetPaperDollFrame\\UI-PetHappiness")
+        ic:EnableMouse(true)
+        ic:SetScript("OnEnter", Extras.happinessTooltip)
+        ic:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        f.happyIcon = ic
+    end
+    -- (the small frame never shows a level number; this only matters on a frame with a level badge)
+    local function showLevel(on) if f.level and f.badge then f.level:SetShown(on) end end
+    if not f.happyIcon then showLevel(true); return end
+    local ic = f.happyIcon
+    if coords then
+        local p = f.portrait or f
+        ic:ClearAllPoints()
+        ic.tex:ClearAllPoints(); ic.back:ClearAllPoints(); ic.ring:ClearAllPoints()
+        if mode == "badge" then
+            -- where the player's level badge sits (39px by a 60px portrait), at the portrait's bottom left:
+            -- just the face on its dark round backing, no badge ring
+            ic:SetSize(24, 24)
+            ic:SetPoint("CENTER", p, "BOTTOMLEFT", 5, 3)
+            ic.ring:Hide()
+            ic.back:SetPoint("TOPLEFT", 3, -3); ic.back:SetPoint("BOTTOMRIGHT", -3, 3)
+            ic.back:Show()
+            ic.tex:SetPoint("TOPLEFT", 4, -4); ic.tex:SetPoint("BOTTOMRIGHT", -4, 4)
+            ic.level = UnitLevel("pet")
+        else
+            -- the corner spot (the player frame's combat swords: 18px on a 22px backing, by a 60px portrait)
+            ic:SetSize(16, 16)
+            ic:SetPoint("CENTER", p, "BOTTOMRIGHT", -6, 4)
+            ic.ring:Hide()
+            ic.back:SetAllPoints()
+            ic.back:Show()
+            ic.tex:SetPoint("TOPLEFT", 1.5, -1.5); ic.tex:SetPoint("BOTTOMRIGHT", -1.5, 1.5)
+            ic.level = nil
+        end
+        if f.badge then showLevel(mode ~= "badge") end
+        -- Forever's mood icons, or the Classic texture sheet when the client lacks them
+        if not (atlas and pcall(ic.tex.SetAtlas, ic.tex, atlas) and ic.tex:GetAtlas()) then
+            ic.tex:SetTexture("Interface\\PetPaperDollFrame\\UI-PetHappiness")
+            ic.tex:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+        end
+        ic.h, ic.dmg, ic.loyalty = h, dmg, loyalty
+        ic:Show()
+    else
+        ic:Hide()
+        showLevel(true)
+    end
+end
+
+-- per-frame part of updateAll
+-- Frame colour: the frame art (border, portrait ring, corner accent, level circle, cast bar border)
+-- greyed and tinted, or left as drawn. "Silver" is just greyed; "class" is your class colour.
+Extras.TINTS = { dark = { 0.32, 0.32, 0.32 }, silver = { 1, 1, 1 } }
+
+function Extras.tintColor(unit)
+    local mode = getSetting(unit, "frameTint")
+    if mode == "class" then
+        local _, class = UnitClass("player")
+        local c = class and (RAID_CLASS_COLORS or {})[class]
+        if c then return { c.r, c.g, c.b } end
+        return nil
+    elseif mode == "custom" then
+        local c = getSetting(unit, "frameColor")
+        if type(c) == "table" then return { c[1] or 1, c[2] or 1, c[3] or 1 } end
+        return { 1, 1, 1 }
+    end
+    return Extras.TINTS[mode]
+end
+
+function Extras.tint(f)
+    local c = Extras.tintColor(f.baseUnit)
+    f.tintColor = c
+    pcall(updateIndicators, f)       -- the resting glow follows the frame colour
+    local list = { f.border, f.ringTop, f.corner, f.badge }
+    if f.cb then for _, t in ipairs(f.cb.slices) do list[#list + 1] = t end end
+    for _, t in pairs(list) do
+        if t then
+            pcall(t.SetDesaturated, t, c and true or false)
+            if c then t:SetVertexColor(c[1], c[2], c[3]) else t:SetVertexColor(1, 1, 1) end
+        end
+    end
+end
+
+-- Opens the colour picker on a frame's custom colour (and switches it to the custom colour).
+function Extras.pickColor(unit, set)
+    local old = Extras.tintColor(unit) or { 1, 1, 1 }
+    local function apply(r, g, b)
+        set(unit, "frameColor", { r, g, b })
+        set(unit, "frameTint", "custom")
+    end
+    local info = {
+        r = old[1], g = old[2], b = old[3], hasOpacity = false,
+        swatchFunc = function() apply(ColorPickerFrame:GetColorRGB()) end,
+        cancelFunc = function() apply(old[1], old[2], old[3]) end,
+    }
+    if ColorPickerFrame.SetupColorPickerAndShow then
+        ColorPickerFrame:SetupColorPickerAndShow(info)
+    else
+        ColorPickerFrame.func, ColorPickerFrame.cancelFunc = info.swatchFunc, info.cancelFunc
+        ColorPickerFrame.hasOpacity = false
+        ColorPickerFrame:SetColorRGB(old[1], old[2], old[3])
+        ColorPickerFrame:Hide(); ColorPickerFrame:Show()
+    end
+end
+
+function Extras.update(f)
+    pcall(Extras.raid, f)
+    if f.baseUnit == "pet" then pcall(Extras.happiness, f) end
+    if f.baseUnit == "target" then pcall(Extras.combo, f) end
+end
+
+-- event watchers, once the frames exist
+function Extras.init()
+    local ev = CreateFrame("Frame")
+    ev:RegisterEvent("RAID_TARGET_UPDATE")
+    ev:RegisterEvent("PLAYER_TARGET_CHANGED")
+    pcall(ev.RegisterUnitEvent, ev, "UNIT_POWER_UPDATE", "player")
+    pcall(ev.RegisterUnitEvent, ev, "UNIT_POWER_FREQUENT", "player")
+    pcall(ev.RegisterUnitEvent, ev, "UNIT_MAXPOWER", "player")
+    pcall(ev.RegisterUnitEvent, ev, "UNIT_HAPPINESS", "pet")
+    pcall(ev.RegisterUnitEvent, ev, "UNIT_PET", "player")
+    pcall(ev.RegisterEvent, ev, "PET_UI_UPDATE")
+    ev:RegisterEvent("PLAYER_ENTERING_WORLD")
+    ev:SetScript("OnEvent", function(_, event)
+        if event == "RAID_TARGET_UPDATE" then
+            for _, f in ipairs(Extras.allFrames()) do pcall(Extras.raid, f) end
+        elseif event == "UNIT_HAPPINESS" or event == "UNIT_PET" or event == "PET_UI_UPDATE" or event == "PLAYER_ENTERING_WORLD" then
+            if frames.pet then pcall(Extras.happiness, frames.pet) end
+        elseif frames.target then
+            pcall(Extras.combo, frames.target)
+        end
+    end)
+end
+
 -- Each part on its own, so one failing (say, on a protected value) can't stop the others, the
 -- buffs and debuffs included. Errors are still reported, once each, for /webby errors.
 local updateErrors = {}
@@ -1565,7 +2111,7 @@ local function safely(fn, f)
 end
 local function updateAll(f)
     safely(updateInfo, f); safely(updateHealth, f); safely(updatePower, f); safely(updateIndicators, f)
-    safely(updateFlash, f); safely(updateThreat, f); safely(updateAuras, f)
+    safely(updateThreat, f); safely(updateAuras, f); safely(Extras.update, f)
 end
 
 ---------------------------------------------------------------------------
@@ -1582,8 +2128,6 @@ local function applyLayout(f)
     if f.layoutLeft == left then return false end
     f.layoutLeft = left
 
-    local prefix = left and PLAYER_PREFIX or TARGET_PREFIX
-    f.prefix = prefix
     -- Positions below are DragonflightUI's, moved into this frame's coordinates: its player art sits
     -- (16, 5.5) further right / up and its target art (20.5, -6) further left / down than ours.
     local barFile = left and BAR_FILE.player or BAR_FILE.target
@@ -1624,19 +2168,6 @@ local function applyLayout(f)
             f.ringMask:SetPoint("CENTER", f, "TOPLEFT", 177, -48)
             t:Show()
         end
-    end
-    -- interrupt flash: the in-combat glow of the matching art, tinted red
-    if f.flash then
-        f.flash:ClearAllPoints()
-        if left then
-            setArt(f.flash, ART.playerStatus)
-            f.flash:SetPoint("CENTER", f, "CENTER", -1, 1.55)
-        else
-            setArt(f.flash, ART.targetFlash)
-            f.flash:SetPoint("CENTER", f, "CENTER", 0, 1.5)
-        end
-        f.flash:SetBlendMode("ADD")
-        f.flash:SetVertexColor(1, 0, 0)
     end
     -- reaction-coloured name plate above the health bar (right layout only)
     if f.plate then
@@ -1729,7 +2260,7 @@ end
 local function applyCorner(f)
     local c = f.corner
     if not c then return end
-    local on = (hasCorner(f.baseUnit) and f.layoutLeft and not f.small and getSetting(f.baseUnit, "cornerAccent")) and true or false
+    local on = (hasCorner(f.baseUnit) and f.layoutLeft and not f.small) and true or false
     -- Left-hand large portraits: with the accent, Retail's mask (a circle with the bottom right corner
     -- squared off, bundled from DragonflightUI) so the portrait fills the space behind the accent;
     -- without it, a plain circle.
@@ -1775,23 +2306,39 @@ local function applySmallLayout(f)
     return true
 end
 
-local function applyUnit(f)
-    local unit = f.baseUnit
+-- true if `unit` is somewhere up `start`'s chain of sticky attachments (attaching start to it would loop)
+local function attachLoops(start, unit, layoutName)
+    local seen, cur = 0, start
+    while cur and seen < 10 do
+        if cur == unit then return true end
+        local u = unitData(cur, false, layoutName)
+        cur = u and u.attach
+        seen = seen + 1
+    end
+    return false
+end
+
+-- Puts a frame where its options say: stuck to another frame (see
+-- updateAttachment), at its saved spot, or the default.
+local function placeFrame(f, unit)
     local u = unitData(unit)
     local d = DEFAULT_POS[unit]
-    local changed = applyLayout(f)
-    if f.small and applySmallLayout(f) then changed = true end
     f:ClearAllPoints()
-    if f.partyIndex then
-        -- stacked in the party container, each below the one before
-        local i = f.partyIndex
-        if i == 1 then f:SetPoint("TOPLEFT", frames.party, "TOPLEFT", 0, 0)
-        else f:SetPoint("TOPLEFT", partyFrames[i - 1], "BOTTOMLEFT", 0, -PARTY_GAP) end
+    local p = u and u.attach and frames[u.attach]
+    if p and p ~= f and not attachLoops(u.attach, unit) and type(u.ax) == "number" and type(u.ay) == "number" then
+        f:SetPoint("TOPLEFT", p, "TOPLEFT", u.ax, u.ay)
     elseif u and u.point then
         f:SetPoint(u.point, UIParent, u.point, u.x, u.y)
     else
         f:SetPoint(d.point, UIParent, d.point, d.x, d.y)
     end
+end
+
+local function applyUnit(f)
+    local unit = f.baseUnit
+    local changed = applyLayout(f)
+    if f.small and applySmallLayout(f) then changed = true end
+    placeFrame(f, unit)
     f:SetScale(getSetting(unit, "scale"))
     local showName = getSetting(unit, "showName") and true or false
     f.name:SetShown(showName)
@@ -1799,33 +2346,28 @@ local function applyUnit(f)
     applyCorner(f)
     placeIndicators(f)
     pcall(applyFont, f)
-    pcall(updateFlash, f)
     pcall(updateThreat, f)
     pcall(updateIndicators, f)
     pcall(updateAuras, f)
     pcall(placeCastbar, f)
+    pcall(Extras.tint, f)
     if f.updateRest then pcall(f.updateRest) end
+    -- textures: health (also the cast bar and the heal / shield overlays) and power, each the frame's
+    -- default fill or a chosen one
     local tex = resolveTexture(getSetting(unit, "barTexture"))
     if tex ~= f.customTex then
         f.customTex = tex
-        f.hpCurrent, f.mpCurrent = nil, nil
+        f.hpCurrent = nil
+        changed = true
+    end
+    local ptex = resolveTexture(getSetting(unit, "powerTexture"))
+    if ptex ~= f.powerTex then
+        f.powerTex = ptex
+        f.mpCurrent = nil
         changed = true
     end
     refreshText(f)
     if changed then pcall(updateAll, f) end
-end
-
--- The party container (its position, and its size so the Edit Mode box fits) and its frames.
-local function applyParty()
-    local box = frames.party
-    if not box then return end
-    local u, d = unitData("party"), DEFAULT_POS.party
-    box:ClearAllPoints()
-    if u and u.point then box:SetPoint(u.point, UIParent, u.point, u.x, u.y)
-    else box:SetPoint(d.point, UIParent, d.point, d.x, d.y) end
-    local s = getSetting("party", "scale")
-    box:SetSize(120 * s, (49 * #PARTY + PARTY_GAP * (#PARTY - 1)) * s)
-    for _, f in ipairs(partyFrames) do applyUnit(f) end
 end
 
 local function applyAll()
@@ -1834,19 +2376,10 @@ local function applyAll()
     for _, unit in ipairs(UNITS) do
         if frames[unit] then applyUnit(frames[unit]) end
     end
-    applyParty()
 end
 
 local function setSetting(unit, key, value)
     unitData(unit, true)[key] = value
-    if unit == "party" then
-        for _, pf in ipairs(partyFrames) do
-            pcall(updateHealth, pf)
-            pcall(updatePower, pf)
-        end
-        if InCombatLockdown() then pendingApply = true else applyParty() end
-        return
-    end
     local f = frames[unit]
     if f then
         pcall(updateHealth, f)
@@ -1854,6 +2387,8 @@ local function setSetting(unit, key, value)
         if InCombatLockdown() then pendingApply = true else applyUnit(f) end
         if lib then lib:RefreshFrameSettings(f) end
     end
+    -- the pet's bar can follow the player frame's colour
+    if unit == "player" and frames.pet then pcall(updateHealth, frames.pet) end
 end
 
 ---------------------------------------------------------------------------
@@ -1982,17 +2517,6 @@ local function createFrame(unit)
     f.corner:SetPoint("CENTER", f, "CENTER", CORNER_POS[1], CORNER_POS[2])
 
     f.ov = ov
-    if unit ~= "player" then
-        f.flash = ov:CreateTexture(nil, "OVERLAY", nil, -3)
-        f.flash:Hide()
-        pcall(function()
-            local ag = f.flash:CreateAnimationGroup()
-            ag:SetLooping("BOUNCE")
-            local a = ag:CreateAnimation("Alpha")
-            a:SetFromAlpha(0.15); a:SetToAlpha(0.85); a:SetDuration(0.35)
-            f.flashAnim = ag
-        end)
-    end
     -- resting "Z" on the player frame, only while you are resting
     -- (DragonflightUI's flipbook sheet: 7 x 6 frames of 60px, at the top right of the portrait)
     if isPlayer then
@@ -2034,9 +2558,8 @@ local function createFrame(unit)
         elseif event == "PLAYER_REGEN_DISABLED" then self.combatFlag = true; updateIndicators(self)
         elseif event == "PLAYER_REGEN_ENABLED" then self.combatFlag = false; updateIndicators(self)
         elseif event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FLAGS" then updateIndicators(self)
-        elseif event:find("^UNIT_SPELLCAST") then updateFlash(self)
         elseif event:find("^UNIT_THREAT") then updateThreat(self)
-        elseif event == "UNIT_AURA" then updateAuras(self)
+        elseif event == "UNIT_AURA" then safely(updateAuras, self)
         elseif event == "UNIT_COMBAT" then local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
@@ -2065,11 +2588,6 @@ local function createFrame(unit)
         -- the situation event fires for the unit whose threat changed (you), the list event for the mob
         pcall(f.RegisterUnitEvent, f, "UNIT_THREAT_SITUATION_UPDATE", unit, "player")
         pcall(f.RegisterUnitEvent, f, "UNIT_THREAT_LIST_UPDATE", unit)
-        for _, e in ipairs({ "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP", "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED",
-                             "UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_DELAYED", "UNIT_SPELLCAST_CHANNEL_START",
-                             "UNIT_SPELLCAST_CHANNEL_STOP", "UNIT_SPELLCAST_INTERRUPTIBLE", "UNIT_SPELLCAST_NOT_INTERRUPTIBLE" }) do
-            pcall(f.RegisterUnitEvent, f, e, unit)
-        end
     end
 
     if unit ~= "player" then RegisterUnitWatch(f) end
@@ -2089,7 +2607,6 @@ local POLL_INTERVAL = 0.25
 local function createSmallFrame(unit)
     local f = newUnitButton(unit, 120, 49)
     f.small = true
-    f.prefix = TOT_PREFIX
     f.layoutLeft = nil        -- applySmallLayout builds the art, bars and masks for the chosen side
     f.hpFiles = true
     f.hpAtlas = BAR_FILE.small .. "Health"
@@ -2165,7 +2682,7 @@ local function createSmallFrame(unit)
     f:SetScript("OnEvent", function(self, event, ...)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then updateHealth(self)
         elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
-        elseif event == "UNIT_AURA" then updateAuras(self)
+        elseif event == "UNIT_AURA" then safely(updateAuras, self)
         elseif event == "UNIT_COMBAT" then local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
@@ -2180,10 +2697,6 @@ local function createSmallFrame(unit)
     elseif unit == "focustarget" then
         pcall(f.RegisterUnitEvent, f, "UNIT_TARGET", "focus")
         f:RegisterEvent("PLAYER_FOCUS_CHANGED")
-    elseif unit:match("^party") then
-        -- who is in the group, and who leads it
-        f:RegisterEvent("GROUP_ROSTER_UPDATE")
-        f:RegisterEvent("PARTY_LEADER_CHANGED")
     else
         pcall(f.RegisterUnitEvent, f, "UNIT_TARGET", "target")   -- the target changed who it is targeting
     end
@@ -2196,37 +2709,6 @@ local function createSmallFrame(unit)
 end
 
 ---------------------------------------------------------------------------
--- Party frames: the small frame four times (party1-4), stacked in one movable container. Like
--- Blizzard's, they show in a party and hide in a raid; each frame shows only while its member exists.
----------------------------------------------------------------------------
-local PARTY_VISIBILITY = "[group:raid] hide; [group:party] show; hide"
-
-local function createParty()
-    local box = CreateFrame("Frame", "WebbyFrames_Party", UIParent, "SecureHandlerStateTemplate")
-    box:SetSize(120, 49 * #PARTY + PARTY_GAP * (#PARTY - 1))
-    box:SetFrameStrata("LOW")
-    box:SetClampedToScreen(true)
-    box:SetMovable(true)
-    frames.party = box
-    for i, unit in ipairs(PARTY) do
-        createSmallFrame(unit)
-        local f = frames[unit]
-        frames[unit] = nil          -- reached through partyFrames; their options are under "party"
-        f.baseUnit = "party"
-        f.partyIndex = i
-        f:SetParent(box)
-        -- party leader crown, at the top left of the portrait
-        f.leaderIcon = f.ov:CreateTexture(nil, "OVERLAY", nil, 6)
-        f.leaderIcon:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
-        f.leaderIcon:SetSize(16, 16)
-        f.leaderIcon:SetPoint("CENTER", f.portrait, "TOPLEFT", 4, -2)
-        f.leaderIcon:Hide()
-        partyFrames[i] = f
-    end
-    RegisterAttributeDriver(box, "state-visibility", PARTY_VISIBILITY)
-end
-
----------------------------------------------------------------------------
 -- Edit Mode (LibEditMode)
 ---------------------------------------------------------------------------
 -- Target and focus only exist while you have one, so while Edit Mode is open
@@ -2236,30 +2718,28 @@ local function sampleFrames()
     for _, unit in ipairs({ "target", "targettarget", "focus", "focustarget", "pet" }) do
         if frames[unit] then list[#list + 1] = frames[unit] end
     end
-    for _, f in ipairs(partyFrames) do list[#list + 1] = f end
     return list
 end
 
 local function enterSample()
     if InCombatLockdown() then return end
-    -- the party container is shown whatever the group, so it can be moved
-    if frames.party then UnregisterAttributeDriver(frames.party, "state-visibility"); frames.party:Show() end
     for _, f in ipairs(sampleFrames()) do
         UnregisterUnitWatch(f)
         f.wfUnit = "player"
         f:Show()
         updateAll(f)
     end
+    AuraKit.setEditing(true)       -- the buff / debuff boxes for frames set to "drag in Edit Mode"
 end
 
 local function exitSample()
+    AuraKit.setEditing(false)
     if InCombatLockdown() then return end
     for _, f in ipairs(sampleFrames()) do
-        f.wfUnit = f.partyIndex and PARTY[f.partyIndex] or f.baseUnit
+        f.wfUnit = f.baseUnit
         RegisterUnitWatch(f)
         updateAll(f)
     end
-    if frames.party then RegisterAttributeDriver(frames.party, "state-visibility", PARTY_VISIBILITY) end
 end
 
 -- defined with the actions and settings below; used by the dialog buttons
@@ -2280,7 +2760,7 @@ end
 
 local function snapTargets(self)
     local list = {}
-    for _, unit in ipairs(OPTION_UNITS) do
+    for _, unit in ipairs(UNITS) do
         local o = frames[unit]
         if o and o ~= self and o:IsVisible() then list[#list + 1] = o end
     end
@@ -2330,6 +2810,44 @@ local function snapFrame(f)
     return "TOPLEFT", x, y
 end
 
+-- Sticky frames: a frame dropped within SNAP_DIST of another Webby frame (touching, overlapping or just
+-- beside it) is attached to it and follows it when that frame moves. Dropped further away, it's free
+-- again. Its own frame is preferred when it's in reach (focus target -> focus, target of target ->
+-- target, pet -> player). Saved as attach = the other frame's unit, ax / ay = its top left offset.
+local NATURAL_PARENT = { focustarget = "focus", targettarget = "target", pet = "player" }
+
+local function updateAttachment(f, unit, layoutName)
+    local u = unitData(unit, true, layoutName)
+    local l, b, r, t = boxOf(f)
+    local best, bestD
+    if l then
+        for _, other in ipairs(UNITS) do
+            local o = frames[other]
+            if other ~= unit and o and o:IsVisible() and not attachLoops(other, unit, layoutName) then
+                local ol, ob, orr, ot = boxOf(o)
+                if ol then
+                    -- gap between the two boxes (0 when they touch or overlap)
+                    local gx = math.max(0, ol - r, l - orr)
+                    local gy = math.max(0, ob - t, b - ot)
+                    local d = math.max(gx, gy)
+                    if NATURAL_PARENT[unit] == other then d = d - 0.5 end
+                    if d <= SNAP_DIST and (not bestD or d < bestD) then best, bestD = other, d end
+                end
+            end
+        end
+    end
+    if not best then
+        u.attach, u.ax, u.ay = nil, nil, nil
+        return
+    end
+    local p = frames[best]
+    local ui = UIParent:GetEffectiveScale()
+    local fs, ps = f:GetEffectiveScale() / ui, p:GetEffectiveScale() / ui
+    u.attach = best
+    u.ax = (f:GetLeft() * fs - p:GetLeft() * ps) / fs
+    u.ay = (f:GetTop() * fs - p:GetTop() * ps) / fs
+end
+
 -- Edit Mode is only for moving the frames: each frame's dialog has buttons for its options page
 -- (Esc > Options > AddOns > Webby Frames) and for a reset.
 local function setupEditMode()
@@ -2340,20 +2858,44 @@ local function setupEditMode()
     end
     lib = l
 
-    for _, unit in ipairs(OPTION_UNITS) do
+    for _, unit in ipairs(UNITS) do
         local f = frames[unit]
         local d = DEFAULT_POS[unit]
         lib:AddFrame(f, function(_, layoutName, point, x, y)
             local sp, sx, sy = snapFrame(f)
             if sp then point, x, y = sp, sx, sy end
             local u = unitData(unit, true, layoutName)
-            u.point, u.x, u.y = point, x, y
+            u.point, u.x, u.y = point, x, y         -- (kept for when its frame is gone)
+            -- sticky: dropped by another frame, it now moves with that frame
+            pcall(updateAttachment, f, unit, layoutName)
+            if layoutName == activeLayout then pcall(placeFrame, f, unit) end
         end, { point = d.point, x = d.x, y = d.y }, "Webby " .. UNIT_LABEL[unit] .. " Frame")
-        pcall(lib.AddFrameSettingsButtons, lib, f, {
-            { text = "Options", click = function() openSettings(unit) end },
-            { text = "Reset frame", click = function() resetFrame(unit) end },
-        })
+        -- The library's box covers the whole (larger, clickable) frame; fit it to the frame art instead,
+        -- the same box snapping lines up (it follows the art when the layout changes).
+        pcall(function()
+            local sel = lib.frameSelections and lib.frameSelections[f]
+            if sel and f.border then
+                sel:ClearAllPoints()
+                sel:SetPoint("TOPLEFT", f.border, "TOPLEFT")
+                sel:SetPoint("BOTTOMRIGHT", f.border, "BOTTOMRIGHT")
+            end
+        end)
     end
+
+    -- No settings dialog when a frame is clicked: the options all live in Esc > Options. The library
+    -- still needs its dialog (closing it deselects the frame, and it handles the arrow keys that nudge
+    -- the selected frame 1px, 10px with Shift), so it's kept open but invisible, off the screen.
+    pcall(function()
+        local dlg = lib.internal and lib.internal.dialog
+        if dlg and not dlg.webbyHidden then
+            dlg.webbyHidden = true
+            hooksecurefunc(dlg, "Update", function(d)
+                d:ClearAllPoints()
+                d:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", -5000, -5000)
+                d:SetAlpha(0)
+            end)
+        end
+    end)
 
     lib:RegisterCallback("layout", function(layoutName)
         activeLayout = layoutName
@@ -2366,20 +2908,15 @@ end
 ---------------------------------------------------------------------------
 -- Actions used by the settings pages and slash commands
 ---------------------------------------------------------------------------
-local COPY_KEYS = { "scale", "showName", "cornerAccent", "textMode", "textFormat", "barTexture", "font", "flashInterrupt", "showThreat",
-                    "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraPerRow", "auraMax", "auraPos", "auraTimers",
-                    "castShow", "castText", "castIcon", "castBorder", "smoothBars", "healPrediction", "absorbs", "combatNumbers",
-                    "colorMode", "healthFade" }
+local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "showThreat",
+                    "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
+                    "castShow", "castText", "castIcon", "smoothBars", "healPrediction", "absorbs",
+                    "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints" }
 
 function resetFrame(unit)
     if InCombatLockdown() then print("|cff33ccffWebby Frames:|r can't reset in combat."); return end
     local l = DB.layouts and DB.layouts[activeLayout]
     if l then l[unit] = nil end
-    if unit == "party" then
-        for _, pf in ipairs(partyFrames) do pf.layoutLeft = nil end
-        applyParty()
-        return
-    end
     local f = frames[unit]
     if f then
         f.layoutLeft = nil            -- force the layout to be rebuilt
@@ -2395,13 +2932,167 @@ function copySettings(from, to)
         local v = getSetting(from, key)
         if v ~= nil then unitData(to, true)[key] = v end
     end
-    if to == "party" then applyParty(); return end
     local f = frames[to]
     if f then
         f.layoutLeft = nil
         applyUnit(f)
         pcall(updateAll, f)
         if lib then lib:RefreshFrameSettings(f) end
+    end
+end
+
+---------------------------------------------------------------------------
+-- Profiles: the current Edit Mode layout's options and positions, every frame, as one line of text to
+-- paste somewhere and import again (here or on another character). The text is a small typed format
+-- (strings carry their length, so anything can be in them) in base64; importing only ever reads data.
+---------------------------------------------------------------------------
+local Profiles = { PREFIX = "WF1:", B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" }
+
+function Profiles.pack(v, out)
+    local t = type(v)
+    if t == "string" then out[#out + 1] = "s" .. #v .. ":" .. v
+    elseif t == "number" then out[#out + 1] = "n" .. string.format("%.17g", v) .. ";"
+    elseif t == "boolean" then out[#out + 1] = v and "t" or "f"
+    elseif t == "table" then
+        out[#out + 1] = "{"
+        for k, val in pairs(v) do
+            local kt, vt = type(k), type(val)
+            if (kt == "string" or kt == "number") and (vt == "string" or vt == "number" or vt == "boolean" or vt == "table") then
+                Profiles.pack(k, out); Profiles.pack(val, out)
+            end
+        end
+        out[#out + 1] = "}"
+    end
+    return out
+end
+
+-- Reads one value from s at i; returns it and the next position (errors on anything malformed).
+function Profiles.unpack(s, i, depth)
+    if depth > 20 then error("too deep") end
+    local c = s:sub(i, i)
+    if c == "s" then
+        local len, rest = s:match("^(%d+):()", i + 1)
+        len = tonumber(len)
+        if not len then error("bad string") end
+        return s:sub(rest, rest + len - 1), rest + len
+    elseif c == "n" then
+        local num, rest = s:match("^([^;]+);()", i + 1)
+        num = tonumber(num)
+        if not num then error("bad number") end
+        return num, rest
+    elseif c == "t" then return true, i + 1
+    elseif c == "f" then return false, i + 1
+    elseif c == "{" then
+        local tbl = {}
+        i = i + 1
+        while s:sub(i, i) ~= "}" do
+            if i > #s then error("unfinished table") end
+            local k, v
+            k, i = Profiles.unpack(s, i, depth + 1)
+            v, i = Profiles.unpack(s, i, depth + 1)
+            if type(k) == "table" then error("bad key") end
+            tbl[k] = v
+        end
+        return tbl, i + 1
+    end
+    error("bad data")
+end
+
+function Profiles.encode(s)
+    local A, out = Profiles.B64, {}
+    for i = 1, #s, 3 do
+        local a, b, c = s:byte(i, i + 2)
+        local n = a * 65536 + (b or 0) * 256 + (c or 0)
+        local q = { math.floor(n / 262144) % 64, math.floor(n / 4096) % 64, math.floor(n / 64) % 64, n % 64 }
+        out[#out + 1] = A:sub(q[1] + 1, q[1] + 1) .. A:sub(q[2] + 1, q[2] + 1)
+            .. (b and A:sub(q[3] + 1, q[3] + 1) or "=") .. (c and A:sub(q[4] + 1, q[4] + 1) or "=")
+    end
+    return table.concat(out)
+end
+
+function Profiles.decode(s)
+    local A, out = Profiles.B64, {}
+    s = s:gsub("[^%w%+/=]", "")
+    for i = 1, #s, 4 do
+        local n, pad = 0, 0
+        for j = 0, 3 do
+            local ch = s:sub(i + j, i + j)
+            local v = A:find(ch, 1, true)
+            if ch == "=" or ch == "" then pad = pad + 1; v = 1 elseif not v then error("bad text") end
+            n = n * 64 + (v - 1)
+        end
+        local bytes = string.char(math.floor(n / 65536) % 256, math.floor(n / 256) % 256, n % 256)
+        out[#out + 1] = bytes:sub(1, 3 - pad)
+    end
+    return table.concat(out)
+end
+
+function Profiles.export()
+    local l = DB.layouts and DB.layouts[activeLayout] or {}
+    return Profiles.PREFIX .. Profiles.encode(table.concat(Profiles.pack({ v = 1, layout = l }, {})))
+end
+
+-- Returns true, or false and why not.
+function Profiles.import(text)
+    if InCombatLockdown() then return false, "can't import in combat" end
+    text = (text or ""):gsub("%s", "")
+    if text:sub(1, #Profiles.PREFIX) ~= Profiles.PREFIX then return false, "that isn't a Webby Frames profile" end
+    local ok, data = pcall(function()
+        local raw = Profiles.decode(text:sub(#Profiles.PREFIX + 1))
+        local v, nexti = Profiles.unpack(raw, 1, 0)
+        if nexti ~= #raw + 1 then error("extra data") end
+        return v
+    end)
+    if not (ok and type(data) == "table" and type(data.layout) == "table") then return false, "the text is damaged or incomplete" end
+    for unit, u in pairs(data.layout) do
+        if type(unit) ~= "string" or type(u) ~= "table" then return false, "the text is damaged or incomplete" end
+    end
+    DB.layouts = DB.layouts or {}
+    DB.layouts[activeLayout] = data.layout
+    for _, f in pairs(frames) do f.layoutLeft = nil end
+    applyAll()
+    for _, f in pairs(frames) do pcall(updateAll, f) end
+    if lib then for _, f in pairs(frames) do pcall(lib.RefreshFrameSettings, lib, f) end end
+    return true
+end
+
+-- The export and import boxes (Blizzard's popup with an edit box).
+function Profiles.editBox(dialog)
+    return dialog.editBox or dialog.EditBox or (dialog.GetEditBox and dialog:GetEditBox())
+end
+
+function Profiles.show(which)
+    if not StaticPopupDialogs.WEBBYFRAMES_EXPORT then
+        StaticPopupDialogs.WEBBYFRAMES_EXPORT = {
+            text = "Webby Frames profile for the |cffffd100%s|r layout.\nCopy it with Ctrl+C:",
+            button1 = CLOSE or "Close",
+            hasEditBox = true, maxLetters = 0, editBoxWidth = 350,
+            OnShow = function(self, data)
+                local eb = Profiles.editBox(self)
+                if eb then eb:SetText(data or ""); eb:HighlightText(); eb:SetFocus() end
+            end,
+            EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+            timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+        }
+        StaticPopupDialogs.WEBBYFRAMES_IMPORT = {
+            text = "Paste a Webby Frames profile (Ctrl+V).\nIt replaces every frame's options and position in the |cffffd100%s|r layout.",
+            button1 = "Import", button2 = CANCEL or "Cancel",
+            hasEditBox = true, maxLetters = 0, editBoxWidth = 350,
+            OnShow = function(self) local eb = Profiles.editBox(self); if eb then eb:SetText(""); eb:SetFocus() end end,
+            OnAccept = function(self)
+                local eb = Profiles.editBox(self)
+                local ok, why = Profiles.import(eb and eb:GetText())
+                if ok then print("|cff33ccffWebby Frames:|r profile imported.")
+                else print("|cff33ccffWebby Frames:|r couldn't import: " .. why .. ".") end
+            end,
+            EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+            timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+        }
+    end
+    if which == "export" then
+        StaticPopup_Show("WEBBYFRAMES_EXPORT", activeLayout, nil, Profiles.export())
+    else
+        StaticPopup_Show("WEBBYFRAMES_IMPORT", activeLayout)
     end
 end
 
@@ -2415,7 +3106,7 @@ end
 
 ---------------------------------------------------------------------------
 -- Settings (Esc > Options > AddOns > Webby Frames): a General page, plus one page per frame with
--- its options in four sections. Edit Mode is only for moving the frames.
+-- its options in collapsible sections. Edit Mode is only for moving the frames.
 ---------------------------------------------------------------------------
 local unitPages = {}    -- unit -> settings subcategory
 
@@ -2475,6 +3166,15 @@ local function refreshSectionIcons()
     end)
 end
 
+-- Re-checks the shown rows' enabled state (options greyed out while what they depend on is off).
+local function refreshSettingStates()
+    pcall(function()
+        SettingsPanel:GetSettingsList().ScrollBox:ForEachFrame(function(frame)
+            if frame.EvaluateState then pcall(frame.EvaluateState, frame) end
+        end)
+    end)
+end
+
 local sectionWatch = CreateFrame("Frame")
 local watchElapsed = 0
 sectionWatch:SetScript("OnUpdate", function(_, dt)
@@ -2530,19 +3230,32 @@ local function buildSettings()
             layout:AddInitializer(sec)
             current = sec
         end
+        -- Switches and dropdowns can have options that depend on them (see B.under): when one changes,
+        -- the visible rows re-check whether they're enabled.
+        local function watch(key)
+            pcall(Settings.SetOnValueChangedCallback, prefix .. key, function() C_Timer.After(0, refreshSettingStates) end)
+        end
         function B.check(key, label, tip, default)
             local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.Boolean, label, default)
-            attach(Settings.CreateCheckbox(category, st, tip))
+            watch(key)
+            return attach(Settings.CreateCheckbox(category, st, tip))
         end
         function B.slider(key, label, tip, default, lo, hi, step, fmt)
             local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.Number, label, default)
             local o = Settings.CreateSliderOptions(lo, hi, step)
             o:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, fmt or function(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end)
-            attach(Settings.CreateSlider(category, st, o, tip))
+            return attach(Settings.CreateSlider(category, st, o, tip))
+        end
+        -- Indents a control under the one it depends on and greys it out while isOn() is false.
+        function B.under(parent, isOn, ...)
+            for _, init in ipairs({ ... }) do
+                if init and parent and init.SetParentInitializer then pcall(init.SetParentInitializer, init, parent, isOn) end
+            end
         end
         function B.dropdown(key, label, tip, default, choices)
             local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.String, label, default)
-            attach(Settings.CreateDropdown(category, st, function()
+            watch(key)
+            return attach(Settings.CreateDropdown(category, st, function()
                 local c = Settings.CreateControlTextContainer()
                 local list = type(choices) == "function" and choices() or choices
                 for _, ch in ipairs(list) do c:Add(ch[1], ch[2]) end
@@ -2567,19 +3280,68 @@ local function buildSettings()
             __newindex = function(_, k, v) if k == "enabled" or k == "combatNumbers" then DB[k] = v and true or false end end,
         })
         local B = builders(root, rootLayout, general, "WEBBY_general_")
-        B.header("Webby Frames  v" .. addonVersion())
-        B.check("enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames. Needs /reload to take effect.", true)
-        B.check("combatNumbers", "Combat numbers on portraits", "Damage and healing numbers popping up over the frames' portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat). Each frame also has its own switch.", true)
-        B.button("Move frames", "Open Edit Mode", openEditMode, "Drag the frames where you want them.")
-        B.button("Reset", "Reset all frames", function()
-            for _, unit in ipairs(OPTION_UNITS) do resetFrame(unit) end
-        end, "Puts every frame back to its defaults (options and position) for the current Edit Mode layout.")
-        B.header("Each frame has its own page below. Options are saved per Edit Mode layout.")
+        B.header("Webby Frames  |cff808080v" .. addonVersion() .. "|r")
+        B.check("enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames.\n\n|cffffd100Needs a /reload.|r", true)
+        B.check("combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on the player, target and focus frames.", true)
+
+        B.header("Frames")
+        B.button("Position", "Open Edit Mode", openEditMode, "Drag the frames where you want them. They snap to each other and to the screen edges.")
+        B.button("Start over", "Reset all frames", function()
+            for _, unit in ipairs(UNITS) do resetFrame(unit) end
+        end, "Puts every frame back to its default options and position, for the current Edit Mode layout.")
+
+        B.header("Profiles")
+        B.button("Share", "Export profile", function() Profiles.show("export") end,
+            "Every frame's options and position in this Edit Mode layout, as text you can copy and keep or share.")
+        B.button("Load", "Import profile", function() Profiles.show("import") end,
+            "Paste a profile exported here or on another character. It replaces this layout's options and positions.")
+
+        B.header("Pick a frame on the left for its own options.")
+        B.header("|cff808080Options are saved per Edit Mode layout.  /webby help lists the commands.|r")
     end
 
     -- one page per frame ---------------------------------------------------------
     local fontList = function() local l = {}; for _, c in ipairs(fontChoices()) do l[#l + 1] = { c[1], c[2] } end; return l end
-    for _, unit in ipairs(OPTION_UNITS) do
+
+    -- All frames: the options most people want the same everywhere, set on every frame at once. It shows
+    -- the player frame's choice; changing it sets every frame (each frame's page can still differ after).
+    do
+        local sub, subLayout = Settings.RegisterVerticalLayoutSubcategory(root, "All frames")
+        unitPages.all = sub
+        local function setAll(_, k, v) for _, unit in ipairs(UNITS) do setSetting(unit, k, v) end end
+        local proxy = setmetatable({}, {
+            __index = function(_, k) return getSetting("player", k) end,
+            __newindex = setAll,
+        })
+        local B = builders(sub, subLayout, proxy, "WEBBY_all_")
+        B.header("|cff808080Changes here apply to every frame. Each frame's own page can then differ.|r")
+
+        B.section("Look", true)
+        B.dropdown("frameTint", "Frame colour", "Colours the frame art on every frame. The player's resting glow takes the colour too.", "default",
+            { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "custom", "Custom" } })
+        B.button("Custom colour", "Pick colour", function() Extras.pickColor("player", setAll) end,
+            "Pick any colour for every frame's art (sets Frame colour to Custom).")
+        B.dropdown("barTexture", "Health texture", "Every frame's health bar fill (and cast bar and heal / shield overlays).", "default", textureChoices)
+        B.dropdown("powerTexture", "Power texture", "Every frame's mana, rage or energy fill.", "default", textureChoices)
+        B.dropdown("font", "Font", "For the names and bar numbers on every frame.", "default", fontList)
+
+        B.section("Bars", false)
+        local numbers = B.dropdown("textMode", "Numbers", "When the bars show their numbers, on every frame.", "always",
+            { { "always", "Always" }, { "mouseover", "On mouseover" }, { "off", "Never" } })
+        B.under(numbers, function() return getSetting("player", "textMode") ~= "off" end,
+            B.dropdown("textFormat", "Style", "Totals, percentages, or both.", "value",
+                { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
+        B.check("smoothBars", "Smooth bars", "Health and power slide to their new value instead of jumping.", true)
+        B.check("healthFade", "Fade to red", "As health drops, each frame's health colour shifts towards red.", false)
+        B.check("healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true)
+        B.check("absorbs", "Absorbs", "Damage shields and healing absorbs on the health bars.", true)
+
+        B.section("Buffs and debuffs", false)
+        B.dropdown("auraTimer", "Time left", "How each icon shows the time it has left, on every frame.", "both",
+            { { "both", "Sweep and numbers" }, { "swipe", "Sweep" }, { "numbers", "Numbers" }, { "none", "Nothing" } })
+    end
+
+    for _, unit in ipairs(UNITS) do
         local sub, subLayout = Settings.RegisterVerticalLayoutSubcategory(root, UNIT_LABEL[unit])
         unitPages[unit] = sub
         local proxy = setmetatable({}, {
@@ -2588,64 +3350,83 @@ local function buildSettings()
         })
         local B = builders(sub, subLayout, proxy, "WEBBY_" .. unit .. "_")
 
-        B.section("Layout", true)
-        B.slider("scale", "Scale", "Size of the frame.", 1, 0.5, 2, 0.05)
-        B.check("showName", "Show name", nil, true)
-        B.check("combatNumbers", "Combat numbers", "Damage and healing the unit takes, popping up over its portrait.", defaultFor(unit, "combatNumbers"))
-        if hasCorner(unit) then
-            B.check("cornerAccent", "Corner accent", "The pointed accent at the bottom of the portrait ring.", true)
+        local px = function(v) return string.format("%d px", math.floor(v + 0.5)) end
+        local whole = function(v) return string.format("%d", math.floor(v + 0.5)) end
+        local function isOn(key) return function() return getSetting(unit, key) and true or false end end
+
+        -- the frame itself and the icons on its portrait
+        B.section("Frame", true)
+        B.slider("scale", "Scale", "How big the frame is.", defaultFor(unit, "scale"), 0.5, 2, 0.05)
+        B.check("showName", "Name", "The unit's name above its health bar.", true)
+        B.dropdown("frameTint", "Frame colour", "Colours the frame art: its border, portrait ring, corner accent, level circle and cast bar border."
+            .. (unit == "player" and " The resting glow takes the colour too." or ""), "default",
+            { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "custom", "Custom" } })
+        B.button("Custom colour", "Pick colour", function() Extras.pickColor(unit, setSetting) end,
+            "Pick any colour for the frame art (sets Frame colour to Custom).")
+        if unit == "target" then
+            B.check("comboPoints", "Combo points", "Rogues and druids: your combo points in an arc round the target's portrait.", true)
+        end
+        if unit == "pet" then
+            B.dropdown("petHappy", "Pet happiness", "Hunters: your pet's mood, with its diet, damage and loyalty in the tooltip.\n\nCorner: at the portrait's bottom right, where your frame has its corner point and combat swords.\nLevel badge: at the portrait's bottom left, where your frame has its level circle (the tooltip gives the pet's level).", "corner",
+                { { "off", "Off" }, { "corner", "On the corner" }, { "badge", "Level badge" } })
         end
 
+        -- how the bars are drawn and labelled
         B.section("Bars", false)
-        B.dropdown("barTexture", "Texture", "Fill texture for the health and power bars, including SharedMedia ones.", "default", textureChoices)
-        B.dropdown("textMode", "Numbers", "When the numbers on the bars show. On mouseover, only the bar under the cursor shows its number.",
-            defaultFor(unit, "textMode"), { { "always", "Always" }, { "mouseover", "On mouseover" }, { "off", "Off" } })
-        B.dropdown("textFormat", "Number style", "Totals, percentages, or both.",
-            defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } })
-        B.dropdown("font", "Font", "Font for the name and bar numbers, including SharedMedia ones.", "default", fontList)
+        B.dropdown("barTexture", "Health texture", "The health bar's fill (the cast bar and the incoming heal and shield overlays use it too). SharedMedia textures are listed too.", "default", textureChoices)
+        B.dropdown("powerTexture", "Power texture", "The mana, rage or energy bar's fill. A custom texture is coloured by power type. Follows the health texture until you pick one.", "default", textureChoices)
+        B.dropdown("font", "Font", "For the name and the numbers on the bars. SharedMedia fonts are listed too.", "default", fontList)
+        local numbers = B.dropdown("textMode", "Numbers", "When the bars show their numbers. On mouseover, only the bar under the cursor shows its number.",
+            defaultFor(unit, "textMode"), { { "always", "Always" }, { "mouseover", "On mouseover" }, { "off", "Never" } })
+        B.under(numbers, function() return getSetting(unit, "textMode") ~= "off" end,
+            B.dropdown("textFormat", "Style", "Totals, percentages, or both.",
+                defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
         B.check("smoothBars", "Smooth bars", "Health and power slide to their new value instead of jumping.", true)
-        B.check("healPrediction", "Incoming heals", "Heals on their way to the unit, shown in green past the end of its health.", true)
-        B.check("absorbs", "Absorb shields", "Damage shields shown past the end of its health, and healing absorbs eating back into it in red.", true)
 
-        B.section("Colours", false)
-        if unit ~= "pet" then   -- the pet bar is always green
-            B.dropdown("colorMode", "Health colour", "How the health bar is coloured.", "smart", COLOR_MODES)
+        -- the health bar's colour and what's drawn past its end
+        B.section("Health", false)
+        if unit == "pet" then   -- (the pet's own reaction colour flips around, so these two)
+            B.dropdown("petColor", "Colour", "How the pet's health bar is coloured: the same as your player frame's (your class colour, if that's what the player frame uses), or plain green.", "player",
+                { { "player", "Match the player frame" }, { "plain", "Plain green" } })
+        else
+            B.dropdown("colorMode", "Colour", "How the health bar is coloured.", "smart", COLOR_MODES)
         end
-        B.dropdown("healthFade", "Low health fade", "Shift the health bar colour as health drops.", "off",
-            { { "off", "Off" }, { "classic", "Green to red" }, { "reactive", "Health colour to red" } })
+        B.check("healthFade", "Fade to red", "As health drops, the health colour (whichever you picked above) shifts towards red.", false)
+        B.check("healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true)
+        B.check("absorbs", "Absorbs", "Damage shields past the end of its health, and healing absorbs eating back into it in red.", true)
 
         B.section("Buffs and debuffs", false)
-        local whole = function(v) return string.format("%d", math.floor(v + 0.5)) end
-        B.check("auraBuffs", "Show buffs", nil, defaultFor(unit, "auraBuffs"))
-        B.check("auraDebuffs", "Show debuffs", nil, defaultFor(unit, "auraDebuffs"))
-        B.check("auraMine", "Only my debuffs", "Show only the debuffs you applied.", false)
-        B.check("auraTimers", "Countdown numbers", "Time left on each buff and debuff.", true)
-        B.dropdown("auraPos", "Position", "Where the icons sit.", defaultFor(unit, "auraPos"),
-            { { "below", "Below the frame" }, { "above", "Above the frame" }, { "right", "Right of the frame" } })
-        B.slider("auraSize", "Icon size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, whole)
-        B.slider("auraPerRow", "Icons per row", nil, defaultFor(unit, "auraPerRow"), 1, 16, 1, whole)
-        B.slider("auraMax", "Most of each", "How many buffs, and how many debuffs, can show.", defaultFor(unit, "auraMax"), 1, 32, 1, whole)
+        local buffs = B.check("auraBuffs", "Buffs", nil, defaultFor(unit, "auraBuffs"))
+        B.under(buffs, isOn("auraBuffs"),
+            B.slider("auraSize", "Size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, px))
+        local debuffs = B.check("auraDebuffs", "Debuffs", nil, defaultFor(unit, "auraDebuffs"))
+        B.under(debuffs, isOn("auraDebuffs"),
+            B.slider("auraDebuffSize", "Size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, px),
+            B.check("auraMine", "Only mine", "Only the debuffs you applied.", false))
+        B.dropdown("auraPos", "Position", "Where the icons sit. With \"Drag in Edit Mode\", Edit Mode shows a blue box for them: drag it anywhere.", defaultFor(unit, "auraPos"),
+            { { "below", "Below the frame" }, { "above", "Above the frame" }, { "custom", "Drag in Edit Mode" } })
+        B.button("Move", "Open Edit Mode", openEditMode, "Drag the buffs and debuffs box (Position: Drag in Edit Mode).")
+        B.slider("auraPerRow", "Per row", "How many icons fit on a row before the next one starts.", defaultFor(unit, "auraPerRow"), 1, 16, 1, whole)
+        B.slider("auraMax", "Most shown", "How many buffs, and how many debuffs, can show at once.", defaultFor(unit, "auraMax"), 1, 32, 1, whole)
+        B.dropdown("auraTimer", "Time left", "How each icon shows the time it has left: a dark sweep across the icon, countdown numbers, or both.", "both",
+            { { "both", "Sweep and numbers" }, { "swipe", "Sweep" }, { "numbers", "Numbers" }, { "none", "Nothing" } })
 
         if hasCastAndThreat(unit) then
-            B.section("Cast bar", false)
-            B.check("castShow", "Show cast bar", "A bar under the mana bar showing what the unit is casting: yellow for a cast, green for a channel, grey when you can't interrupt it, red when interrupted.", true)
-            B.check("castText", "Spell name", "The spell's name on the cast bar.", true)
-            B.check("castIcon", "Spell icon", "The spell's icon, at the cast bar's left end.", true)
-            B.dropdown("castBorder", "Border", "How the cast bar is edged.", "bars",
-                { { "bars", "Like the bars" }, { "outline", "Outline" }, { "none", "None" } })
-
-            B.section("Combat", false)
-            B.check("flashInterrupt", "Interrupt flash", "Pulse the frame red while the unit casts a spell you can interrupt.", true)
-            B.check("showThreat", "Threat", "Your threat on hostile units: the frame glows yellow, orange or red, and your threat % shows by the name.", true)
+            B.section("Cast bar and threat", false)
+            local cast = B.check("castShow", "Cast bar", "What the unit is casting, under its mana bar: yellow for a cast, green for a channel, grey when you can't interrupt it, red when interrupted.", true)
+            B.under(cast, isOn("castShow"),
+                B.check("castText", "Spell name", nil, true),
+                B.check("castIcon", "Spell icon", "At the bar's left end.", true))
+            B.check("showThreat", "Threat", "Your threat on hostile units: the frame glows yellow, orange or red, with your threat % by the name.", true)
         end
 
         B.section("Reset and copy", false)
         if unit ~= "player" then
             B.button("Copy", "Copy from player", function() copySettings("player", unit) end,
-                "Copies the player frame's options to this frame (not its position).")
+                "Gives this frame the player frame's options. Its position stays put.")
         end
         B.button("Reset", "Reset this frame", function() resetFrame(unit) end,
-            "Puts this frame back to its defaults, including its position, for the current Edit Mode layout.")
+            "Puts this frame back to its default options and position, for the current Edit Mode layout.")
     end
     Settings.RegisterAddOnCategory(root)
 end
@@ -2674,12 +3455,45 @@ local function hideBlizzard(frame)
         end
     end)
 end
+-- Target and focus: Blizzard's frames keep running, just invisible, unclickable and parked off the
+-- screen, because their cast bars (which ours copy) need them: a cast bar inside a hidden frame stops,
+-- and one moved into ours can't start when you pick a target that's already casting (Blizzard's bar
+-- asks its own frame where to sit first). Edit Mode re-anchoring them puts them back off the screen.
+local ghosted = {}
+local function parkBlizzard(frame)
+    if InCombatLockdown() or ghosted[frame] == "parking" then return end
+    ghosted[frame] = "parking"
+    pcall(function()
+        frame:ClearAllPoints()
+        frame:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", -3000, -3000)
+    end)
+    ghosted[frame] = true
+end
+local function ghostBlizzard(frame)
+    if not frame then return end
+    pcall(function()
+        frame:SetAlpha(0)
+        frame:EnableMouse(false)
+        frame:SetClampedToScreen(false)
+    end)
+    parkBlizzard(frame)
+end
+local ghostHooked = {}
+local function ghostHooks(frame)
+    if not frame or ghostHooked[frame] then return end
+    ghostHooked[frame] = true
+    hooksecurefunc(frame, "SetAlpha", function(self, a) if a ~= 0 then self:SetAlpha(0) end end)
+    hooksecurefunc(frame, "SetPoint", function(self) if ghosted[self] ~= "parking" then parkBlizzard(self) end end)
+    if frame.ApplySystemAnchor then hooksecurefunc(frame, "ApplySystemAnchor", function(self) parkBlizzard(self) end) end
+end
+
 local function hideAllBlizzard()
-    hideBlizzard(_G.PlayerFrame); hideBlizzard(_G.TargetFrame); hideBlizzard(_G.FocusFrame)
+    hideBlizzard(_G.PlayerFrame)
+    for _, fr in ipairs({ _G.TargetFrame, _G.FocusFrame }) do
+        if fr then ghostHooks(fr); ghostBlizzard(fr) end
+    end
     hideBlizzard(_G.TargetFrameToT); hideBlizzard(_G.FocusFrameToT); hideBlizzard(_G.PetFrame)
-    -- Blizzard's party frames (not the raid-style ones, if you use those)
-    hideBlizzard(_G.PartyFrame)
-    for i = 1, 4 do hideBlizzard(_G["PartyMemberFrame" .. i]) end
+    -- (party frames are left alone: Blizzard's, or whatever addon you use for them)
 end
 
 local init = CreateFrame("Frame")
@@ -2692,6 +3506,15 @@ init:SetScript("OnEvent", function(_, event)
     end
 
     DB = WebbyFramesDB
+    -- a 0.57 test build briefly gave the pet the player's (larger) frame and cut a saved pet scale to
+    -- match; the pet is the small frame again, so a scale cut then is put back
+    if DB.petFrameV2 then
+        DB.petFrameV2 = nil
+        for _, l in pairs(DB.layouts or {}) do
+            local u = type(l) == "table" and l.pet
+            if type(u) == "table" and type(u.scale) == "number" then u.scale = u.scale * 198 / 120 end
+        end
+    end
     if not pcall(buildSettings) then
         print("|cffff9900Webby Frames:|r couldn't build the settings page; Edit Mode still works.")
     end
@@ -2700,7 +3523,7 @@ init:SetScript("OnEvent", function(_, event)
     for _, unit in ipairs(UNITS) do
         if unit == "targettarget" or unit == "focustarget" or unit == "pet" then createSmallFrame(unit) else createFrame(unit) end
     end
-    createParty()
+    Extras.init()
     hideAllBlizzard()
     C_Timer.After(2, hideAllBlizzard)
     setupEditMode()
@@ -2716,7 +3539,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
     elseif msg == "edit" then
         openEditMode()
     elseif msg == "reset" then
-        for _, unit in ipairs(OPTION_UNITS) do resetFrame(unit) end
+        for _, unit in ipairs(UNITS) do resetFrame(unit) end
         print("|cff33ccffWebby Frames:|r frames reset.")
     elseif msg == "debug" then
         for _, u in ipairs(UNITS) do
@@ -2729,42 +3552,19 @@ SlashCmdList.WEBBYFRAMES = function(msg)
                     "strata", f:GetFrameStrata(), "badge", tostring(f.badge and f.badge:IsShown()), "corner", tostring(f.corner and f.corner:IsShown()))
             end
         end
-        for _, u in ipairs(UNITS) do
-            local f = frames[u]
-            local c = f and f.corner
-            if c then
-                print("corner", u, "shown", tostring(c:IsShown()), "visible", tostring(c:IsVisible()),
-                    "left", tostring(f.layoutLeft), "setting", tostring(getSetting(u, "cornerAccent")),
-                    "back", tostring(f.cornerBack and f.cornerBack:IsShown()))
-            end
-        end
-        -- mana bar: mask on/off, fill art, value, and the mask's size and tex coords
-        for _, u in ipairs(UNITS) do
-            local f = frames[u]
-            if f and f.mp then
-                local okv, lo, hi = pcall(f.mp.GetMinMaxValues, f.mp)
-                local okc, a, b, _, _, c = pcall(f.mpMask.GetTexCoord, f.mpMask)
-                print("mana", u, "maskOn", tostring(f.mpMaskOn), "art", tostring(f.mpCurrent),
-                    "shown", tostring(f.mp:IsShown()), "w", math.floor(f.mp:GetWidth()), "max", okv and tostring(hi) or "?",
-                    "mask", math.floor(f.mpMask:GetWidth()) .. "x" .. math.floor(f.mpMask:GetHeight()),
-                    "tc", okc and string.format("%.3f %.3f %.3f", a or -1, b or -1, c or -1) or "?", "maskAtlas", tostring(f.mpMask:GetAtlas()))
-            end
-        end
         local pf = _G.PlayerFrame
         if pf then print("Blizzard PlayerFrame shown", tostring(pf:IsShown()), "alpha", pf:GetAlpha(), "parent", tostring(pf:GetParent() and pf:GetParent():GetName())) end
+        -- pet happiness as the game reports it (hunters)
+        local hok, h, dmg, loyalty = pcall(function()
+            if C_PetInfo and C_PetInfo.GetPetHappiness then return C_PetInfo.GetPetHappiness() end
+            if GetPetHappiness then return GetPetHappiness() end
+        end)
+        local _, hunterPet = pcall(function() return select(2, HasPetUI()) end)
+        print("Pet happiness:", (C_PetInfo and C_PetInfo.GetPetHappiness) and "C_PetInfo API" or (GetPetHappiness and "old API" or "no API"),
+            "hunter pet", tostring(hunterPet), "pet", tostring(UnitExists("pet")), "->", tostring(hok), tostring(h), tostring(dmg), tostring(loyalty))
+        local ac = frames.target and frames.target.auraContainer
+        print("Aura containers:", ac and "in use" or (ac == false and "not available, using the old aura code" or "not made yet"))
         print("Version", addonVersion())
-    elseif msg == "atlas" then
-        local names = {
-            PLAYER_PREFIX, PLAYER_PREFIX .. "-CornerEmbellishment", "UI-HUD-UnitFrame-SmallCircle", PLAYER_PREFIX .. "-Bar-Health",
-            PLAYER_PREFIX .. "-Bar-Health-Mask", PLAYER_PREFIX .. "-Bar-Mana", PLAYER_PREFIX .. "-Bar-Mana-Mask",
-            "UI-HUD-UnitFrame-Player-Portrait-Mask", TARGET_PREFIX, TARGET_PREFIX .. "-Bar-Health-Mask",
-            TARGET_PREFIX .. "-Bar-Mana-Mask", TOT_PREFIX, SMALL_MASK_HEALTH, SMALL_MASK_MANA,
-        }
-        for _, n in ipairs(names) do
-            local info; pcall(function() info = C_Texture.GetAtlasInfo(n) end)
-            local extra = info and (" file=" .. tostring(info.file or info.filename) .. " " .. tostring(info.width) .. "x" .. tostring(info.height)) or ""
-            print((hasAtlas(n) and "|cff00ff00OK|r  " or "|cffff0000MISSING|r  ") .. n .. extra)
-        end
     elseif msg == "test" then
         -- a 10-second preview on your own frame: health slides to 60% (smooth bars), with 20% incoming
         -- heals, a 15% shield and a 10% heal-absorb; then everything goes back to the real values
@@ -2775,22 +3575,25 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         f.previewing = true
         f.hp:SetMinMaxValues(0, 100)
         f.hp:SetValue(100)
-        for _, b in ipairs({ f.healBar, f.absorbBar, f.healAbsorbBar }) do b:SetMinMaxValues(0, 100) end
+        for _, b in ipairs({ f.healBar, f.otherHealBar, f.absorbBar, f.healAbsorbBar }) do b:SetMinMaxValues(0, 100) end
         C_Timer.After(0.3, function()
             setBarValue(f, f.hp, 60)
-            f.healBar:SetValue(getSetting("player", "healPrediction") and 20 or 0)
+            f.healBar:SetValue(getSetting("player", "healPrediction") and 12 or 0)
+            f.otherHealBar:SetValue(getSetting("player", "healPrediction") and 8 or 0)
             f.absorbBar:SetValue(getSetting("player", "absorbs") and 15 or 0)
             f.healAbsorbBar:SetValue(getSetting("player", "absorbs") and 10 or 0)
         end)
         pcall(showHit, f, "WOUND", "CRITICAL", 1234)      -- and a combat number on the portrait
         C_Timer.After(10, function() f.previewing = nil; pcall(updateAll, f) end)
         print("|cff33ccffWebby Frames:|r previewing heals (green), a shield, a heal-absorb (red) and a combat number on your frame for 10 seconds.")
+    elseif msg == "export" or msg == "import" then
+        Profiles.show(msg)
     elseif msg == "errors" then
         -- the errors caught while updating the frames (each shown once)
         if #updateErrors == 0 then print("|cff33ccffWebby Frames:|r no errors caught.") end
         for i, err in ipairs(updateErrors) do print("|cffff6060Webby Frames error " .. i .. ":|r " .. tostring(err)) end
     elseif msg == "help" then
-        print("|cff33ccffWebby Frames:|r /webby (options)   /webby edit (move the frames)   /webby reset (reset all frames)   /webby test (preview heals and shields)   /webby errors   /webby debug")
+        print("|cff33ccffWebby Frames:|r /webby (options)   /webby edit (move the frames)   /webby reset (reset all frames)   /webby test (preview heals and shields)   /webby export / import (profiles)   /webby errors   /webby debug")
     else
         print("|cff33ccffWebby Frames:|r unknown command. Type |cff33ccff/webby help|r.")
     end

@@ -1,38 +1,45 @@
 # Changelog
 
 ## 0.57
-New frames and features
-- Cast bars on target and focus (hiding Blizzard's frames had hidden theirs). The bar is built into the frame: it shares the mana bar's bottom border line, uses the frame art's own border, runs on under the portrait ring to the level badge, and takes the frame's bar texture and font. Spell icon and name, coloured by cast type (yellow cast, green channel, grey can't interrupt, red interrupted). Options: show, spell name, spell icon, border style.
-- Health bar extras: incoming heals (green) and absorb shields (pale blue) past the end of the health fill, and healing absorbs eating back into it (red), in the frame's own bar texture. Works with Forever's protected health values. `/webby test` previews them on your frame for 10 seconds.
-- Smooth bars: health and power slide to their new values (optional).
-- Combat numbers: damage (red), heals (green) and misses pop up over the portrait and fade, bigger on crits. On for player, target and focus; a switch per frame, and a master switch on the General page for anyone who prefers Blizzard's floating combat text.
-- Sturdier updates: one part of a frame failing can't stop the rest (buffs and debuffs included); `/webby errors` lists anything caught.
-- Party leader crown on the player, target and focus frames, on top of the portrait ring.
-- Buffs and debuffs lock onto the bottom of the cast bar, with cleaner icons: tighter crop, a 1px edge (dispel colour on debuffs), countdown numbers (optional) and bigger stack counts.
-- Party frames: four frames in the target-of-target style, stacked in one movable group, with a leader crown. They show in a party and hide in a raid, replacing Blizzard's party frames.
-- Buffs and debuffs on every frame: show buffs / debuffs, only my debuffs, position (below, above, right), icon size, icons per row and how many. Debuffs are bordered by dispel type, timers and stacks work with Forever's protected aura data, and hovering an icon shows its tooltip. On by default for target and focus, debuffs only for party.
+New features
+- Cast bars on target and focus, built into the frame: they share the mana bar's bottom border line, use the frame art's own border, run on under the portrait ring to the level badge, and take the frame's bar texture and font. Spell icon and name, coloured by cast type (yellow cast, green channel, grey can't interrupt, red interrupted). They also show when you target someone who is already casting.
 - Threat, the Retail way: the target and focus frames glow yellow, orange or red by your threat status, with your threat % in small coloured text by the name.
-- Elite, rare and world boss units get the dragon around their portrait.
-- Offline players get a greyed-out portrait with the red lightning bolt, as on the party frames, and "Offline" on a grey health bar. Dead and Ghost show on the health bar too.
-- Edit Mode snapping: a dropped frame lines up with other Webby frames, Blizzard's Edit Mode frames and the screen's centre lines.
+- Buffs and debuffs on every frame, working in combat too (through Blizzard's aura container): buffs and debuffs on or off and sized separately, only your debuffs, below the frame, just above it, or dragged anywhere in Edit Mode, icons per row, how many, and the time left as a sweep, countdown numbers, both or nothing. Debuffs are edged in their dispel colour; hovering an icon shows its tooltip. On by default for target and focus.
+- Health bar extras: incoming heals (yours and other players' in two greens) and absorb shields past the end of the health fill, and healing absorbs eating back into it (red). `/webby test` previews them on your frame.
+- Smooth bars, and an optional fade to red as health drops, from whichever health colour you picked.
+- Combat numbers: damage, heals and misses pop up over the player, target and focus portraits, bigger on crits. One switch on the General page.
+- Frame colour: gold as drawn, dark, silver, your class colour or any colour from the colour picker. The player's resting glow takes the colour too.
+- Separate health and power bar textures (SharedMedia ones included), per frame.
+- An All frames options page that sets the common options (frame colour, textures, font, numbers, bar extras, aura timers) on every frame at once.
+- Profiles: export every frame's options and positions as text and import it again, here or on another character (General page, or `/webby export` / `/webby import`).
+- Raid target markers on the portraits, a combo point arc round the target's portrait (rogues, druids), and party leader crowns.
+- Hunter pet happiness on the pet frame: on the portrait's corner or where a level badge would be, with the pet's diet, damage, loyalty and level in its tooltip.
+- The pet's health bar can match the player frame's colour (your class colour, say) or stay plain green.
+- Elite, rare and world boss units get the dragon around their portrait; offline players get a greyed-out portrait with the lightning bolt.
+
+Edit Mode
+- Frames snap to each other, to Blizzard's Edit Mode frames and to the screen's centre lines, and the selection box fits each frame's art exactly.
+- Sticky frames: a frame dropped next to another (within 10px) attaches to it and moves with it, e.g. focus target with focus. Drop it further away to free it.
+- Clicking a frame just selects it; the arrow keys nudge it 1px (10px with Shift). All options are in the options pages.
 
 New look
-- Every frame uses DragonflightUI's bundled copies of the Retail art (borders, bar fills and masks, name plate, corner accent, combat glow, resting Zzz), because Forever replaces many of the Retail atlases and its mana bar art drew nothing.
-- Bars fill exactly the sections of the frame art, custom textures included, and the portrait ring covers their ends cleanly (no dark sliver or off-colour patch beside it).
-- The options' collapsible sections open and close straight away, with a + / - on each header.
-- The player's corner accent glows with the resting / combat glow, and gives way to the crossed swords (with a dark outline) in combat.
-- Target and focus have the portrait on the right, the other frames on the left; only the player has the corner accent.
-- PvP badge, combat swords and resting Zzz sit where DragonflightUI puts them, and are always on.
+- Every frame uses DragonflightUI's bundled copies of the Retail art (borders, bar fills and masks, name plate, corner accent, combat glow, resting Zzz), because Forever replaces many of the Retail atlases.
+- Bars fill exactly the sections of the frame art, custom textures included, and the portrait ring covers their ends cleanly.
+- The PvP badge is Forever's own small faction shield by the level circle (with the flag timer on hover).
+- The player's corner accent glows with the resting / combat glow and gives way to the crossed swords in combat.
+- Target and focus have the portrait on the right, the other frames on the left.
 - Level numbers are coloured by difficulty on enemies, like the default UI.
 
 Options
-- All options are in Esc > Options > AddOns > Webby Frames (/webby): a General page and one page per frame, in collapsible Layout, Bars, Colours, Buffs and debuffs, Combat and Reset sections. Edit Mode is for moving frames, with Options and Reset buttons on each.
-- Health colour is one dropdown (class and reaction / class / reaction / plain) instead of three overlapping checkboxes. Old settings carry over.
-- Removed: the portrait side option, the PvP / combat / resting toggles and the threat box.
+- All options are in Esc > Options > AddOns > Webby Frames (/webby): General, All frames, and one page per frame in collapsible sections. Options that depend on another are indented under it and greyed out while it's off.
+- Rage, energy and other non-mana power always show plain numbers, never percentages.
+- Health colour is one dropdown (class and reaction / class / reaction / plain). Old settings carry over.
+- Removed: the portrait side option, the corner accent and raid marker switches (always on), the PvP / combat / resting toggles, the threat box, the range fade and the `/webby atlas` dev command.
+- Party frames are left to Blizzard or your party frame addon.
 
 Fixes
-- Target of target and focus target update live (they get no game events, so they are polled while shown).
-- Your pet's health bar stays green when you target it.
+- Sturdier updates: one part of a frame failing can't stop the rest; `/webby errors` lists anything caught.
+- Target of target and focus target update live.
 - Threat updates when your own threat changes, not only the mob's list.
 - Smoother energy, rage and focus on the player frame; hovering a frame shows the unit tooltip.
 - The frames no longer set an addon `.unit` field, which can stop pings from reading protected unit data.
