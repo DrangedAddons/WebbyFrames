@@ -51,6 +51,7 @@ local DEFAULT_SETTINGS = {
     scale = 1, showName = true, healthFade = false, textMode = "always", textFormat = "value", barTexture = "default", font = "default", showThreat = true,
     -- health bar colour: "smart" (class colour for players, reaction colour for NPCs), "class", "reaction" or "plain"
     colorMode = "smart",
+    npcColor = "reaction",   -- hostile NPCs: "reaction" (red), "green" or "custom" (npcColorRGB = { r, g, b })
     -- buffs and debuffs (off unless a frame's defaults turn them on)
     auraBuffs = false, auraDebuffs = false, auraMine = false,
     auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below", auraTimer = "both",   -- auraDebuffSize follows auraSize until set
@@ -325,6 +326,18 @@ local function healthColor(f)
         local friendlyPet
         pcall(function() friendlyPet = UnitPlayerControlled(u) and not UnitIsPlayer(u) and not UnitCanAttack("player", u) end)
         if friendlyPet then return 0.1, 0.8, 0.1 end
+        -- hostile NPCs can have their own colour instead of reaction red (green, say, so the fade to red
+        -- has somewhere to go); neutral ones keep their yellow
+        local npc = getSetting(base, "npcColor")
+        if npc == "green" or npc == "custom" then
+            local hostileNPC
+            pcall(function() hostileNPC = (not UnitIsPlayer(u)) and UnitReaction(u, "player") <= 3 end)
+            if hostileNPC then
+                local c = npc == "custom" and getSetting(base, "npcColorRGB")
+                if type(c) == "table" then return c[1] or 0.1, c[2] or 0.8, c[3] or 0.1 end
+                return 0.1, 0.8, 0.1
+            end
+        end
     end
     if mode == "smart" or mode == "class" then r, g, b = classColorOf(u) end
     -- smart: NPCs (no class) fall back to their reaction colour
@@ -2022,10 +2035,17 @@ end
 -- greyed and tinted, or left as drawn. "Silver" is just greyed; "class" is your class colour.
 Extras.TINTS = { dark = { 0.32, 0.32, 0.32 }, silver = { 1, 1, 1 } }
 
-function Extras.tintColor(unit)
+-- unit: whose options; shown: the unit the frame shows (for "unitclass": a player's class colour, the
+-- art as drawn for NPCs)
+function Extras.tintColor(unit, shown)
     local mode = getSetting(unit, "frameTint")
-    if mode == "class" then
-        local _, class = UnitClass("player")
+    if mode == "class" or mode == "unitclass" then
+        local class
+        pcall(function()
+            local who = (mode == "unitclass") and (shown or unit) or "player"
+            if mode == "unitclass" and not UnitIsPlayer(who) then return end
+            class = select(2, UnitClass(who))
+        end)
         local c = class and (RAID_CLASS_COLORS or {})[class]
         if c then return { c.r, c.g, c.b } end
         return nil
@@ -2038,7 +2058,7 @@ function Extras.tintColor(unit)
 end
 
 function Extras.tint(f)
-    local c = Extras.tintColor(f.baseUnit)
+    local c = Extras.tintColor(f.baseUnit, f.wfUnit)
     f.tintColor = c
     pcall(updateIndicators, f)       -- the resting glow follows the frame colour
     local list = { f.border, f.ringTop, f.corner, f.badge }
@@ -2054,10 +2074,24 @@ end
 -- Opens the colour picker on a frame's custom colour (and switches it to the custom colour).
 function Extras.pickColor(unit, set)
     local old = Extras.tintColor(unit) or { 1, 1, 1 }
-    local function apply(r, g, b)
+    Extras.openPicker(old, function(r, g, b)
         set(unit, "frameColor", { r, g, b })
         set(unit, "frameTint", "custom")
-    end
+    end)
+end
+
+-- Opens the colour picker on the custom colour for hostile NPCs' health bars (and switches to it).
+function Extras.pickNpcColor(unit, set)
+    local c = getSetting(unit, "npcColorRGB")
+    local old = type(c) == "table" and { c[1] or 0.1, c[2] or 0.8, c[3] or 0.1 } or { 0.1, 0.8, 0.1 }
+    Extras.openPicker(old, function(r, g, b)
+        set(unit, "npcColorRGB", { r, g, b })
+        set(unit, "npcColor", "custom")
+    end)
+end
+
+-- Blizzard's colour picker, starting at `old`; apply(r, g, b) as it changes (and back to old on cancel).
+function Extras.openPicker(old, apply)
     local info = {
         r = old[1], g = old[2], b = old[3], hasOpacity = false,
         swatchFunc = function() apply(ColorPickerFrame:GetColorRGB()) end,
@@ -2075,6 +2109,11 @@ end
 
 function Extras.update(f)
     pcall(Extras.raid, f)
+    -- a frame coloured by the unit's class changes colour with the unit
+    if getSetting(f.baseUnit, "frameTint") == "unitclass" or f.tintFollows then
+        f.tintFollows = getSetting(f.baseUnit, "frameTint") == "unitclass" or nil
+        pcall(Extras.tint, f)
+    end
     if f.baseUnit == "pet" then pcall(Extras.happiness, f) end
     if f.baseUnit == "target" then pcall(Extras.combo, f) end
 end
@@ -2911,7 +2950,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "showThreat",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "smoothBars", "healPrediction", "absorbs",
-                    "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints" }
+                    "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB" }
 
 function resetFrame(unit)
     if InCombatLockdown() then print("|cff33ccffWebby Frames:|r can't reset in combat."); return end
@@ -3318,7 +3357,7 @@ local function buildSettings()
 
         B.section("Look", true)
         B.dropdown("frameTint", "Frame colour", "Colours the frame art on every frame. The player's resting glow takes the colour too.", "default",
-            { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "custom", "Custom" } })
+            { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "unitclass", "The unit's class colour" }, { "custom", "Custom" } })
         B.button("Custom colour", "Pick colour", function() Extras.pickColor("player", setAll) end,
             "Pick any colour for every frame's art (sets Frame colour to Custom).")
         B.dropdown("barTexture", "Health texture", "Every frame's health bar fill (and cast bar and heal / shield overlays).", "default", textureChoices)
@@ -3333,6 +3372,10 @@ local function buildSettings()
                 { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
         B.check("smoothBars", "Smooth bars", "Health and power slide to their new value instead of jumping.", true)
         B.check("healthFade", "Fade to red", "As health drops, each frame's health colour shifts towards red.", false)
+        B.dropdown("npcColor", "Enemy NPCs", "The health colour for hostile NPCs on every frame (with the Class / reaction or Reaction colour). Green lets Fade to red show their health dropping.", "reaction",
+            { { "reaction", "Red (reaction colour)" }, { "green", "Green" }, { "custom", "Custom" } })
+        B.button("Enemy NPC colour", "Pick colour", function() Extras.pickNpcColor("target", setAll) end,
+            "Pick any health colour for hostile NPCs on every frame (sets Enemy NPCs to Custom).")
         B.check("healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true)
         B.check("absorbs", "Absorbs", "Damage shields and healing absorbs on the health bars.", true)
 
@@ -3360,7 +3403,7 @@ local function buildSettings()
         B.check("showName", "Name", "The unit's name above its health bar.", true)
         B.dropdown("frameTint", "Frame colour", "Colours the frame art: its border, portrait ring, corner accent, level circle and cast bar border."
             .. (unit == "player" and " The resting glow takes the colour too." or ""), "default",
-            { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "custom", "Custom" } })
+            { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "unitclass", "The unit's class colour" }, { "custom", "Custom" } })
         B.button("Custom colour", "Pick colour", function() Extras.pickColor(unit, setSetting) end,
             "Pick any colour for the frame art (sets Frame colour to Custom).")
         if unit == "target" then
@@ -3389,7 +3432,14 @@ local function buildSettings()
             B.dropdown("petColor", "Colour", "How the pet's health bar is coloured: the same as your player frame's (your class colour, if that's what the player frame uses), or plain green.", "player",
                 { { "player", "Match the player frame" }, { "plain", "Plain green" } })
         else
-            B.dropdown("colorMode", "Colour", "How the health bar is coloured.", "smart", COLOR_MODES)
+            local colour = B.dropdown("colorMode", "Colour", "How the health bar is coloured.", "smart", COLOR_MODES)
+            if unit ~= "player" then
+                local npcChoices = { { "reaction", "Red (reaction colour)" }, { "green", "Green" }, { "custom", "Custom" } }
+                B.under(colour, function() local m = getSetting(unit, "colorMode"); return m == "smart" or m == "reaction" end,
+                    B.dropdown("npcColor", "Enemy NPCs", "The health colour for hostile NPCs. Green (or a colour of your own) lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction", npcChoices))
+                B.button("Enemy NPC colour", "Pick colour", function() Extras.pickNpcColor(unit, setSetting) end,
+                    "Pick any health colour for hostile NPCs (sets Enemy NPCs to Custom).")
+            end
         end
         B.check("healthFade", "Fade to red", "As health drops, the health colour (whichever you picked above) shifts towards red.", false)
         B.check("healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1
+- Enemy NPC health colour: hostile NPCs can be red (as before), green or any colour you pick, so Fade to red shows their health dropping. Per frame, or for every frame on the All frames page. Neutral NPCs stay yellow.
+- New frame colour, "The unit's class colour": the frame art takes the class colour of whoever the frame shows (target, focus and so on), changing with them. NPCs keep the gold art.
+
 ## 1.0
 New features
 - Cast bars on target and focus, built into the frame: they share the mana bar's bottom border line, use the frame art's own border, run on under the portrait ring to the level badge, and take the frame's bar texture and font. Spell icon and name, coloured by cast type (yellow cast, green channel, grey can't interrupt, red interrupted). They also show when you target someone who is already casting.
