@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.3
+- Fade to red: shamans, mages and warlocks each have their own route to red, so they never look like one another while their health drops. Shaman stays dark (navy, deep plum, crimson), mage stays light (pale sky, lilac, coral), warlock stays a bright violet (violet, magenta). The other classes keep the colour-wheel fade.
+
 ## 1.2
 - Cleaner Fade to red: no more grey, washed-out look. Each colour now turns to red round the colour wheel the short way, staying bright: green goes through yellow and orange like Blizzard's bars, blue classes through purple and pink, priest white warms through pink. Full colour at full health, red from 25% down.
 

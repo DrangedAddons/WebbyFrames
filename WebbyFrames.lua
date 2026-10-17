@@ -462,6 +462,27 @@ local FADE_RED    = { 0.89, 0.19, 0.19 }
 local FADE_RED_AT = 0.25
 local fadeCurves = {}
 
+-- The blue and purple classes sit close together on the colour wheel, so going round it a mage would pass
+-- through shaman blue. They get their own routes to red instead, kept apart by lightness as well as hue:
+-- shaman stays dark, mage stays light and pastel, warlock stays a bright violet. (Stops between the
+-- class colour at full health and red at FADE_RED_AT, evenly spaced.)
+local FADE_ROUTES = {
+    SHAMAN  = { { 0.08, 0.30, 0.74 }, { 0.32, 0.16, 0.58 }, { 0.58, 0.10, 0.36 }, { 0.76, 0.12, 0.22 } },
+    MAGE    = { { 0.52, 0.80, 0.96 }, { 0.78, 0.72, 0.94 }, { 0.98, 0.64, 0.54 }, { 0.96, 0.42, 0.36 } },   -- (coral, not paladin pink)
+    WARLOCK = { { 0.66, 0.46, 0.94 }, { 0.80, 0.36, 0.86 }, { 0.90, 0.28, 0.58 }, { 0.92, 0.22, 0.34 } },
+}
+
+-- The class whose colour this is (the bar's colour is a class colour when it's coloured by class)
+local function fadeClassOf(r, g, b)
+    local found
+    pcall(function()
+        for class, c in pairs(RAID_CLASS_COLORS or {}) do
+            if math.abs(c.r - r) < 0.01 and math.abs(c.g - g) < 0.01 and math.abs(c.b - b) < 0.01 then found = class; return end
+        end
+    end)
+    return found
+end
+
 local function toHSV(r, g, b)
     local mx, mn = math.max(r, g, b), math.min(r, g, b)
     local d = mx - mn
@@ -492,6 +513,18 @@ local function getFadeCurve(r, g, b)
         if not (C_CurveUtil and C_CurveUtil.CreateColorCurve and CreateColor) then return end
         local curve = C_CurveUtil.CreateColorCurve()
         pcall(function() curve:SetType(Enum.LuaCurveType.Linear) end)
+        local route = FADE_ROUTES[fadeClassOf(r, g, b) or ""]
+        if route then
+            curve:AddPoint(0, CreateColor(FADE_RED[1], FADE_RED[2], FADE_RED[3], 1))
+            curve:AddPoint(FADE_RED_AT, CreateColor(FADE_RED[1], FADE_RED[2], FADE_RED[3], 1))
+            local n = #route + 1
+            for i, s in ipairs(route) do
+                curve:AddPoint(1 - (i / n) * (1 - FADE_RED_AT), CreateColor(s[1], s[2], s[3], 1))
+            end
+            curve:AddPoint(1, CreateColor(r, g, b, 1))
+            fadeCurves[key] = curve
+            return
+        end
         local h1, s1, v1 = toHSV(r, g, b)
         local h2, s2, v2 = toHSV(FADE_RED[1], FADE_RED[2], FADE_RED[3])
         if s1 < 0.05 then h1 = h2 end               -- a grey or white has no hue of its own: just add red
