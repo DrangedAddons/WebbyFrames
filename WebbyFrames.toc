@@ -1,0 +1,13 @@
+## Interface: 16001, 120100
+## Title: Webby Frames
+## Notes: Retail-style player, target, target of target and focus frames (border and pointed bars) for WoW Forever, built from Blizzard's own art. Move and scale them in Edit Mode; options are in the AddOns settings page.
+## Author: Webby
+## Version: 0.56
+## X-DrangedAddons-Games: _classic_beta_, _forever_
+## AddonCompartmentFunc: WebbyFrames_OnCompartmentClick
+## SavedVariables: WebbyFramesDB, DFFramesForeverDB
+
+Libs\LibStub\LibStub.lua
+Libs\LibEditMode\embed.xml
+
+WebbyFrames.lua
