@@ -1,5 +1,6 @@
 -- Webby Frames
--- Draws its own player / target / focus frames using Blizzard's built-in Retail
+-- Frame art, bar fills and masks are DragonflightUI's bundled copies of the Retail art (Media\).
+-- Draws its own player / target / target of target / focus / focus target / pet frames using Blizzard's built-in Retail
 -- unit frame art (atlases), so the border and the pointed bars match Retail and
 -- no other addon is needed. Layout numbers come from Blizzard's PlayerFrame.xml
 -- and TargetFrame.xml. Position and options are editable in Edit Mode (bundled
@@ -9,8 +10,27 @@
 WebbyFramesDB = WebbyFramesDB or DFFramesForeverDB or {}
 
 local UNITS = { "player", "target", "targettarget", "focus", "focustarget", "pet" }
-local UNIT_LABEL = { player = "Player", target = "Target", targettarget = "Target of Target", focus = "Focus", focustarget = "Focus Target", pet = "Pet" }
-local function hasSideOption(unit) return unit == "target" or unit == "focus" or unit == "targettarget" or unit == "focustarget" or unit == "pet" end
+local UNIT_LABEL = { player = "Player", target = "Target", targettarget = "Target of Target", focus = "Focus", focustarget = "Focus Target", pet = "Pet", party = "Party" }
+-- Party: four small frames (party1-4) stacked in one container; they share the "party" options.
+local PARTY = { "party1", "party2", "party3", "party4" }
+local PARTY_GAP = 10
+-- everything with its own options page and Edit Mode mover
+local OPTION_UNITS = { "player", "target", "targettarget", "focus", "focustarget", "pet", "party" }
+-- Portrait side is fixed per frame: target and focus have it on the right (Retail's target art),
+-- the player and the small frames on the left.
+local function portraitOnLeft(unit) return unit ~= "target" and unit ~= "focus" end
+local function isSmall(unit) return unit == "targettarget" or unit == "focustarget" or unit == "pet" or unit == "party" end
+-- only the full-size target and focus frames have the interrupt flash and the threat box
+local function hasCastAndThreat(unit) return unit == "target" or unit == "focus" end
+-- the pointed corner accent is only offered on the player and target frames; the rest keep a round ring
+local function hasCorner(unit) return unit == "player" end
+
+local COLOR_MODES = {
+    { "smart",    "Class (players), reaction (NPCs)" },
+    { "class",    "Class colour (players only)" },
+    { "reaction", "Reaction colour" },
+    { "plain",    "Plain green" },
+}
 
 local TOT_PREFIX = "UI-HUD-UnitFrame-TargetofTarget-PortraitOn"   -- small frame art (Retail target-of-target)
 local SMALL_MASK_HEALTH = "UI-HUD-UnitFrame-Party-PortraitOn-Bar-Health-Mask"
@@ -27,30 +47,107 @@ local DEFAULT_POS = {
     focustarget = { point = "TOPLEFT", x = 394, y = -260 },
     -- Retail puts target of target at the bottom right of the target frame
     targettarget = { point = "TOPLEFT", x = 394, y = -130 },
+    party  = { point = "TOPLEFT", x = 20,  y = -260 },     -- the party container
 }
+for _, u in ipairs(PARTY) do DEFAULT_POS[u] = DEFAULT_POS.party end
 
 -- per-frame defaults that differ from DEFAULT_SETTINGS (the small frame is too narrow for long numbers)
 local UNIT_DEFAULTS = {
+    target = { auraBuffs = true, auraDebuffs = true },
+    focus  = { auraBuffs = true, auraDebuffs = true },
     targettarget = { textMode = "off", textFormat = "percent" },
     pet = { textMode = "off", textFormat = "percent" },
     focustarget = { textMode = "off", textFormat = "percent" },
+    -- party: just debuffs, a few small ones to the right of each frame
+    party = { textMode = "off", textFormat = "percent", auraDebuffs = true, auraSize = 18, auraPerRow = 4, auraMax = 4, auraPos = "right" },
 }
 
 local DEFAULT_SETTINGS = {
-    scale = 1, showName = true, portraitSide = "left", healthFade = "off", textMode = "always", textFormat = "value", barTexture = "default", font = "default", showCombat = true, showRest = true, showPvP = true, flashInterrupt = true, showThreat = true,
-    smartColor = true,   -- class colour for players, reaction colour for NPCs
-    classColor = false, reactionColor = false,
+    scale = 1, showName = true, healthFade = "off", textMode = "always", textFormat = "value", barTexture = "default", font = "default", flashInterrupt = true, showThreat = true,
+    -- health bar colour: "smart" (class colour for players, reaction colour for NPCs), "class", "reaction" or "plain"
+    colorMode = "smart",
     cornerAccent = true,   -- the pointed accent on the ring (off = just the level circle)
+    -- buffs and debuffs (off unless a frame's defaults turn them on)
+    auraBuffs = false, auraDebuffs = false, auraMine = false,
+    auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below",
 }
 
 -- fallback power bar art names if PowerBarColor doesn't supply one
+-- Bundled frame art (from DragonflightUI, MIT, see Media\LICENSE-DragonflightUI.txt). Forever has
+-- replaced many Retail unit frame atlases with its own art, so the frames draw these files instead.
+local MEDIA = "Interface\\AddOns\\WebbyFrames\\Media\\"
+local POWER_FILE = { MANA = "Mana", RAGE = "Rage", ENERGY = "Energy", FOCUS = "Focus", RUNIC_POWER = "RunicPower" }
+local BAR_FILE = {   -- fill file prefixes; append Health, Health-Status or a POWER_FILE name
+    player = MEDIA .. "UI-HUD-UnitFrame-Player-PortraitOn-Bar-",
+    target = MEDIA .. "UI-HUD-UnitFrame-Target-PortraitOn-Bar-",
+    small  = MEDIA .. "UI-HUD-UnitFrame-TargetofTarget-PortraitOn-Bar-",
+}
+-- { file, width, height, right tex coord, bottom tex coord } (each image starts at its top left corner)
+local ART = {
+    playerBorder = { "ui-hud-unitframe-player-portraiton-2x", 198, 71, 396 / 512, 142 / 256 },
+    targetBorder = { "ui-hud-unitframe-target-portraiton-2x", 192, 67, 384 / 512, 134 / 256 },
+    playerStatus = { "ui-hud-unitframe-player-portraiton-status-2x", 196, 71, 392 / 512, 142 / 256 },
+    targetFlash  = { "ui-hud-unitframe-target-portraiton-incombat-2x", 188, 67, 376 / 512, 134 / 256 },
+    plate        = { "ui-hud-unitframe-target-portraiton-type-2x", 135, 17.5, 270 / 512, 35 / 64 },
+    corner       = { "ui-hud-unitframe-player-portraiton-cornerembellishment-2x", 22, 22, 44 / 64, 44 / 64 },
+    smallBorder  = { "ui-hud-unitframe-targetoftarget-portraiton-2x", 120, 49, 240 / 256, 98 / 128 },
+}
+-- elite / rare / boss dragon around the portrait: tex coords on uiunitframeboss2x, size, x offset from the portrait
+local DRAGON = {
+    elite     = { 0.001953125, 0.314453125, 0.322265625, 0.630859375, 80, 79, 4 },
+    rare      = { 0.00390625, 0.31640625, 0.64453125, 0.953125, 80, 79, 4 },
+    worldboss = { 0.001953125, 0.388671875, 0.001953125, 0.31835937, 99, 81, 13 },
+}
+DRAGON.rareelite = DRAGON.rare
+
+-- Draws an ART entry on a texture, optionally mirrored left to right and scaled.
+local function setArt(tex, a, mirror, scale)
+    scale = scale or 1
+    tex:SetTexture(MEDIA .. a[1])
+    if mirror then tex:SetTexCoord(a[4], 0, 0, a[5]) else tex:SetTexCoord(0, a[4], 0, a[5]) end
+    tex:SetSize(a[2] * scale, a[3] * scale)
+end
+
+-- The corner accent (DragonflightUI's art): its centre relative to the frame's centre, 15.5px in from
+-- the portrait centre and 16px below it.
+local CORNER_POS = { -46.5, -15 }
+
+-- Points a bar's mask at a bundled mask file and attaches it to the bar's fill.
+local function setFileMask(bar, mask, file, w, h, mx, my, mirror)
+    mask:SetTexture(MEDIA .. file, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    if mirror then mask:SetTexCoord(1, 0, 0, 1) else mask:SetTexCoord(0, 1, 0, 1) end
+    mask:SetSize(w, h)
+    mask:ClearAllPoints()
+    mask:SetPoint("TOPLEFT", bar, "TOPLEFT", mx, my)
+    bar:GetStatusBarTexture():AddMaskTexture(mask)
+    return true
+end
+
+-- The default fills shade their top and bottom rows dark, so they look inset in the bar's slot;
+-- a flat custom texture would run up over the frame border. Custom textures therefore get a
+-- second, rectangular mask that trims `inset` px off the top and bottom (masks intersect, so the
+-- shape mask still gives the ends; the clip reaches past the ends so it never cuts them).
+local function setClip(bar, inset)
+    bar.clipInset = inset
+    bar.clip:ClearAllPoints()
+    bar.clip:SetPoint("TOPLEFT", bar, "TOPLEFT", -40, -inset)
+    bar.clip:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", 40, inset)
+end
+
+-- Adds or removes the clip on the bar's current fill.
+local function useClip(bar, on)
+    local tex = bar:GetStatusBarTexture()
+    pcall(tex.RemoveMaskTexture, tex, bar.clip)
+    if on and bar.clipInset then tex:AddMaskTexture(bar.clip) end
+end
 local POWER_ATLAS = {
     MANA = "Mana", RAGE = "Rage", FOCUS = "Focus", ENERGY = "Energy", RUNIC_POWER = "RunicPower",
     LUNAR_POWER = "LunarPower", MAELSTROM = "Maelstrom", INSANITY = "Insanity", FURY = "Fury", PAIN = "Pain",
 }
 
 local DB, lib
-local frames = {}
+local frames = {}            -- unit -> frame (frames.party is the party container)
+local partyFrames = {}       -- the four party frames, in order
 local activeLayout = "Default"
 local pendingApply = false
 local settingsCategory
@@ -81,6 +178,13 @@ local function getSetting(unit, key)
     local u = unitData(unit)
     local v = u and u[key]
     if v == nil and key == "textMode" and u and u.showText == false then return "off" end
+    -- 0.56 and older saved three colour checkboxes; read them as the matching colour mode
+    if v == nil and key == "colorMode" and u and (u.smartColor ~= nil or u.classColor ~= nil or u.reactionColor ~= nil) then
+        if u.smartColor ~= false or (u.classColor and u.reactionColor) then return "smart" end
+        if u.classColor then return "class" end
+        if u.reactionColor then return "reaction" end
+        return "plain"
+    end
     if v == nil then v = defaultFor(unit, key) end
     return v
 end
@@ -109,54 +213,6 @@ local function hasAtlas(name)
 end
 
 
--- WoW Forever swaps many retail atlas names for its own art, but the retail
--- unit frame sheets still ship with the client. For the frame art we draw the
--- retail sheet directly (file id + pixel box), as the Retail UI does.
--- Row: { 1x box l,r,t,b, 2x box l,r,t,b } on UIUnitFrame (1024x512) / 2x (2048x1024).
-local SHEET1, SHEET2 = { id = 4631591, w = 1024, h = 512 }, { id = 4642466, w = 2048, h = 1024 }
-local RETAIL_ART = {
-    ["ui-hud-unitframe-player-portraiton"]         = { 1, 199, 87, 158,   1, 397, 171, 313 },
-    ["ui-hud-unitframe-target-portraiton"]         = { 1, 193, 229, 296,  1, 385, 451, 585 },
-    ["ui-hud-unitframe-targetoftarget-portraiton"] = { 330, 450, 160, 209, 1113, 1353, 315, 413 },
-    ["ui-hud-unitframe-target-rare-portraiton"]    = { 1, 193, 298, 365,  1, 385, 587, 721 },
-}
-local drawnSheet = setmetatable({}, { __mode = "k" })
-local function sheetPresent(sheet)
-    if sheet.ok == nil then
-        sheet.ok = true
-        if GetFileIDFromPath then
-            local path = sheet == SHEET1 and "Interface\\HUD\\UIUnitFrame" or "Interface\\HUD\\UIUnitFrame2x"
-            local ok, id = pcall(GetFileIDFromPath, path)
-            if ok and id then sheet.ok = (id == sheet.id) end
-        end
-    end
-    return sheet.ok
-end
--- Draws `name` on a plain texture: the retail sheet when the client has swapped the
--- atlas, otherwise the atlas itself.
-local function stockAtlas(tex, name, useSize)
-    local row = RETAIL_ART[strlower(name)]
-    if row then
-        local native
-        pcall(function() native = C_Texture.GetAtlasInfo(name) end)
-        local nf = native and native.file
-        if nf ~= SHEET1.id and nf ~= SHEET2.id then
-            local sheet, l, r, t, b = SHEET1, row[1], row[2], row[3], row[4]
-            if sheetPresent(SHEET2) then sheet, l, r, t, b = SHEET2, row[5], row[6], row[7], row[8] end
-            if sheetPresent(sheet) then
-                tex:SetTexture(sheet.id)
-                tex:SetTexCoord(l / sheet.w, r / sheet.w, t / sheet.h, b / sheet.h)
-                if useSize then tex:SetSize(row[2] - row[1], row[4] - row[3]) end
-                drawnSheet[tex] = true
-                return true
-            end
-        end
-    end
-    if drawnSheet[tex] then drawnSheet[tex] = nil; tex:SetTexCoord(0, 1, 0, 1) end
-    tex:SetAtlas(name, useSize and true or false)
-    return false
-end
-
 -- Forever can hand back "secret" numbers, so every touch is wrapped.
 local function setNumber(fs, v)
     if pcall(function() fs:SetText(AbbreviateLargeNumbers(v)) end) then return end
@@ -181,10 +237,10 @@ local function percentOf(kind, u, token)
     return pct
 end
 
--- Writes "12.3K", "85%" or "12.3K - 85%" depending on the unit's text format.
+-- Writes "12.3K", "85%" or "12.3K (85%)" depending on the unit's text format.
 -- Forever can hand back secret numbers, so every touch is wrapped.
 local function setBarText(fs, f, kind)
-    local u = f.unit
+    local u = f.wfUnit
     local fmt = getSetting(f.baseUnit, "textFormat")
     local cur
     if kind == "hp" then cur = UnitHealth(u) else cur = UnitPower(u) end
@@ -207,18 +263,6 @@ end
 
 local CIRCLE_FALLBACK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 
--- Points a mask texture at an atlas (or a plain circle if the atlas is missing).
-local function setMask(m, atlas, relTo, x, y, useAtlasSize)
-    if hasAtlas(atlas) then
-        m:SetAtlas(atlas, useAtlasSize and true or false)
-    else
-        m:SetTexture(CIRCLE_FALLBACK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    end
-    if relTo then
-        m:ClearAllPoints()
-        m:SetPoint("TOPLEFT", relTo, "TOPLEFT", x or 0, y or 0)
-    end
-end
 
 -- Bar with its own mask. The mask is attached later, by the layout code, once its art is known.
 local function newBar(f)
@@ -228,25 +272,9 @@ local function newBar(f)
     bar:SetMinMaxValues(0, 1)
     bar:SetValue(1)
     local mask = bar:CreateMaskTexture()
+    bar.clip = bar:CreateMaskTexture()
+    bar.clip:SetTexture("Interface\\Buttons\\WHITE8X8", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
     return bar, mask
-end
-
--- Sets bar size/anchor/mask. Masks are only attached if the mask art exists,
--- otherwise an empty mask would hide the whole bar.
-local function layoutBar(bar, mask, w, h, point, relTo, relPoint, x, y, maskAtlas, mx, my)
-    bar:SetSize(w, h)
-    bar:ClearAllPoints()
-    bar:SetPoint(point, relTo, relPoint, x, y)
-    bar.geo = { w = w, h = h, x = x, y = y, rel = relTo }
-    if hasAtlas(maskAtlas) then
-        setMask(mask, maskAtlas, bar, mx, my, true)
-        local mi
-        pcall(function() mi = C_Texture.GetAtlasInfo(maskAtlas) end)
-        bar.maskInfo = { mask = mask, mx = mx or 0, my = my or 0, w = mi and mi.width, h = mi and mi.height }
-        bar:GetStatusBarTexture():AddMaskTexture(mask)
-        return true
-    end
-    return false
 end
 
 ---------------------------------------------------------------------------
@@ -273,7 +301,7 @@ end
 
 
 local function healthColor(f)
-    local u, base = f.unit, f.baseUnit
+    local u, base = f.wfUnit, f.baseUnit
     local r, g, b
 
     local tapped
@@ -283,18 +311,29 @@ local function healthColor(f)
     -- the pet's selection colour flips around (neutral / friendly / controlled), so the pet bar is always green
     if base == "pet" then return 0.1, 0.8, 0.1 end
 
-    if getSetting(base, "smartColor") then
-        -- players: always their class colour; NPCs (no class): reaction colour
-        r, g, b = classColorOf(u)
-        if not r then r, g, b = reactionColorOf(u) end
-        if r then return r, g, b end
+    local mode = getSetting(base, "colorMode")
+    -- friendly pets and guardians (on any frame, e.g. targeting your pet): their selection colour
+    -- flips between friendly, neutral and "controlled" blue, so they are always green
+    if mode ~= "plain" and mode ~= "class" then
+        local friendlyPet
+        pcall(function() friendlyPet = UnitPlayerControlled(u) and not UnitIsPlayer(u) and not UnitCanAttack("player", u) end)
+        if friendlyPet then return 0.1, 0.8, 0.1 end
     end
-    if getSetting(base, "classColor") then
-        r, g, b = classColorOf(u); if r then return r, g, b end
-    end
-    if getSetting(base, "reactionColor") then
-        r, g, b = reactionColorOf(u); if r then return r, g, b end
-    end
+    if mode == "smart" or mode == "class" then r, g, b = classColorOf(u) end
+    -- smart: NPCs (no class) fall back to their reaction colour
+    if not r and (mode == "smart" or mode == "reaction") then r, g, b = reactionColorOf(u) end
+    return r, g, b
+end
+
+-- Dead / ghost / offline, or nil. Status flags are plain booleans, but are still only read inside pcall.
+local function unitStatus(u)
+    local s
+    pcall(function()
+        if UnitIsPlayer(u) and UnitIsConnected(u) == false then s = "Offline"
+        elseif UnitIsGhost(u) then s = "Ghost"
+        elseif UnitIsDead(u) then s = "Dead" end
+    end)
+    return s
 end
 
 ---------------------------------------------------------------------------
@@ -433,11 +472,11 @@ end
 local function applyHealthFade(f, r, g, b)
     local mode = getSetting(f.baseUnit, "healthFade")
     if mode ~= "classic" and mode ~= "reactive" then return false end
-    if not (UnitHealthPercent and UnitExists(f.unit)) then return false end
+    if not (UnitHealthPercent and UnitExists(f.wfUnit)) then return false end
     local curve = getFadeCurve(mode, r or 0.1, g or 0.8, b or 0.1)
     if not curve then return false end
     local ok = pcall(function()
-        local color = UnitHealthPercent(f.unit, true, curve)
+        local color = UnitHealthPercent(f.wfUnit, true, curve)
         local cr, cg, cb = color:GetRGB()
         f.hp:SetStatusBarColor(cr, cg, cb, 1)
     end)
@@ -457,17 +496,19 @@ local function updateHealthColor(f)
             f.hpCurrent = f.customTex
             f.hp:SetStatusBarTexture(f.customTex)
             if f.hpMaskOn then f.hp:GetStatusBarTexture():AddMaskTexture(f.hpMask) end
+            useClip(f.hp, true)
         end
         pcall(function() f.hp:GetStatusBarTexture():SetDesaturated(false) end)
         if r then f.hp:SetStatusBarColor(r, g, b, 1) else f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) end
         applyHealthFade(f, r, g, b)
         return
     end
-    if f.hpCurrent ~= want and hasAtlas(want) then
+    if f.hpCurrent ~= want and (f.hpFiles or hasAtlas(want)) then
         f.hpCurrent = want
         f.hp:SetStatusBarTexture(want)
         -- re-attach the mask: replacing the texture drops it
         if f.hpMaskOn then f.hp:GetStatusBarTexture():AddMaskTexture(f.hpMask) end
+        useClip(f.hp, false)
         tex = f.hp:GetStatusBarTexture()
     end
     if r then
@@ -480,58 +521,66 @@ local function updateHealthColor(f)
     applyHealthFade(f, r, g, b)
 end
 
+local refreshText   -- defined with the settings code below
+
 local function updateHealth(f)
-    local u = f.unit
+    local u = f.wfUnit
     if not UnitExists(u) then return end
+    local status = unitStatus(u)
     updateHealthColor(f)
     f.hp:SetMinMaxValues(0, UnitHealthMax(u))
-    f.hp:SetValue(UnitHealth(u))
-    setBarText(f.hpText, f, "hp")
+    if status == "Offline" then
+        -- offline: a full grey bar, as the default UI does
+        f.hp:SetValue(UnitHealthMax(u))
+        f.hp:SetStatusBarColor(0.5, 0.5, 0.5, 1)
+        pcall(function() f.hp:GetStatusBarTexture():SetDesaturated(true) end)
+    else
+        f.hp:SetValue(UnitHealth(u))
+    end
+    if status then f.hpText:SetText(status) else setBarText(f.hpText, f, "hp") end
+    if status ~= f.statusText then
+        f.statusText = status
+        if refreshText then refreshText(f) end
+    end
 end
 
 local function updatePower(f)
-    local u = f.unit
+    local u = f.wfUnit
     if not UnitExists(u) then return end
     local _, token = UnitPowerType(u)
-    local prefix = f.prefix .. "-Bar-"
-    local name = POWER_ATLAS[token]
-    pcall(function()
-        local info = PowerBarColor and PowerBarColor[token]
-        if info and info.atlasElementName then name = info.atlasElementName end
-    end)
-    if f.customTex then
-        if f.mpCurrent ~= f.customTex then
-            f.mpCurrent = f.customTex
-            f.mp:SetStatusBarTexture(f.customTex)
-            if f.mpMaskOn then f.mp:GetStatusBarTexture():AddMaskTexture(f.mpMask) end
-        end
-        pcall(function() f.mp:GetStatusBarTexture():SetDesaturated(false) end)
-        local pr, pg, pb = 0.1, 0.3, 0.9
+    local fill, tinted = f.customTex, true
+    if not fill then
+        -- the bundled pre-shaped fill for this power type and frame, drawn untinted
+        local kind
+        pcall(function() kind = POWER_FILE[token] end)
+        local base = f.small and BAR_FILE.small or (f.layoutLeft and BAR_FILE.player or BAR_FILE.target)
+        fill, tinted = base .. (kind or "Mana"), false
+    end
+    if f.mpCurrent ~= fill then
+        f.mpCurrent = fill
+        f.mp:SetStatusBarTexture(fill)
+        -- re-attach the mask: replacing the texture drops it
+        if f.mpMaskOn then f.mp:GetStatusBarTexture():AddMaskTexture(f.mpMask) end
+        useClip(f.mp, tinted)   -- custom textures get trimmed to the slot
+    end
+    local pr, pg, pb = 1, 1, 1
+    if tinted then
+        -- a custom texture is plain, so colour it by power type
+        pr, pg, pb = 0.1, 0.3, 0.9
         pcall(function()
             local c = PowerBarColor and (PowerBarColor[token] or PowerBarColor[0])
             if c and c.r then pr, pg, pb = c.r, c.g, c.b end
         end)
-        f.mp:SetStatusBarColor(pr, pg, pb, 1)
-        f.mp:SetMinMaxValues(0, UnitPowerMax(u))
-        f.mp:SetValue(UnitPower(u))
-        setBarText(f.mpText, f, "mp")
-        return
     end
-    local atlas = prefix .. (name or "Mana")
-    if not hasAtlas(atlas) then atlas = prefix .. "Mana" end
-    if f.mpCurrent ~= atlas and hasAtlas(atlas) then
-        f.mpCurrent = atlas
-        f.mp:SetStatusBarTexture(atlas)
-        if f.mpMaskOn then f.mp:GetStatusBarTexture():AddMaskTexture(f.mpMask) end
-    end
-    f.mp:SetStatusBarColor(1, 1, 1, 1)
+    pcall(function() f.mp:GetStatusBarTexture():SetDesaturated(false) end)
+    f.mp:SetStatusBarColor(pr, pg, pb, 1)
     f.mp:SetMinMaxValues(0, UnitPowerMax(u))
     f.mp:SetValue(UnitPower(u))
     setBarText(f.mpText, f, "mp")
 end
 
 local function updateInfo(f)
-    local u = f.unit
+    local u = f.wfUnit
     if not UnitExists(u) then return end
     -- Forever has surnames: show "First Last", cut off at the width of the name bar
     if not pcall(function()
@@ -540,19 +589,65 @@ local function updateInfo(f)
     end) then
         if not pcall(function() f.name:SetText(UnitName(u)) end) then f.name:SetText("") end
     end
-    local lvl = ""
-    pcall(function()
+    -- level: coloured by difficulty on units you can attack (like the default UI), gold otherwise,
+    -- white on the player. A secret level can't be compared, so it is shown as it is, uncoloured.
+    local lr, lg, lb = 1, 0.82, 0
+    if f.baseUnit == "player" then lr, lg, lb = 1, 1, 1 end
+    local shown = pcall(function()
         local l = UnitLevel(u)
-        lvl = (l and l > 0) and tostring(l) or "??"
+        if l and l > 0 then
+            f.level:SetText(tostring(l))
+            if f.baseUnit ~= "player" and UnitCanAttack("player", u) and GetCreatureDifficultyColor then
+                local c = GetCreatureDifficultyColor(l)
+                if c then lr, lg, lb = c.r, c.g, c.b end
+            end
+        else
+            f.level:SetText("??")
+            if f.baseUnit ~= "player" then lr, lg, lb = 1, 0.1, 0.1 end
+        end
     end)
-    f.level:SetText(lvl)
-    if f.badge then
-        if f.baseUnit == "player" then f.level:SetTextColor(1, 1, 1) else f.level:SetTextColor(1, 0.82, 0) end
-    end
+    if not shown and not pcall(function() f.level:SetFormattedText("%d", UnitLevel(u)) end) then f.level:SetText("") end
+    f.level:SetTextColor(lr, lg, lb)
     SetPortraitTexture(f.portrait, u)
+    if f.leaderIcon then
+        local lead = false
+        pcall(function() lead = UnitIsGroupLeader(u) and true or false end)
+        f.leaderIcon:SetShown(lead)
+    end
+    -- offline players: greyed-out portrait with the red lightning bolt, as on the party frames
+    local offline = false
+    pcall(function() offline = UnitIsPlayer(u) and UnitIsConnected(u) == false end)
+    pcall(function() f.portrait:SetDesaturated(offline) end)
+    f.portrait:SetVertexColor(offline and 0.6 or 1, offline and 0.6 or 1, offline and 0.6 or 1)
+    if offline and not f.offlineIcon then
+        f.offlineIcon = f:CreateTexture(nil, "ARTWORK", nil, 2)
+        f.offlineIcon:SetTexture("Interface\\CharacterFrame\\Disconnect-Icon")
+        f.offlineIcon:SetPoint("CENTER", f.portrait, "CENTER", 0, 0)
+    end
+    if f.offlineIcon then
+        -- the party frame draws this 64px texture (mostly empty margin) over a 37px portrait: same ratio here
+        local w = (f.portrait:GetWidth() or 40) * 64 / 37
+        f.offlineIcon:SetSize(w, w)
+        f.offlineIcon:SetShown(offline)
+    end
     if f.plate then
         local r, g, b = reactionColorOf(u)
         if r then f.plate:SetVertexColor(r, g, b) else f.plate:SetVertexColor(1, 1, 1) end
+    end
+    -- gold dragon around elite portraits, silver for rares, the big one for world bosses
+    if f.dragon then
+        local d
+        pcall(function() d = DRAGON[UnitClassification(u)] end)
+        if d then
+            local left = f.layoutLeft
+            if left then f.dragon:SetTexCoord(d[2], d[1], d[3], d[4]) else f.dragon:SetTexCoord(d[1], d[2], d[3], d[4]) end
+            f.dragon:SetSize(d[5], d[6])
+            f.dragon:ClearAllPoints()
+            f.dragon:SetPoint("CENTER", f.portrait, "CENTER", left and -d[7] or d[7], 1)
+            f.dragon:Show()
+        else
+            f.dragon:Hide()
+        end
     end
 end
 
@@ -594,53 +689,69 @@ local function createIndicators(f)
         setIcon(f.combatIcon, "UI-HUD-UnitFrame-Player-CombatIcon", STATE_ICON, 0.5, 1, 0, 0.49)
         if f.combatIcon:GetAtlas() then pcall(f.combatIcon.SetAtlas, f.combatIcon, "UI-HUD-UnitFrame-Player-CombatIcon", true) end
         f.combatIcon:Hide()
-        -- Combat / resting glow: the frame's own portrait-ring art, tinted, with softer enlarged copies
-        -- behind it for a halo, so it follows the art's shape.
-        if hasAtlas(PLAYER_PREFIX) then
-            local sf = CreateFrame("Frame", nil, f)
-            sf:SetAllPoints(f)
-            sf:SetFrameLevel(f:GetFrameLevel() + 4)
-            local layers = {}
-            local ok = false
-            local specs = { { 1.10, 0.25, -7 }, { 1.05, 0.5, -6 }, { 1.0, 1.0, -5 } }
-            for _, sp in ipairs(specs) do
-                local t = sf:CreateTexture(nil, "OVERLAY", nil, sp[3])
-                local sheet = stockAtlas(t, PLAYER_PREFIX, true)
-                if not sheet then break end
-                local good = pcall(function()
-                    local ulx, uly, llx, lly, urx = t:GetTexCoord()
-                    local w0, h0 = t:GetWidth(), t:GetHeight()
-                    local x0 = (232 - w0) / 2
-                    local frac = (92 - x0) / w0            -- keep only the portrait ring (and its corner)
-                    t:SetTexCoord(ulx, ulx + (urx - ulx) * frac, uly, lly)
-                    local w, h = w0 * frac, h0
-                    local k = sp[1]
-                    local cx = x0 + w / 2
-                    t:SetSize(w * k, h * k)
-                    t:SetPoint("CENTER", f, "TOPLEFT", 54 + (cx - 54) * k, -49 + (-50 + 49) * k)
-                    t:SetBlendMode("ADD")
-                    t:SetAlpha(sp[2])
-                end)
-                if not good then break end
-                layers[#layers + 1] = t
-                ok = true
+        -- black outline so the swords stand out over the corner accent: a solid black copy of the
+        -- icon, a little larger, behind it
+        f.combatBack = ov:CreateTexture(nil, "OVERLAY", nil, 4)
+        f.combatBack:SetTexture(f.combatIcon:GetTexture())
+        pcall(function()
+            local atlas = f.combatIcon:GetAtlas()
+            if atlas then f.combatBack:SetAtlas(atlas) else f.combatBack:SetTexCoord(f.combatIcon:GetTexCoord()) end
+        end)
+        f.combatBack:SetVertexColor(0, 0, 0, 1)
+        f.combatBack:Hide()
+        -- Combat / resting glow around the frame: Retail's status texture (gold while resting,
+        -- tinted red and pulsing in combat), from the bundled art.
+        local sf = CreateFrame("Frame", nil, f)
+        sf:SetAllPoints(f)
+        sf:SetFrameLevel(f:GetFrameLevel() + 4)
+        local glow = sf:CreateTexture(nil, "OVERLAY")
+        setArt(glow, ART.playerStatus)
+        glow:SetPoint("CENTER", f, "CENTER", -1, 1.55)
+        glow:SetBlendMode("ADD")
+        -- The outline glow doesn't cover the corner accent, so it gets its own: a larger additive halo
+        -- behind it, and an additive copy on top of it (the accent itself is opaque and drawn above
+        -- the halo), in a frame above the accent. Shown only while the accent is (updateIndicators).
+        local cf = CreateFrame("Frame", nil, f)
+        cf:SetAllPoints(f)
+        cf:SetFrameLevel(f:GetFrameLevel() + 6)
+        local halo = sf:CreateTexture(nil, "OVERLAY")
+        setArt(halo, ART.corner, false, 1.35)
+        halo:SetPoint("CENTER", f, "CENTER", CORNER_POS[1], CORNER_POS[2])
+        halo:SetBlendMode("ADD")
+        local lit = cf:CreateTexture(nil, "OVERLAY")
+        setArt(lit, ART.corner)
+        lit:SetPoint("CENTER", f, "CENTER", CORNER_POS[1], CORNER_POS[2])
+        lit:SetBlendMode("ADD")
+        lit:SetAlpha(0.8)
+        f.cornerGlow = {
+            SetShown = function(_, on) halo:SetShown(on); lit:SetShown(on) end,
+        }
+        sf:Hide(); cf:Hide()
+        f.status = {
+            Show = function() sf:Show(); cf:Show() end,
+            Hide = function() sf:Hide(); cf:Hide() end,
+            SetAlpha = function(_, a) sf:SetAlpha(a); cf:SetAlpha(a) end,
+            SetVertexColor = function(_, r, g, b)
+                glow:SetVertexColor(r, g, b); halo:SetVertexColor(r, g, b); lit:SetVertexColor(r, g, b)
+            end,
+        }
+        -- one pulse animation per frame, started and stopped together
+        local anims = {}
+        pcall(function()
+            for _, fr in ipairs({ sf, cf }) do
+                local ag = fr:CreateAnimationGroup()
+                ag:SetLooping("BOUNCE")
+                local a = ag:CreateAnimation("Alpha")
+                a:SetFromAlpha(1); a:SetToAlpha(0.35); a:SetDuration(0.8)
+                anims[#anims + 1] = ag
             end
-            if ok then
-                sf:Hide()
-                f.status = {
-                    Show = function() sf:Show() end,
-                    Hide = function() sf:Hide() end,
-                    SetAlpha = function(_, a) sf:SetAlpha(a) end,
-                    SetVertexColor = function(_, r, g, b) for _, t in ipairs(layers) do t:SetVertexColor(r, g, b) end end,
-                }
-                pcall(function()
-                    local ag = sf:CreateAnimationGroup()
-                    ag:SetLooping("BOUNCE")
-                    local a = ag:CreateAnimation("Alpha")
-                    a:SetFromAlpha(1); a:SetToAlpha(0.35); a:SetDuration(0.8)
-                    f.statusAnim = ag
-                end)
-            end
+        end)
+        if #anims > 0 then
+            f.statusAnim = {
+                IsPlaying = function() return anims[1]:IsPlaying() end,
+                Play = function() for _, ag in ipairs(anims) do ag:Play() end end,
+                Stop = function() for _, ag in ipairs(anims) do ag:Stop() end end,
+            }
         end
         if not f.updateRest then
             f.restIcon = ov:CreateTexture(nil, "OVERLAY", nil, 5)
@@ -686,53 +797,79 @@ local function createIndicators(f)
         GameTooltip:Hide()
     end)
     f.pvpHit = hit
-    -- threat: coloured glow + percentage (target and focus)
-    if f.baseUnit ~= "player" and not f.small then
-        -- numeric threat box, like the default UI: coloured by threat status, shows your threat percent
-        local box = CreateFrame("Frame", nil, ov)
-        box:SetSize(46, 16)
-        box:SetFrameLevel(ov:GetFrameLevel() + 2)
-        local edge = box:CreateTexture(nil, "BACKGROUND", nil, 0)
-        edge:SetAllPoints(); edge:SetColorTexture(0, 0, 0, 0.9)
-        f.threat = box:CreateTexture(nil, "BACKGROUND", nil, 1)
-        f.threat:SetPoint("TOPLEFT", 1, -1); f.threat:SetPoint("BOTTOMRIGHT", -1, 1)
-        f.threat:SetColorTexture(1, 1, 1, 1)
-        f.threatText = box:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        f.threatText:SetPoint("CENTER", 0, 0)
-        f.threatBox = box
-        box:Hide()
+    -- threat (target and focus), the Retail way: the frame's in-combat glow tinted by your threat
+    -- status (yellow, orange, red), and your threat % in small coloured text at the end of the name row
+    if hasCastAndThreat(f.baseUnit) then
+        local tf = CreateFrame("Frame", nil, f)
+        tf:SetAllPoints(f)
+        tf:SetFrameLevel(f:GetFrameLevel() + 4)
+        f.threatGlow = tf:CreateTexture(nil, "OVERLAY")
+        f.threatGlow:SetBlendMode("ADD")
+        f.threatGlow:SetAlpha(0.9)
+        f.threatGlow:Hide()
+        f.threatText = ov:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        f.threatText:SetJustifyH("RIGHT")
+        f.threatText:Hide()
     end
 end
 
 local function placeIndicators(f)
+    -- positions from DragonflightUI, relative to the portrait (and the name for the threat box)
     local left = f.layoutLeft
+    local p = f.portrait
     if f.combatIcon then
+        -- bottom corner of the portrait (DragonflightUI's spot), with its black outline behind
         f.combatIcon:ClearAllPoints()
-        f.combatIcon:SetPoint("CENTER", f, "TOPLEFT", 80, -75)   -- takes the corner accent's place, as on Retail
+        f.combatIcon:SetSize(18, 18)
+        f.combatIcon:SetPoint("CENTER", p, "BOTTOMRIGHT", -10, 7)
+        if f.combatBack then
+            f.combatBack:ClearAllPoints()
+            f.combatBack:SetSize(22, 22)
+            f.combatBack:SetPoint("CENTER", f.combatIcon, "CENTER", 0, 0)
+        end
     end
     if f.restIcon then
         f.restIcon:ClearAllPoints()
-        f.restIcon:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -8)
+        f.restIcon:SetPoint("CENTER", p, "TOPRIGHT", -4, 4)
     end
     if f.pvpIcon then
+        -- just outside the portrait on the frame's outer edge (DragonflightUI's spot), but raised above
+        -- its middle: Forever's level circle sits where DragonflightUI puts the badge, below the middle
         f.pvpIcon:ClearAllPoints()
-        if left then f.pvpIcon:SetPoint("RIGHT", f, "TOPLEFT", 28, -49) else f.pvpIcon:SetPoint("LEFT", f, "TOPRIGHT", -28, -49) end
+        if left then f.pvpIcon:SetPoint("LEFT", p, "LEFT", -22, 14) else f.pvpIcon:SetPoint("RIGHT", p, "RIGHT", 22, 14) end
     end
-    if f.threatBox then
-        f.threatBox:ClearAllPoints()
-        f.threatBox:SetPoint("BOTTOM", f, "TOPLEFT", left and 147 or 86, -17)
+    if f.threatGlow then
+        -- the same glow art and spot as the interrupt flash (see applyLayout)
+        f.threatGlow:ClearAllPoints()
+        if left then
+            setArt(f.threatGlow, ART.playerStatus)
+            f.threatGlow:SetPoint("CENTER", f, "CENTER", -1, 1.55)
+        else
+            setArt(f.threatGlow, ART.targetFlash)
+            f.threatGlow:SetPoint("CENTER", f, "CENTER", 0, 1.5)
+        end
+        -- right end of the name row, just above the health bar
+        f.threatText:ClearAllPoints()
+        f.threatText:SetPoint("BOTTOMRIGHT", f.hp, "TOPRIGHT", -2, 2)
     end
 end
 
 local function updateIndicators(f)
     if f.small or not f.pvpIcon then return end
-    local u, base = f.unit, f.baseUnit
+    local u, base = f.wfUnit, f.baseUnit
     if f.combatIcon then
         local inCombat = f.combatFlag
         pcall(function() if UnitAffectingCombat("player") then inCombat = true end end)
-        local showC = (inCombat and getSetting(base, "showCombat")) and true or false
+        local showC = inCombat and true or false
         f.combatIcon:SetShown(showC)
-        if f.corner then f.corner:SetShown((getSetting(base, "cornerAccent") and not showC) and true or false) end
+        if f.combatBack then f.combatBack:SetShown(showC) end
+        -- in combat the crossed swords take the accent's place, as on Retail; its glow follows it
+        if f.corner and hasCorner(base) and f.layoutLeft then
+            local cornerOn = (getSetting(base, "cornerAccent") and not showC) and true or false
+            f.corner:SetShown(cornerOn)
+            if f.cornerBack then f.cornerBack:SetShown(cornerOn) end
+        end
+        if f.cornerGlow then f.cornerGlow:SetShown(f.corner and f.corner:IsShown() or false) end
         if f.status then
             local resting = false
             pcall(function() resting = IsResting() and true or false end)
@@ -740,7 +877,7 @@ local function updateIndicators(f)
                 f.status:SetVertexColor(1, 0, 0)
                 f.status:Show()
                 if f.statusAnim and not f.statusAnim:IsPlaying() then f.statusAnim:Play() end
-            elseif resting and getSetting(base, "showRest") then
+            elseif resting then
                 if f.statusAnim then f.statusAnim:Stop() end
                 f.status:SetAlpha(1)
                 f.status:SetVertexColor(1, 0.88, 0.25)
@@ -754,7 +891,7 @@ local function updateIndicators(f)
     if f.restIcon then
         local resting = false
         pcall(function() resting = IsResting() and true or false end)
-        f.restIcon:SetShown((resting and getSetting(base, "showRest")) and true or false)
+        f.restIcon:SetShown(resting)
     end
     local kind
     pcall(function()
@@ -765,7 +902,7 @@ local function updateIndicators(f)
             kind = (fac == "Horde" or fac == "Alliance") and fac or nil
         end
     end)
-    if kind and getSetting(base, "showPvP") then
+    if kind then
         local ic = PVP_ICONS[kind]
         setIcon(f.pvpIcon, ic[1], ic[2], 0, 0.609375, 0, 0.640625)
         f.pvpIcon:Show()
@@ -782,7 +919,7 @@ local function updateFlash(f)
     local on = false
     pcall(function()
         if not getSetting(f.baseUnit, "flashInterrupt") then return end
-        local u = f.unit
+        local u = f.wfUnit
         if not UnitExists(u) or not UnitCanAttack("player", u) then return end
         local n, _, _, _, _, _, _, ni = UnitCastingInfo(u)
         if not n then
@@ -801,36 +938,177 @@ local function updateFlash(f)
 end
 
 local function updateThreat(f)
-    if not f.threatBox then return end
+    if not f.threatText then return end
     local status, pct
     pcall(function()
         if not getSetting(f.baseUnit, "showThreat") then return end
-        local u = f.unit
+        local u = f.wfUnit
         if not UnitExists(u) or not UnitCanAttack("player", u) then return end
         status = UnitThreatSituation("player", u)
         local _, _, scaled = UnitDetailedThreatSituation("player", u)
         pct = scaled
     end)
-    local shown = false
-    if status ~= nil and pct ~= nil then
-        local r, g, b = 0.5, 0.5, 0.5
+    -- The percent may be a secret number: it only ever goes to SetFormattedText. The glow shows from
+    -- status 1 up (about to pull, tanking insecurely, tanking); a status that can't be compared shows none.
+    local shown, glowOn, has = false, false, false
+    pcall(function() has = (status ~= nil and pct ~= nil) end)
+    if has then
+        local r, g, b = 0.7, 0.7, 0.7
         pcall(function() if GetThreatStatusColor then r, g, b = GetThreatStatusColor(status) end end)
-        local ok = pcall(function() f.threatText:SetFormattedText("%d%%", pct) end)
-        if ok then
-            f.threat:SetVertexColor(r, g, b, 0.85)
-            shown = true
-        end
+        shown = pcall(function() f.threatText:SetFormattedText("%d%%", pct) end)
+        if shown then f.threatText:SetTextColor(r, g, b) end
+        pcall(function() glowOn = status >= 1 end)
+        if glowOn then f.threatGlow:SetVertexColor(r, g, b) end
     end
-    f.threatBox:SetShown(shown)
+    f.threatText:SetShown(shown)
+    f.threatGlow:SetShown(glowOn)
+    -- make room for the number at the end of the name row
+    if f.nameBaseW then f.name:SetWidth(shown and f.nameBaseW - 30 or f.nameBaseW) end
 end
 
-local function updateAll(f) updateInfo(f); updateHealth(f); updatePower(f); updateIndicators(f); updateFlash(f); updateThreat(f) end
+---------------------------------------------------------------------------
+-- Buffs and debuffs. Secret-safe: aura fields only ever go to setters, timers go through duration
+-- objects (SetCooldownFromDurationObject) and stack counts through the display-count API.
+---------------------------------------------------------------------------
+local DEBUFF_BORDER = "Interface\\Buttons\\UI-Debuff-Overlays"
+local AURA_GAP = 2
+
+local function auraTooltip(self)
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
+    local ok = self.auraID ~= nil and pcall(GameTooltip.SetUnitAuraByAuraInstanceID, GameTooltip, self.unit, self.auraID)
+    if not ok then pcall(GameTooltip.SetUnitAura, GameTooltip, self.unit, self.index, self.filter) end
+    GameTooltip:Show()
+end
+
+local function newAuraButton(parent)
+    local b = CreateFrame("Frame", nil, parent)
+    -- thin dark edge round every icon, so buffs and debuffs line up neatly
+    b.edge = b:CreateTexture(nil, "BACKGROUND")
+    b.edge:SetPoint("TOPLEFT", -1, 1)
+    b.edge:SetPoint("BOTTOMRIGHT", 1, -1)
+    b.edge:SetColorTexture(0, 0, 0, 0.9)
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetAllPoints()
+    b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    b.cd = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
+    b.cd:SetAllPoints()
+    b.cd:SetReverse(true)
+    b.cd:SetDrawEdge(false)
+    pcall(b.cd.SetHideCountdownNumbers, b.cd, true)
+    b.border = b:CreateTexture(nil, "OVERLAY")
+    b.border:SetTexture(DEBUFF_BORDER)
+    b.border:SetTexCoord(0.296875, 0.5703125, 0, 0.515625)
+    b.border:SetPoint("TOPLEFT", -1, 1)
+    b.border:SetPoint("BOTTOMRIGHT", 1, -1)
+    -- stack count above the cooldown swipe
+    local top = CreateFrame("Frame", nil, b)
+    top:SetAllPoints()
+    top:SetFrameLevel(b.cd:GetFrameLevel() + 1)
+    b.count = top:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+    b.count:SetPoint("BOTTOMRIGHT", 2, -1)
+    b:EnableMouse(true)
+    b:SetScript("OnEnter", auraTooltip)
+    b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    return b
+end
+
+-- Where the aura block starts: below the frame art (default), above it, or to its right.
+local function auraAnchor(f, pos)
+    if f.small then
+        if pos == "above" then return "BOTTOMLEFT", "TOPLEFT", 4, 2 end
+        if pos == "right" then return "TOPLEFT", "TOPRIGHT", 2, -4 end
+        return "TOPLEFT", "BOTTOMLEFT", 4, 0
+    end
+    -- tucked under the frame art's bottom edge, from its left edge (on the player frame, just right of the level circle)
+    local x = f.layoutLeft and 55 or 22
+    if pos == "above" then return "BOTTOMLEFT", "TOPLEFT", f.layoutLeft and 85 or 22, -14 end
+    if pos == "right" then return "TOPLEFT", "TOPRIGHT", -18, -20 end
+    return "TOPLEFT", "TOPLEFT", x, -87
+end
+
+local function updateAuras(f)
+    local base = f.baseUnit
+    local showB, showD = getSetting(base, "auraBuffs"), getSetting(base, "auraDebuffs")
+    if not (showB or showD) or not C_UnitAuras then
+        if f.auraButtons then for _, b in ipairs(f.auraButtons) do b:Hide() end end
+        return
+    end
+    if not f.auraBox then
+        f.auraBox = CreateFrame("Frame", nil, f.ov or f)
+        f.auraBox:SetSize(1, 1)
+        f.auraButtons = {}
+    end
+    local size, perRow, max = getSetting(base, "auraSize"), getSetting(base, "auraPerRow"), getSetting(base, "auraMax")
+    local pos = getSetting(base, "auraPos")
+    local point, relPoint, x, y = auraAnchor(f, pos)
+    f.auraBox:ClearAllPoints()
+    f.auraBox:SetPoint(point, f, relPoint, x, y)
+    local up = (pos == "above")
+    local u = f.wfUnit
+    local n, col, row = 0, 0, 0
+
+    local function place(b)
+        b:SetSize(size, size)
+        b:ClearAllPoints()
+        local bx, by = col * (size + AURA_GAP), row * (size + AURA_GAP)
+        if up then b:SetPoint("BOTTOMLEFT", f.auraBox, "BOTTOMLEFT", bx, by)
+        else b:SetPoint("TOPLEFT", f.auraBox, "TOPLEFT", bx, -by) end
+        col = col + 1
+        if col >= perRow then col, row = 0, row + 1 end
+    end
+
+    local function group(filter, isDebuff)
+        local count = 0
+        for i = 1, 40 do
+            if count >= max then break end
+            local aura
+            pcall(function() aura = C_UnitAuras.GetAuraDataByIndex(u, i, filter) end)
+            if not aura then break end
+            n, count = n + 1, count + 1
+            local b = f.auraButtons[n] or newAuraButton(f.auraBox)
+            f.auraButtons[n] = b
+            b.unit, b.index, b.filter, b.auraID = u, i, filter, aura.auraInstanceID
+            pcall(b.icon.SetTexture, b.icon, aura.icon)
+            if not pcall(function() b.count:SetText(C_UnitAuras.GetAuraApplicationDisplayCount(u, aura.auraInstanceID, 2, 99)) end) then
+                b.count:SetText("")
+            end
+            if not pcall(function() b.cd:SetCooldownFromDurationObject(C_UnitAuras.GetAuraDuration(u, aura.auraInstanceID)) end) then
+                -- older clients: plain numbers, when they are readable
+                if not pcall(function()
+                    if aura.duration and aura.duration > 0 then b.cd:SetCooldown(aura.expirationTime - aura.duration, aura.duration)
+                    else b.cd:Clear() end
+                end) then b.cd:Clear() end
+            end
+            if isDebuff then
+                -- coloured by dispel type (magic blue, curse purple, ...); red when unknown or protected
+                local r, g, bl = 0.8, 0, 0
+                pcall(function()
+                    local c = DebuffTypeColor and DebuffTypeColor[aura.dispelName]
+                    if c then r, g, bl = c.r, c.g, c.b end
+                end)
+                b.border:SetVertexColor(r, g, bl)
+                b.border:Show()
+            else
+                b.border:Hide()
+            end
+            place(b)
+            b:Show()
+        end
+        if count > 0 and col > 0 then col, row = 0, row + 1 end   -- the next group starts a new row
+    end
+
+    if showB then group("HELPFUL", false) end
+    if showD then group(getSetting(base, "auraMine") and "HARMFUL|PLAYER" or "HARMFUL", true) end
+    for i = n + 1, #f.auraButtons do f.auraButtons[i]:Hide() end
+end
+
+local function updateAll(f) updateInfo(f); updateHealth(f); updatePower(f); updateIndicators(f); updateFlash(f); updateThreat(f); pcall(updateAuras, f) end
 
 ---------------------------------------------------------------------------
 -- Layout: Retail's left-portrait (player) art, or right-portrait (target) art
 ---------------------------------------------------------------------------
 local function isLeft(f)
-    return f.baseUnit == "player" or getSetting(f.baseUnit, "portraitSide") ~= "right"
+    return portraitOnLeft(f.baseUnit)
 end
 
 -- Returns true if the layout changed.
@@ -842,63 +1120,60 @@ local function applyLayout(f)
 
     local prefix = left and PLAYER_PREFIX or TARGET_PREFIX
     f.prefix = prefix
-    f.hpAtlas = prefix .. "-Bar-Health"
-    f.hpStatusAtlas = prefix .. "-Bar-Health-Status"
-    if not hasAtlas(f.hpStatusAtlas) then f.hpStatusAtlas = f.hpAtlas end
+    -- Positions below are DragonflightUI's, moved into this frame's coordinates: its player art sits
+    -- (16, 5.5) further right / up and its target art (20.5, -6) further left / down than ours.
+    local barFile = left and BAR_FILE.player or BAR_FILE.target
+    f.hpFiles = true
+    f.hpAtlas = barFile .. "Health"
+    f.hpStatusAtlas = barFile .. "Health-Status"
     f.hpCurrent, f.mpCurrent = nil, nil
 
-    -- border / frame art
+    -- border / frame art (left: the player frame's art, right: the target frame's)
     f.border:ClearAllPoints()
+    if left then
+        setArt(f.border, ART.playerBorder)
+        f.border:SetPoint("CENTER", f, "CENTER", 0, 0.55)
+    else
+        setArt(f.border, ART.targetBorder)
+        f.border:SetPoint("CENTER", f, "CENTER", 0.5, 0)
+    end
+    -- right layout: a copy of just the portrait ring, drawn above the bars so their ends tuck under it
     if f.ringTop then
         local t = f.ringTop
         t:ClearAllPoints()
-        local shown = false
-        if not left and hasAtlas(prefix) and stockAtlas(t, prefix, true) then
+        if left then
+            t:Hide()
+        else
+            local a = ART.targetBorder
+            local cut = 126 / a[2]       -- the ring starts 126px into the 192px art
+            t:SetTexture(MEDIA .. a[1])
+            t:SetTexCoord(a[4] * cut, a[4], 0, a[5])
+            t:SetSize(a[2] - 126, a[3])
+            t:SetPoint("RIGHT", f, "RIGHT", -19.5, 0)
             f.ringMask:ClearAllPoints()
             f.ringMask:SetSize(66, 66)
             f.ringMask:SetPoint("CENTER", f, "TOPLEFT", 177, -48)
-            pcall(function()
-                local ulx, uly, llx, lly, urx = t:GetTexCoord()
-                local w0, h0 = t:GetWidth(), t:GetHeight()
-                local x0 = (232 - w0) / 2
-                if left then
-                    local frac = (86 - x0) / w0
-                    t:SetTexCoord(ulx, ulx + (urx - ulx) * frac, uly, lly)
-                    t:SetSize(w0 * frac, h0)
-                    t:SetPoint("LEFT", f, "LEFT", x0, 0)
-                else
-                    local sx = 146 - x0
-                    t:SetTexCoord(ulx + (urx - ulx) * (sx / w0), urx, uly, lly)
-                    t:SetSize(w0 - sx, h0)
-                    t:SetPoint("RIGHT", f, "RIGHT", -x0, 0)
-                end
-                shown = true
-            end)
-        end
-        t:SetShown(shown)
-    end
-    for _, g in ipairs({ f.flash or false }) do
-        if g then
-            g:ClearAllPoints()
-            if hasAtlas(prefix) then
-                stockAtlas(g, prefix, true)
-                g:SetPoint("CENTER", f, "CENTER", 0, 0)
-            else
-                g:SetColorTexture(1, 1, 1, 1)
-                g:SetSize(150, 50)
-                g:SetPoint("CENTER", f, "CENTER", left and 30 or -30, 0)
-            end
-            g:SetBlendMode("ADD")
+            t:Show()
         end
     end
-    if f.flash then f.flash:SetVertexColor(1, 0.15, 0.1) end
-    if hasAtlas(prefix) then
-        stockAtlas(f.border, prefix, true)
-        f.border:SetPoint("CENTER", f, "CENTER", 0, 0)
-    else
-        f.border:SetColorTexture(0, 0, 0, 0.5)
-        f.border:SetSize(150, 50)
-        f.border:SetPoint("CENTER", f, "CENTER", left and 30 or -30, 0)
+    -- interrupt flash: the in-combat glow of the matching art, tinted red
+    if f.flash then
+        f.flash:ClearAllPoints()
+        if left then
+            setArt(f.flash, ART.playerStatus)
+            f.flash:SetPoint("CENTER", f, "CENTER", -1, 1.55)
+        else
+            setArt(f.flash, ART.targetFlash)
+            f.flash:SetPoint("CENTER", f, "CENTER", 0, 1.5)
+        end
+        f.flash:SetBlendMode("ADD")
+        f.flash:SetVertexColor(1, 0, 0)
+    end
+    -- reaction-coloured name plate above the health bar (right layout only)
+    if f.plate then
+        setArt(f.plate, ART.plate)
+        f.plate:ClearAllPoints()
+        f.plate:SetPoint("BOTTOMLEFT", f.hp, "TOPLEFT", -0.5, -3)
     end
 
     -- portrait and its mask
@@ -907,8 +1182,9 @@ local function applyLayout(f)
     if left then
         f.portrait:SetSize(60, 60)
         f.portrait:SetPoint("TOPLEFT", f, "TOPLEFT", 24, -19)
-        setMask(f.pmask, "UI-HUD-UnitFrame-Player-Portrait-Mask", f, 24, -19, true)
+        -- the mask's art (round, or squared behind the corner accent) is chosen by applyCorner
         f.pmask:SetSize(60, 60)
+        f.pmask:SetPoint("TOPLEFT", f, "TOPLEFT", 24, -19)
     else
         f.portrait:SetSize(58, 58)
         f.portrait:SetPoint("TOPRIGHT", f, "TOPRIGHT", -26, -19)
@@ -919,23 +1195,29 @@ local function applyLayout(f)
         f.pmask:SetPoint("BOTTOMRIGHT", f.portrait, "BOTTOMRIGHT", -1, 0)
     end
 
-    -- bars
+    -- bars, with DragonflightUI's bundled masks (fills: see updateHealthColor / updatePower)
+    f.hp:ClearAllPoints(); f.mp:ClearAllPoints()
     if left then
-        f.hpMaskOn = layoutBar(f.hp, f.hpMask, 124, 20, "TOPLEFT", f, "TOPLEFT", 85, -40, prefix .. "-Bar-Health-Mask", -2, 6)
-        f.mpMaskOn = layoutBar(f.mp, f.mpMask, 124, 10, "TOPLEFT", f, "TOPLEFT", 85, -61, prefix .. "-Bar-Mana-Mask", -2, 2)
+        f.hp:SetSize(124, 20)
+        f.hp:SetPoint("TOPLEFT", f, "TOPLEFT", 85, -40)
+        f.mp:SetSize(124, 10.5)
+        f.mp:SetPoint("TOPLEFT", f, "TOPLEFT", 85, -60.25)
+        f.hpMaskOn = setFileMask(f.hp, f.hpMask, "uiunitframeplayerhealthmask2x", 128, 32, -2, 6)
+        f.mpMaskOn = setFileMask(f.mp, f.mpMask, "uiunitframeplayermanamask2x", 128, 16, -2, 2)
     else
-        f.hpMaskOn = layoutBar(f.hp, f.hpMask, 131, 20, "TOPLEFT", f, "TOPLEFT", 23, -40, prefix .. "-Bar-Health-Mask", -1, 6)
-        -- full health reaches the portrait ring: the bar and its rounded mask are stretched 7px toward it
-        if f.hpMaskOn then f.hpMask:SetSize(133, 32) end
-        -- power bar: same rounded shape as the health bar, flush on the left, and stretched so its
-        -- angled end follows the portrait ring and fills right into the corner at 100%
-        f.mpMaskOn = layoutBar(f.mp, f.mpMask, 136, 10, "TOPLEFT", f, "TOPLEFT", 23, -61, prefix .. "-Bar-Mana-Mask", -70.3, 3)
-        if f.mpMaskOn then f.mpMask:SetSize(274, 16) end
+        f.hp:SetSize(126, 20)
+        f.hp:SetPoint("TOPLEFT", f, "TOPLEFT", 23, -40)
+        f.mp:SetSize(134, 10)
+        f.mp:SetPoint("TOPLEFT", f.hp, "BOTTOMLEFT", 0, -1)
+        f.hpMaskOn = setFileMask(f.hp, f.hpMask, "uiunitframetargethealthmask2x", 129, 32, -1, 6)
+        f.mpMaskOn = setFileMask(f.mp, f.mpMask, "uiunitframetargetmanamask2x", 259, 16, -62, 3)
     end
+    -- (the default fills' dark top / bottom rows: 3 of 32 on health, 2.5 of 16 on power)
+    setClip(f.hp, 2); setClip(f.mp, 1.5)
 
     -- text
     f.mpText:ClearAllPoints()
-    f.mpText:SetPoint("CENTER", f.mp, "CENTER", left and 0 or -4, 0)
+    f.mpText:SetPoint("CENTER", f.mp, "CENTER", 0, 0)
     f.name:ClearAllPoints(); f.level:ClearAllPoints()
     -- Forever layout: the level sits in a round badge at the bottom corner of the art
     if f.badge then
@@ -957,56 +1239,44 @@ local function applyLayout(f)
         if not f.badge then f.level:SetPoint("TOPRIGHT", f, "TOPRIGHT", -91, -27) end
         f:SetHitRectInsets(15, 20, 15, 20)
     end
+    f.nameBaseW = f.name:GetWidth()   -- updateThreat narrows the name to fit the threat %
     return true
 end
 
 ---------------------------------------------------------------------------
 -- Applying settings
 ---------------------------------------------------------------------------
-local function refreshText(f)
+function refreshText(f)
     local mode = getSetting(f.baseUnit, "textMode")
     local always = (mode == "always")
     local over = (mode == "mouseover")
-    f.hpText:SetShown((always or (over and f.hoverHP)) and true or false)
+    -- Dead / Ghost / Offline always shows, whatever the text mode
+    f.hpText:SetShown((always or f.statusText or (over and f.hoverHP)) and true or false)
     f.mpText:SetShown((always or (over and f.hoverMP)) and true or false)
 end
 
--- The pointed accent on the portrait ring: mirrored on right-portrait frames, scaled on the small frame.
+-- The squared corner (the "Corner accent" setting): player and target frames, left-hand portrait only.
 local function applyCorner(f)
     local c = f.corner
     if not c then return end
-    c:SetShown(getSetting(f.baseUnit, "cornerAccent") and true or false)
-    if f.small then
-        if f.layoutLeft == false then c:Hide() end
-        return
+    local on = (hasCorner(f.baseUnit) and f.layoutLeft and not f.small and getSetting(f.baseUnit, "cornerAccent")) and true or false
+    -- Left-hand large portraits: with the accent, Retail's mask (a circle with the bottom right corner
+    -- squared off, bundled from DragonflightUI) so the portrait fills the space behind the accent;
+    -- without it, a plain circle.
+    if f.layoutLeft and not f.small then
+        if on then
+            f.pmask:SetTexture(MEDIA .. "uiunitframeplayerportraitmask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+            f.pmask:SetTexCoord(0, 1, 0, 1)
+        elseif hasAtlas("CircleMask") then
+            f.pmask:SetAtlas("CircleMask")
+        else
+            f.pmask:SetTexture(CIRCLE_FALLBACK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        end
     end
-    c:ClearAllPoints()
-    -- Draw from the atlas's own file + coordinates so the mirror is exact (SetTexCoord on a
-    -- live atlas texture is not reliable); fall back to the plain atlas on the left.
-    local info
-    pcall(function() info = C_Texture.GetAtlasInfo(PLAYER_PREFIX .. "-CornerEmbellishment") end)
-    local file = info and (info.file or info.filename)
-    local l, r, t, b
-    if file then l, r, t, b = info.leftTexCoord, info.rightTexCoord, info.topTexCoord, info.bottomTexCoord end
-    if type(l) ~= "number" then file = nil end
-    if file then
-        c:SetTexture(file)
-        c:SetSize(info.width, info.height)
-        if f.layoutLeft then c:SetTexCoord(l, r, t, b) else c:SetTexCoord(r, t, r, b, l, t, l, b) end
-    elseif f.layoutLeft then
-        c:SetAtlas(PLAYER_PREFIX .. "-CornerEmbellishment", true)
-    end
-    if f.layoutLeft then
-        c:SetPoint("TOPLEFT", f, "TOPLEFT", 58.5, -53.5)
-    else
-        c:SetPoint("TOPRIGHT", f, "TOPRIGHT", -58.5, -53.5)
-    end
+    c:SetShown(on)
+    if f.cornerBack then f.cornerBack:SetShown(on) end
 end
 
-local function mirrorTexCoords(tex)
-    local ulx, uly, llx, lly, urx, ury, lrx, lry = tex:GetTexCoord()
-    if ulx then tex:SetTexCoord(urx, ury, lrx, lry, ulx, uly, llx, lly) end
-end
 
 -- Small frame (target of target): portrait on either side. The right layout mirrors the art and bar masks.
 local function applySmallLayout(f)
@@ -1015,19 +1285,20 @@ local function applySmallLayout(f)
     f.layoutLeft = left
     f.portrait:ClearAllPoints()
     f.portrait:SetPoint(left and "TOPLEFT" or "TOPRIGHT", f, left and "TOPLEFT" or "TOPRIGHT", left and 5 or -5, -5)
+    -- DragonflightUI's target-of-target art and bar masks, mirrored for the right-hand portrait
+    -- (the masks are symmetric about their bars, so their offsets stay the same when mirrored)
     f.border:ClearAllPoints()
-    if hasAtlas(TOT_PREFIX) then
-        local sheet = stockAtlas(f.border, TOT_PREFIX, true)
-        f.border:SetPoint("CENTER", f, "CENTER", 0, 0)
-        if sheet and not left then mirrorTexCoords(f.border) end
-    end
-    f.hpMask:SetTexCoord(0, 1, 0, 1); f.mpMask:SetTexCoord(0, 1, 0, 1)
-    f.hpMaskOn = layoutBar(f.hp, f.hpMask, 70, 10, "TOPLEFT", f, "TOPLEFT", left and 44 or 6, -17, SMALL_MASK_HEALTH, -29, 3)
-    f.mpMaskOn = layoutBar(f.mp, f.mpMask, 74, 7, "TOPLEFT", f, "TOPLEFT", left and 40 or 6, -28, SMALL_MASK_MANA, -27, 4)
-    if not left then
-        if f.hpMaskOn then pcall(mirrorTexCoords, f.hpMask) end
-        if f.mpMaskOn then pcall(mirrorTexCoords, f.mpMask) end
-    end
+    setArt(f.border, ART.smallBorder, not left)
+    f.border:SetPoint("CENTER", f, "CENTER", 0, 0)
+    f.hp:ClearAllPoints(); f.mp:ClearAllPoints()
+    f.hp:SetSize(70, 10.5)
+    f.hp:SetPoint("TOPLEFT", f, "TOPLEFT", left and 44 or 6, -16.5)
+    f.mp:SetSize(74, 7.5)
+    f.mp:SetPoint("TOPLEFT", f, "TOPLEFT", left and 40 or 6, -27.5)
+    f.hpMaskOn = setFileMask(f.hp, f.hpMask, "uipartyframeportraitonhealthmask", 128, 16.5, -29, 3, not left)
+    f.mpMaskOn = setFileMask(f.mp, f.mpMask, "uipartyframeportraitonmanamask", 128, 16.5, -27, 4, not left)
+    setClip(f.hp, 1); setClip(f.mp, 1)
+    f.hpCurrent, f.mpCurrent = nil, nil
     f.name:ClearAllPoints()
     if left then f.name:SetPoint("TOPLEFT", f.portrait, "TOPRIGHT", 2, 0) else f.name:SetPoint("TOPLEFT", f, "TOPLEFT", 6, -5) end
     f:SetHitRectInsets(left and 0 or 6, left and 6 or 0, 4, 4)
@@ -1041,7 +1312,12 @@ local function applyUnit(f)
     local changed = applyLayout(f)
     if f.small and applySmallLayout(f) then changed = true end
     f:ClearAllPoints()
-    if u and u.point then
+    if f.partyIndex then
+        -- stacked in the party container, each below the one before
+        local i = f.partyIndex
+        if i == 1 then f:SetPoint("TOPLEFT", frames.party, "TOPLEFT", 0, 0)
+        else f:SetPoint("TOPLEFT", partyFrames[i - 1], "BOTTOMLEFT", 0, -PARTY_GAP) end
+    elseif u and u.point then
         f:SetPoint(u.point, UIParent, u.point, u.x, u.y)
     else
         f:SetPoint(d.point, UIParent, d.point, d.x, d.y)
@@ -1056,6 +1332,7 @@ local function applyUnit(f)
     pcall(updateFlash, f)
     pcall(updateThreat, f)
     pcall(updateIndicators, f)
+    pcall(updateAuras, f)
     if f.updateRest then pcall(f.updateRest) end
     local tex = resolveTexture(getSetting(unit, "barTexture"))
     if tex ~= f.customTex then
@@ -1067,16 +1344,38 @@ local function applyUnit(f)
     if changed then pcall(updateAll, f) end
 end
 
+-- The party container (its position, and its size so the Edit Mode box fits) and its frames.
+local function applyParty()
+    local box = frames.party
+    if not box then return end
+    local u, d = unitData("party"), DEFAULT_POS.party
+    box:ClearAllPoints()
+    if u and u.point then box:SetPoint(u.point, UIParent, u.point, u.x, u.y)
+    else box:SetPoint(d.point, UIParent, d.point, d.x, d.y) end
+    local s = getSetting("party", "scale")
+    box:SetSize(120 * s, (49 * #PARTY + PARTY_GAP * (#PARTY - 1)) * s)
+    for _, f in ipairs(partyFrames) do applyUnit(f) end
+end
+
 local function applyAll()
     if InCombatLockdown() then pendingApply = true; return end
     pendingApply = false
     for _, unit in ipairs(UNITS) do
         if frames[unit] then applyUnit(frames[unit]) end
     end
+    applyParty()
 end
 
 local function setSetting(unit, key, value)
     unitData(unit, true)[key] = value
+    if unit == "party" then
+        for _, pf in ipairs(partyFrames) do
+            pcall(updateHealth, pf)
+            pcall(updatePower, pf)
+        end
+        if InCombatLockdown() then pendingApply = true else applyParty() end
+        return
+    end
     local f = frames[unit]
     if f then
         pcall(updateHealth, f)
@@ -1089,15 +1388,16 @@ end
 ---------------------------------------------------------------------------
 -- Frame creation (art and numbers from Blizzard's PlayerFrame.xml / TargetFrame.xml)
 ---------------------------------------------------------------------------
-local function createFrame(unit)
-    local isPlayer = (unit == "player")
+-- The clickable secure button both frame sizes are built on. The live unit lives in f.wfUnit, not
+-- f.unit: an addon-written .unit field stops pings from reading the unit's (secret) GUID.
+local function newUnitButton(unit, w, h)
     local f
     local name = "WebbyFrames_" .. unit
     if not pcall(function() f = CreateFrame("Button", name, UIParent, "SecureUnitButtonTemplate,PingableUnitFrameTemplate") end) or not f then
         f = CreateFrame("Button", name, UIParent, "SecureUnitButtonTemplate")
     end
-    f.unit, f.baseUnit = unit, unit
-    f:SetSize(232, 100)
+    f.wfUnit, f.baseUnit = unit, unit
+    f:SetSize(w, h)
     f:SetFrameStrata("LOW")
     f:SetClampedToScreen(true)
     f:SetMovable(true)
@@ -1106,17 +1406,71 @@ local function createFrame(unit)
     f:SetAttribute("type1", "target")
     f:SetAttribute("type2", "togglemenu")
     f:SetPoint(DEFAULT_POS[unit].point, UIParent, DEFAULT_POS[unit].point, DEFAULT_POS[unit].x, DEFAULT_POS[unit].y)
+    return f
+end
+
+-- Unit tooltip on hover, and the per-bar "show on mouseover" numbers.
+local function addHover(f)
+    f:HookScript("OnEnter", function(self)
+        self.hover = true
+        pcall(function()
+            GameTooltip_SetDefaultAnchor(GameTooltip, self)
+            if GameTooltip:SetUnit(self.wfUnit) ~= false then GameTooltip:Show() end
+        end)
+    end)
+    f:HookScript("OnLeave", function(self)
+        self.hover = false; self.hoverHP = false; self.hoverMP = false; refreshText(self)
+        if GameTooltip:IsOwned(self) then GameTooltip:Hide() end
+    end)
+    -- numbers appear only on the bar under the cursor
+    f:HookScript("OnUpdate", function(self)
+        if not self.hover then return end
+        local hp, mp = false, false
+        pcall(function()
+            local cx, cy = GetCursorPosition()
+            local function over(bar)
+                local sc = bar:GetEffectiveScale()
+                local l, b, w, h = bar:GetRect()
+                if not (l and sc and sc > 0) then return false end
+                local x, y = cx / sc, cy / sc
+                return x >= l and x <= l + w and y >= b and y <= b + h
+            end
+            hp = over(self.hp)
+            mp = over(self.mp)
+            if not hp and not mp then
+                hp = MouseIsOver(self.hp) and true or false
+                mp = MouseIsOver(self.mp) and true or false
+            end
+        end)
+        if hp ~= self.hoverHP or mp ~= self.hoverMP then
+            self.hoverHP, self.hoverMP = hp, mp
+            refreshText(self)
+        end
+    end)
+end
+
+local function createFrame(unit)
+    local isPlayer = (unit == "player")
+    local f = newUnitButton(unit, 232, 100)
 
     -- portrait (under the border) and its mask; sizes/anchors are set by applyLayout
     f.portrait = f:CreateTexture(nil, "BACKGROUND", nil, 1)
     f.pmask = f:CreateMaskTexture()
     f.portrait:AddMaskTexture(f.pmask)
+    -- solid backing under the portrait, cut by the same mask: portrait images can have transparent
+    -- areas (around the model), which would otherwise show the game world through the ring
+    f.portraitBg = f:CreateTexture(nil, "BACKGROUND", nil, 0)
+    f.portraitBg:SetColorTexture(0.05, 0.05, 0.05, 1)
+    f.portraitBg:SetAllPoints(f.portrait)
+    f.portraitBg:AddMaskTexture(f.pmask)
 
-    -- reaction-coloured name plate, used by the right-portrait layout only
-    if not isPlayer and hasAtlas(TARGET_PREFIX .. "-Type") then
+    -- reaction-coloured name plate, used by the right-portrait layout only (art set by applyLayout)
+    if not isPlayer then
         f.plate = f:CreateTexture(nil, "BACKGROUND", nil, 2)
-        f.plate:SetAtlas(TARGET_PREFIX .. "-Type", true)
-        f.plate:SetPoint("TOPRIGHT", f, "TOPRIGHT", -75, -25)
+        -- elite / rare / boss dragon around the portrait (see updateInfo)
+        f.dragon = f:CreateTexture(nil, "ARTWORK", nil, 3)
+        f.dragon:SetTexture(MEDIA .. "uiunitframeboss2x")
+        f.dragon:Hide()
     end
 
     -- the border and pointed frame art
@@ -1146,12 +1500,15 @@ local function createFrame(unit)
         f.badge:SetAtlas("UI-HUD-UnitFrame-SmallCircle")
     end
 
-    -- corner decoration of the left-portrait art (only where the client has it)
-    if hasAtlas(PLAYER_PREFIX .. "-CornerEmbellishment") then
-        f.corner = ov:CreateTexture(nil, "OVERLAY", nil, 1)
-        f.corner:SetAtlas(PLAYER_PREFIX .. "-CornerEmbellishment", true)
-        f.corner:SetPoint("TOPLEFT", f, "TOPLEFT", 58.5, -53.5)
-    end
+    -- Corner accent (DragonflightUI's art; shown by applyCorner), with a solid black silhouette of
+    -- itself, a little larger, behind it so nothing behind the accent can show through.
+    f.cornerBack = ov:CreateTexture(nil, "OVERLAY", nil, 0)
+    setArt(f.cornerBack, ART.corner, false, 1.15)
+    f.cornerBack:SetVertexColor(0, 0, 0, 1)
+    f.cornerBack:SetPoint("CENTER", f, "CENTER", CORNER_POS[1], CORNER_POS[2])
+    f.corner = ov:CreateTexture(nil, "OVERLAY", nil, 1)
+    setArt(f.corner, ART.corner)
+    f.corner:SetPoint("CENTER", f, "CENTER", CORNER_POS[1], CORNER_POS[2])
 
     f.ov = ov
     if unit ~= "player" then
@@ -1166,15 +1523,16 @@ local function createFrame(unit)
         end)
     end
     -- resting "Z" on the player frame, only while you are resting
-    if isPlayer and hasAtlas("UI-HUD-UnitFrame-Player-Rest-Flipbook") then
+    -- (DragonflightUI's flipbook sheet: 7 x 6 frames of 60px, at the top right of the portrait)
+    if isPlayer then
         local rest = CreateFrame("Frame", nil, f)
-        rest:SetSize(20, 20)
-        rest:SetPoint("TOPLEFT", f, "TOPLEFT", 64, -6)
+        rest:SetSize(24, 24)
+        rest:SetPoint("CENTER", f, "TOPLEFT", 80, -15)
         rest:SetFrameLevel(f:GetFrameLevel() + 6)
         local tex = rest:CreateTexture(nil, "ARTWORK")
-        tex:SetAtlas("UI-HUD-UnitFrame-Player-Rest-Flipbook")
-        tex:SetSize(30, 30)
-        tex:SetPoint("CENTER")
+        tex:SetTexture(MEDIA .. "uiunitframerestingflipbook")
+        tex:SetTexCoord(0, 7 / 8, 0, 7 / 8)
+        tex:SetAllPoints()
         local anim
         pcall(function()
             local ag = tex:CreateAnimationGroup()
@@ -1182,52 +1540,23 @@ local function createFrame(unit)
             local a = ag:CreateAnimation("FlipBook")
             a:SetFlipBookRows(7); a:SetFlipBookColumns(6); a:SetFlipBookFrames(42)
             a:SetDuration(1.5)
-            a:SetFlipBookFrameWidth(0); a:SetFlipBookFrameHeight(0)
+            a:SetFlipBookFrameWidth(60); a:SetFlipBookFrameHeight(60)
             anim = ag
         end)
         f.updateRest = function()
-            local resting = IsResting() and getSetting("player", "showRest")
+            local resting = IsResting()
             rest:SetShown(resting and true or false)
             if anim then if resting then anim:Play() else anim:Stop() end end
         end
         f:RegisterEvent("PLAYER_UPDATE_RESTING")
     end
 
-    -- hover: used by the "show on mouseover" text mode
-    f:HookScript("OnEnter", function(self) self.hover = true end)
-    f:HookScript("OnLeave", function(self)
-        self.hover = false; self.hoverHP = false; self.hoverMP = false; refreshText(self)
-    end)
-    -- "show on mouseover" works per bar: numbers appear only on the bar under the cursor
-    f:HookScript("OnUpdate", function(self)
-        if not self.hover then return end
-        local hp, mp = false, false
-        pcall(function()
-            local cx, cy = GetCursorPosition()
-            local function over(bar)
-                local sc = bar:GetEffectiveScale()
-                local l, b, w, h = bar:GetRect()
-                if not (l and sc and sc > 0) then return false end
-                local x, y = cx / sc, cy / sc
-                return x >= l and x <= l + w and y >= b and y <= b + h
-            end
-            hp = over(self.hp)
-            mp = over(self.mp)
-            if not hp and not mp then
-                hp = MouseIsOver(self.hp) and true or false
-                mp = MouseIsOver(self.mp) and true or false
-            end
-        end)
-        if hp ~= self.hoverHP or mp ~= self.hoverMP then
-            self.hoverHP, self.hoverMP = hp, mp
-            refreshText(self)
-        end
-    end)
+    addHover(f)
 
     -- events
     f:SetScript("OnEvent", function(self, event)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then updateHealth(self)
-        elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
+        elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_POWER_FREQUENT" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
         elseif event == "PLAYER_UPDATE_RESTING" then
             if self.updateRest then self.updateRest() end
             updateIndicators(self)
@@ -1236,12 +1565,15 @@ local function createFrame(unit)
         elseif event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FLAGS" then updateIndicators(self)
         elseif event:find("^UNIT_SPELLCAST") then updateFlash(self)
         elseif event:find("^UNIT_THREAT") then updateThreat(self)
+        elseif event == "UNIT_AURA" then updateAuras(self)
         else updateAll(self) end
     end)
     for _, e in ipairs({ "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
-                         "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION" }) do
+                         "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA" }) do
         pcall(f.RegisterUnitEvent, f, e, unit)
     end
+    -- smooth energy / rage / focus ticks on your own frame
+    if isPlayer then pcall(f.RegisterUnitEvent, f, "UNIT_POWER_FREQUENT", unit) end
     f:RegisterEvent("PLAYER_ENTERING_WORLD")
     f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
     if unit == "target" then f:RegisterEvent("PLAYER_TARGET_CHANGED") end
@@ -1253,7 +1585,8 @@ local function createFrame(unit)
     end
     pcall(f.RegisterUnitEvent, f, "UNIT_FLAGS", unit)
     if unit ~= "player" then
-        pcall(f.RegisterUnitEvent, f, "UNIT_THREAT_SITUATION_UPDATE", unit)
+        -- the situation event fires for the unit whose threat changed (you), the list event for the mob
+        pcall(f.RegisterUnitEvent, f, "UNIT_THREAT_SITUATION_UPDATE", unit, "player")
         pcall(f.RegisterUnitEvent, f, "UNIT_THREAT_LIST_UPDATE", unit)
         for _, e in ipairs({ "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP", "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED",
                              "UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_DELAYED", "UNIT_SPELLCAST_CHANNEL_START",
@@ -1270,29 +1603,18 @@ local function createFrame(unit)
 end
 
 ---------------------------------------------------------------------------
--- Small frame: target of target (art and numbers from Blizzard's TargetFrame.xml)
+-- Small frames: target of target, focus target, pet (art and numbers from Blizzard's TargetFrame.xml)
 ---------------------------------------------------------------------------
+local POLL_INTERVAL = 0.25
+
 local function createSmallFrame(unit)
-    local f
-    local name = "WebbyFrames_" .. unit
-    if not pcall(function() f = CreateFrame("Button", name, UIParent, "SecureUnitButtonTemplate,PingableUnitFrameTemplate") end) or not f then
-        f = CreateFrame("Button", name, UIParent, "SecureUnitButtonTemplate")
-    end
-    f.unit, f.baseUnit, f.small = unit, unit, true
+    local f = newUnitButton(unit, 120, 49)
+    f.small = true
     f.prefix = TOT_PREFIX
-    f.layoutLeft = true
-    f.hpAtlas = TOT_PREFIX .. "-Bar-Health"
-    f.hpStatusAtlas = TOT_PREFIX .. "-Bar-Health-Status"
-    if not hasAtlas(f.hpStatusAtlas) then f.hpStatusAtlas = f.hpAtlas end
-    f:SetSize(120, 49)
-    f:SetFrameStrata("LOW")
-    f:SetClampedToScreen(true)
-    f:SetMovable(true)
-    f:RegisterForClicks("AnyUp")
-    f:SetAttribute("unit", unit)
-    f:SetAttribute("type1", "target")
-    f:SetAttribute("type2", "togglemenu")
-    f:SetPoint(DEFAULT_POS[unit].point, UIParent, DEFAULT_POS[unit].point, DEFAULT_POS[unit].x, DEFAULT_POS[unit].y)
+    f.layoutLeft = nil        -- applySmallLayout builds the art, bars and masks for the chosen side
+    f.hpFiles = true
+    f.hpAtlas = BAR_FILE.small .. "Health"
+    f.hpStatusAtlas = BAR_FILE.small .. "Health-Status"
     f:SetHitRectInsets(0, 6, 4, 4)
 
     -- portrait, circle mask, border
@@ -1306,24 +1628,19 @@ local function createSmallFrame(unit)
     f.pmask:SetPoint("TOPLEFT", f.portrait, "TOPLEFT", 0, 0)
     f.pmask:SetPoint("BOTTOMRIGHT", f.portrait, "BOTTOMRIGHT", 0, 0)
     f.portrait:AddMaskTexture(f.pmask)
+    -- solid backing under the portrait (see createFrame)
+    f.portraitBg = f:CreateTexture(nil, "BACKGROUND", nil, 0)
+    f.portraitBg:SetColorTexture(0.05, 0.05, 0.05, 1)
+    f.portraitBg:SetAllPoints(f.portrait)
+    f.portraitBg:AddMaskTexture(f.pmask)
 
     f.border = f:CreateTexture(nil, "BACKGROUND", nil, 3)
     f.border:SetTexelSnappingBias(0)
     f.border:SetSnapToPixelGrid(false)
-    if hasAtlas(TOT_PREFIX) then
-        stockAtlas(f.border, TOT_PREFIX, true)
-        f.border:SetPoint("CENTER", f, "CENTER", 0, 0)
-    else
-        f.border:SetColorTexture(0, 0, 0, 0.5)
-        f.border:SetSize(110, 40)
-        f.border:SetPoint("CENTER", f, "CENTER", 0, 0)
-    end
 
-    -- bars
+    -- bars (sized, placed and masked by applySmallLayout)
     f.hp, f.hpMask = newBar(f)
-    f.hpMaskOn = layoutBar(f.hp, f.hpMask, 70, 10, "TOPLEFT", f, "TOPLEFT", 44, -17, SMALL_MASK_HEALTH, -29, 3)
     f.mp, f.mpMask = newBar(f)
-    f.mpMaskOn = layoutBar(f.mp, f.mpMask, 74, 7, "TOPLEFT", f, "TOPLEFT", 40, -28, SMALL_MASK_MANA, -27, 4)
 
     -- text
     local ov = CreateFrame("Frame", nil, f)
@@ -1339,52 +1656,41 @@ local function createSmallFrame(unit)
     f.name:SetPoint("TOPLEFT", f.portrait, "TOPRIGHT", 2, 0)
     f.level = ov:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")   -- not shown on this frame, kept so shared code works
     f.level:Hide()
-    -- scaled-down corner accent on the small portrait ring (37px vs the player's 60px)
-    if hasAtlas(PLAYER_PREFIX .. "-CornerEmbellishment") then
-        f.corner = ov:CreateTexture(nil, "OVERLAY", nil, 1)
-        f.corner:SetAtlas(PLAYER_PREFIX .. "-CornerEmbellishment", true)
-        local w, h = f.corner:GetSize()
-        if type(w) == "number" and type(h) == "number" and w > 0 then f.corner:SetSize(w * 0.62, h * 0.62) end
-        f.corner:SetPoint("TOPLEFT", f, "TOPLEFT", 26.3, -26.3)
-    end
+    f.ov = ov
 
-    f:HookScript("OnEnter", function(self) self.hover = true end)
-    f:HookScript("OnLeave", function(self)
-        self.hover = false; self.hoverHP = false; self.hoverMP = false; refreshText(self)
-    end)
-    -- "show on mouseover" works per bar: numbers appear only on the bar under the cursor
-    f:HookScript("OnUpdate", function(self)
-        if not self.hover then return end
-        local hp, mp = false, false
-        pcall(function()
-            local cx, cy = GetCursorPosition()
-            local function over(bar)
-                local sc = bar:GetEffectiveScale()
-                local l, b, w, h = bar:GetRect()
-                if not (l and sc and sc > 0) then return false end
-                local x, y = cx / sc, cy / sc
-                return x >= l and x <= l + w and y >= b and y <= b + h
-            end
-            hp = over(self.hp)
-            mp = over(self.mp)
-            if not hp and not mp then
-                hp = MouseIsOver(self.hp) and true or false
-                mp = MouseIsOver(self.mp) and true or false
+    addHover(f)
+
+    -- Compound units (targettarget, focustarget) get no unit events, so while shown they are polled:
+    -- bars every tick, name / portrait only when the unit changes. A secret GUID can't be compared,
+    -- so that case counts as changed (repaint rather than show stale info).
+    if unit == "targettarget" or unit == "focustarget" then
+        local acc = 0
+        f:HookScript("OnUpdate", function(self, dt)
+            acc = acc + dt
+            if acc < POLL_INTERVAL then return end
+            acc = 0
+            local u = self.wfUnit
+            if not UnitExists(u) then return end
+            local guid = UnitGUID(u)
+            local ok, same = pcall(function() return guid == self.lastGUID end)
+            if not (ok and same) then
+                self.lastGUID = guid
+                pcall(updateAll, self)
+            else
+                pcall(updateHealth, self)
+                pcall(updatePower, self)
             end
         end)
-        if hp ~= self.hoverHP or mp ~= self.hoverMP then
-            self.hoverHP, self.hoverMP = hp, mp
-            refreshText(self)
-        end
-    end)
+    end
 
     f:SetScript("OnEvent", function(self, event)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then updateHealth(self)
         elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
+        elseif event == "UNIT_AURA" then updateAuras(self)
         else updateAll(self) end
     end)
     for _, e in ipairs({ "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
-                         "UNIT_NAME_UPDATE", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION" }) do
+                         "UNIT_NAME_UPDATE", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA" }) do
         pcall(f.RegisterUnitEvent, f, e, unit)
     end
     if unit == "pet" then
@@ -1392,6 +1698,10 @@ local function createSmallFrame(unit)
     elseif unit == "focustarget" then
         pcall(f.RegisterUnitEvent, f, "UNIT_TARGET", "focus")
         f:RegisterEvent("PLAYER_FOCUS_CHANGED")
+    elseif unit:match("^party") then
+        -- who is in the group, and who leads it
+        f:RegisterEvent("GROUP_ROSTER_UPDATE")
+        f:RegisterEvent("PARTY_LEADER_CHANGED")
     else
         pcall(f.RegisterUnitEvent, f, "UNIT_TARGET", "target")   -- the target changed who it is targeting
     end
@@ -1404,159 +1714,163 @@ local function createSmallFrame(unit)
 end
 
 ---------------------------------------------------------------------------
+-- Party frames: the small frame four times (party1-4), stacked in one movable container. Like
+-- Blizzard's, they show in a party and hide in a raid; each frame shows only while its member exists.
+---------------------------------------------------------------------------
+local PARTY_VISIBILITY = "[group:raid] hide; [group:party] show; hide"
+
+local function createParty()
+    local box = CreateFrame("Frame", "WebbyFrames_Party", UIParent, "SecureHandlerStateTemplate")
+    box:SetSize(120, 49 * #PARTY + PARTY_GAP * (#PARTY - 1))
+    box:SetFrameStrata("LOW")
+    box:SetClampedToScreen(true)
+    box:SetMovable(true)
+    frames.party = box
+    for i, unit in ipairs(PARTY) do
+        createSmallFrame(unit)
+        local f = frames[unit]
+        frames[unit] = nil          -- reached through partyFrames; their options are under "party"
+        f.baseUnit = "party"
+        f.partyIndex = i
+        f:SetParent(box)
+        -- party leader crown, at the top left of the portrait
+        f.leaderIcon = f.ov:CreateTexture(nil, "OVERLAY", nil, 6)
+        f.leaderIcon:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
+        f.leaderIcon:SetSize(16, 16)
+        f.leaderIcon:SetPoint("CENTER", f.portrait, "TOPLEFT", 4, -2)
+        f.leaderIcon:Hide()
+        partyFrames[i] = f
+    end
+    RegisterAttributeDriver(box, "state-visibility", PARTY_VISIBILITY)
+end
+
+---------------------------------------------------------------------------
 -- Edit Mode (LibEditMode)
 ---------------------------------------------------------------------------
 -- Target and focus only exist while you have one, so while Edit Mode is open
 -- they show the player's data as a stand-in, to give you something to move.
+local function sampleFrames()
+    local list = {}
+    for _, unit in ipairs({ "target", "targettarget", "focus", "focustarget", "pet" }) do
+        if frames[unit] then list[#list + 1] = frames[unit] end
+    end
+    for _, f in ipairs(partyFrames) do list[#list + 1] = f end
+    return list
+end
+
 local function enterSample()
     if InCombatLockdown() then return end
-    for _, unit in ipairs({ "target", "targettarget", "focus", "focustarget", "pet" }) do
-        local f = frames[unit]
-        if f then
-            UnregisterUnitWatch(f)
-            f.unit = "player"
-            f:Show()
-            updateAll(f)
-        end
+    -- the party container is shown whatever the group, so it can be moved
+    if frames.party then UnregisterAttributeDriver(frames.party, "state-visibility"); frames.party:Show() end
+    for _, f in ipairs(sampleFrames()) do
+        UnregisterUnitWatch(f)
+        f.wfUnit = "player"
+        f:Show()
+        updateAll(f)
     end
 end
 
 local function exitSample()
     if InCombatLockdown() then return end
-    for _, unit in ipairs({ "target", "targettarget", "focus", "focustarget", "pet" }) do
-        local f = frames[unit]
-        if f then
-            f.unit = f.baseUnit
-            RegisterUnitWatch(f)
-            updateAll(f)
+    for _, f in ipairs(sampleFrames()) do
+        f.wfUnit = f.partyIndex and PARTY[f.partyIndex] or f.baseUnit
+        RegisterUnitWatch(f)
+        updateAll(f)
+    end
+    if frames.party then RegisterAttributeDriver(frames.party, "state-visibility", PARTY_VISIBILITY) end
+end
+
+-- defined with the actions and settings below; used by the dialog buttons
+local resetFrame, copySettings, openSettings
+
+-- Snapping in Edit Mode: when a frame is dropped within SNAP_DIST of another Webby frame, one of
+-- Blizzard's Edit Mode frames, or the screen's centre lines, its edges (or centre) line up with them.
+-- A frame's visible box is its border art, not the larger clickable button.
+local SNAP_DIST = 10
+
+local function boxOf(fr)
+    local r = fr.border or fr
+    local l, b, w, h = r:GetRect()
+    if not l then return end
+    local s = r:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    return l * s, b * s, (l + w) * s, (b + h) * s
+end
+
+local function snapTargets(self)
+    local list = {}
+    for _, unit in ipairs(OPTION_UNITS) do
+        local o = frames[unit]
+        if o and o ~= self and o:IsVisible() then list[#list + 1] = o end
+    end
+    pcall(function()
+        for _, o in ipairs(EditModeManagerFrame.registeredSystemFrames or {}) do
+            if o:IsVisible() then list[#list + 1] = o end
+        end
+    end)
+    return list
+end
+
+-- Returns the snapped TOPLEFT offsets (in the frame's own scale), or nil if nothing was in reach.
+local function snapFrame(f)
+    local snapOn = true
+    pcall(function() if EditModeManagerFrame.IsSnapEnabled then snapOn = EditModeManagerFrame:IsSnapEnabled() end end)
+    if not snapOn then return end
+    local l, b, r, t = boxOf(f)
+    if not l then return end
+    local dx, dy
+    local function try(best, from, to)
+        local d = to - from
+        if math.abs(d) <= SNAP_DIST and (not best or math.abs(d) < math.abs(best)) then return d end
+        return best
+    end
+    for _, o in ipairs(snapTargets(f)) do
+        local ol, ob, orr, ot = boxOf(o)
+        if ol then
+            for _, x in ipairs({ ol, orr }) do dx = try(dx, l, x); dx = try(dx, r, x) end
+            dx = try(dx, (l + r) / 2, (ol + orr) / 2)
+            for _, y in ipairs({ ob, ot }) do dy = try(dy, b, y); dy = try(dy, t, y) end
+            dy = try(dy, (b + t) / 2, (ob + ot) / 2)
         end
     end
+    local W, H = UIParent:GetSize()
+    dx = try(dx, (l + r) / 2, W / 2)
+    dy = try(dy, (b + t) / 2, H / 2)
+    if not (dx or dy) then return end
+    -- move the whole frame by the same amount its box moved
+    local fs = f:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    local fl, _, _, fh = f:GetRect()
+    if not fl then return end
+    local left = fl * fs + (dx or 0)
+    local top = (f:GetTop() * fs) + (dy or 0)
+    local x, y = left / fs, (top - H) / fs
+    f:ClearAllPoints()
+    f:SetPoint("TOPLEFT", UIParent, "TOPLEFT", x, y)
+    return "TOPLEFT", x, y
 end
 
-local function checkbox(unit, ST, label, key, desc)
-    return {
-        name = label, kind = ST.Checkbox, default = defaultFor(unit, key), desc = desc,
-        get = function() return getSetting(unit, key) end,
-        set = function(_, v) setSetting(unit, key, v and true or false) end,
-    }
-end
-
+-- Edit Mode is only for moving the frames: each frame's dialog has buttons for its options page
+-- (Esc > Options > AddOns > Webby Frames) and for a reset.
 local function setupEditMode()
     local ok, l = pcall(LibStub, "LibEditMode")
     if not ok or not l then
-        print("|cffff9900Webby Frames:|r Edit Mode library failed to load; use the AddOns settings page instead.")
+        print("|cffff9900Webby Frames:|r Edit Mode library failed to load.")
         return
     end
     lib = l
-    local ST = lib.SettingType
 
-    for _, unit in ipairs(UNITS) do
+    for _, unit in ipairs(OPTION_UNITS) do
         local f = frames[unit]
         local d = DEFAULT_POS[unit]
         lib:AddFrame(f, function(_, layoutName, point, x, y)
+            local sp, sx, sy = snapFrame(f)
+            if sp then point, x, y = sp, sx, sy end
             local u = unitData(unit, true, layoutName)
             u.point, u.x, u.y = point, x, y
         end, { point = d.point, x = d.x, y = d.y }, "Webby " .. UNIT_LABEL[unit] .. " Frame")
-
-        local list = {
-            {
-                name = "Scale", kind = ST.Slider, default = 1,
-                minValue = 0.5, maxValue = 2, valueStep = 0.05,
-                formatter = function(v) return math.floor(v * 100 + 0.5) / 100 end,
-                get = function() return getSetting(unit, "scale") end,
-                set = function(_, v) setSetting(unit, "scale", v) end,
-            },
-            checkbox(unit, ST, "Show name", "showName"),
-            checkbox(unit, ST, "Corner accent", "cornerAccent"),
-            checkbox(unit, ST, "PvP flag indicator", "showPvP"),
-            unit ~= "player" and checkbox(unit, ST, "Flash on interruptible cast", "flashInterrupt", "Pulse the frame red while the unit casts a spell you can interrupt.") or false,
-            unit ~= "player" and checkbox(unit, ST, "Threat indicator", "showThreat", "A small box with your threat percentage, coloured by threat status, on hostile units.") or false,
-            unit == "player" and checkbox(unit, ST, "Combat indicator", "showCombat") or false,
-            unit == "player" and checkbox(unit, ST, "Resting indicator", "showRest") or false,
-            hasSideOption(unit) and {
-                name = "Portrait side", kind = ST.Dropdown, default = "left",
-                desc = "Which side of the frame the portrait sits on.",
-                values = { { text = "Left", value = "left" }, { text = "Right", value = "right" } },
-                get = function() return getSetting(unit, "portraitSide") end,
-                set = function(_, v) setSetting(unit, "portraitSide", v) end,
-            } or false,
-            {
-                name = "Bar text", kind = ST.Dropdown, default = defaultFor(unit, "textMode"),
-                desc = "When the numbers on the bars are shown. Mouseover works per bar: only the bar under the cursor shows its number.",
-                values = {
-                    { text = "Always show", value = "always" },
-                    { text = "Show on mouseover", value = "mouseover" },
-                    { text = "Off", value = "off" },
-                },
-                get = function() return getSetting(unit, "textMode") end,
-                set = function(_, v) setSetting(unit, "textMode", v) end,
-            },
-            {
-                name = "Bar texture", kind = ST.Dropdown, default = "default",
-                desc = "The fill texture of the health and power bars.",
-                values = function()
-                    local v = {}
-                    for _, c in ipairs(textureChoices()) do v[#v + 1] = { text = c[2], value = c[1] } end
-                    return v
-                end,
-                get = function() return getSetting(unit, "barTexture") end,
-                set = function(_, v) setSetting(unit, "barTexture", v) end,
-            },
-            {
-                name = "Font", kind = ST.Dropdown, default = "default",
-                desc = "Font for the name and bar numbers. Each entry previews in its own font.",
-                values = function()
-                    local v = {}
-                    for _, c in ipairs(fontChoices()) do v[#v + 1] = { text = c[2], value = c[1] } end
-                    return v
-                end,
-                generator = function(_, root)
-                    for _, c in ipairs(fontChoices()) do
-                        local value, text, path = c[1], c[2], c[3]
-                        local r = root:CreateRadio(text,
-                            function() return getSetting(unit, "font") == value end,
-                            function() setSetting(unit, "font", value) end)
-                        pcall(function()
-                            r:AddInitializer(function(button)
-                                local fs = button.fontString or button.Text
-                                if fs and path then pcall(fs.SetFont, fs, path, 12, "") end
-                            end)
-                        end)
-                    end
-                end,
-                get = function() return getSetting(unit, "font") end,
-                set = function(_, v) setSetting(unit, "font", v) end,
-            },
-            {
-                name = "Bar text format", kind = ST.Dropdown, default = defaultFor(unit, "textFormat"),
-                desc = "Totals (12.3K), percentages (85%), or both.",
-                values = {
-                    { text = "Total", value = "value" },
-                    { text = "Percentage", value = "percent" },
-                    { text = "Both", value = "both" },
-                },
-                get = function() return getSetting(unit, "textFormat") end,
-                set = function(_, v) setSetting(unit, "textFormat", v) end,
-            },
-            checkbox(unit, ST, "Class colour for players, reaction colour for NPCs", "smartColor",
-                "Players always use their class colour. NPCs use reaction colour (friend, neutral, hostile)."),
-            checkbox(unit, ST, "Class colour", "classColor", "Colour the health bar by class (players only)."),
-            checkbox(unit, ST, "Reaction colour", "reactionColor", "Colour the health bar by friend, neutral or hostile."),
-            {
-                name = "Health colour fade", kind = ST.Dropdown, default = "off",
-                desc = "Change the health bar colour as health drops.",
-                values = {
-                    { text = "Off", value = "off" },
-                    { text = "Green, yellow, orange, red", value = "classic" },
-                    { text = "Your colour, yellow, orange, red", value = "reactive" },
-                },
-                get = function() return getSetting(unit, "healthFade") end,
-                set = function(_, v) setSetting(unit, "healthFade", v) end,
-            },
-        }
-        local compact = {}
-        for i = 1, 12 do if list[i] then compact[#compact + 1] = list[i] end end
-        lib:AddFrameSettings(f, compact)
+        pcall(lib.AddFrameSettingsButtons, lib, f, {
+            { text = "Options", click = function() openSettings(unit) end },
+            { text = "Reset frame", click = function() resetFrame(unit) end },
+        })
     end
 
     lib:RegisterCallback("layout", function(layoutName)
@@ -1570,13 +1884,19 @@ end
 ---------------------------------------------------------------------------
 -- Actions used by the settings pages and slash commands
 ---------------------------------------------------------------------------
-local COPY_KEYS = { "scale", "showName", "cornerAccent", "portraitSide", "textMode", "textFormat", "barTexture", "font",  "showCombat", "showRest", "showPvP", "flashInterrupt", "showThreat",
-                    "smartColor", "classColor", "reactionColor", "healthFade" }
+local COPY_KEYS = { "scale", "showName", "cornerAccent", "textMode", "textFormat", "barTexture", "font", "flashInterrupt", "showThreat",
+                    "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraPerRow", "auraMax", "auraPos",
+                    "colorMode", "healthFade" }
 
-local function resetFrame(unit)
+function resetFrame(unit)
     if InCombatLockdown() then print("|cff33ccffWebby Frames:|r can't reset in combat."); return end
     local l = DB.layouts and DB.layouts[activeLayout]
     if l then l[unit] = nil end
+    if unit == "party" then
+        for _, pf in ipairs(partyFrames) do pf.layoutLeft = nil end
+        applyParty()
+        return
+    end
     local f = frames[unit]
     if f then
         f.layoutLeft = nil            -- force the layout to be rebuilt
@@ -1586,13 +1906,13 @@ local function resetFrame(unit)
     end
 end
 
-local function copySettings(from, to)
+function copySettings(from, to)
     if InCombatLockdown() then print("|cff33ccffWebby Frames:|r can't copy in combat."); return end
     for _, key in ipairs(COPY_KEYS) do
         local v = getSetting(from, key)
-        if from == "player" and key == "portraitSide" then v = nil end   -- the player frame has no side option
         if v ~= nil then unitData(to, true)[key] = v end
     end
+    if to == "party" then applyParty(); return end
     local f = frames[to]
     if f then
         f.layoutLeft = nil
@@ -1611,19 +1931,10 @@ local function openEditMode()
 end
 
 ---------------------------------------------------------------------------
--- Settings pages (Esc > Options > AddOns > Webby Frames)
---   General, Player, Target, Focus
+-- Settings (Esc > Options > AddOns > Webby Frames): a General page, plus one page per frame with
+-- its options in four sections. Edit Mode is only for moving the frames.
 ---------------------------------------------------------------------------
-local TEXT_MODES   = { { "always", "Always show" }, { "mouseover", "Show on mouseover" }, { "off", "Off" } }
-local TEXT_FORMATS = { { "value", "Total  (12.3K)" }, { "percent", "Percentage  (85%)" }, { "both", "Both  (12.3K (85%))" } }
-local SIDES        = { { "left", "Left" }, { "right", "Right" } }
-
-local function unitProxy(unit)
-    return setmetatable({}, {
-        __index = function(_, k) return getSetting(unit, k) end,
-        __newindex = function(_, k, v) setSetting(unit, k, v) end,
-    })
-end
+local unitPages = {}    -- unit -> settings subcategory
 
 local function addonVersion()
     local v
@@ -1631,54 +1942,141 @@ local function addonVersion()
     return v or "?"
 end
 
-local function openSettings()
-    if settingsCategory and Settings and Settings.OpenToCategory then
-        Settings.OpenToCategory(settingsCategory:GetID())
+function openSettings(unit)
+    local cat = (unit and unitPages[unit]) or settingsCategory
+    if cat and Settings and Settings.OpenToCategory then
+        pcall(function()
+            if EditModeManagerFrame and EditModeManagerFrame:IsShown() then HideUIPanel(EditModeManagerFrame) end
+        end)
+        Settings.OpenToCategory(cat:GetID())
     else
-        print("|cff33ccffWebby Frames:|r settings page not available. Use Edit Mode to move and scale the frames.")
+        print("|cff33ccffWebby Frames:|r the settings page isn't available.")
     end
 end
+
+-- Collapsible sections: Blizzard's header flips its `expanded` flag when clicked, but on this client the
+-- list doesn't re-filter its rows until the page is shown again. So while the options are open, a
+-- watcher checks every section's flag and, when one changes, shows the page again (the same thing a
+-- page switch does) and puts the scroll position back.
+local sections = {}          -- every section initializer
+local function sectionData(sec) return sec.data or (sec.GetData and sec:GetData()) end
+
+local function repaintSettings()
+    pcall(function()
+        local list = SettingsPanel:GetSettingsList()
+        local box = list and list.ScrollBox
+        local pct = box and box.GetScrollPercentage and box:GetScrollPercentage()
+        SettingsPanel:SelectCategory(SettingsPanel:GetCurrentCategory(), true)
+        if pct and box.SetScrollPercentage then box:SetScrollPercentage(pct) end
+    end)
+end
+
+-- Makes each visible section header show + when closed and - when open (the header doesn't redraw its
+-- own icon on this client either).
+local isSection = {}
+local function refreshSectionIcons()
+    pcall(function()
+        local box = SettingsPanel:GetSettingsList().ScrollBox
+        box:ForEachFrame(function(frame, elementData)
+            if not isSection[elementData] then return end
+            local data = sectionData(elementData)
+            local open = type(data) == "table" and data.expanded and true or false
+            -- frames are recycled between rows, so set the icon every time rather than remembering it
+            if frame.webbyOpen ~= open and frame.OnExpandedChanged then pcall(frame.OnExpandedChanged, frame, open) end
+            frame.webbyOpen = open
+            local icon = frame.Button and frame.Button.Right
+            if icon and icon.SetAtlas then
+                pcall(icon.SetAtlas, icon, open and "Options_ListExpand_Right_Expanded" or "Options_ListExpand_Right", true)
+            end
+        end)
+    end)
+end
+
+local sectionWatch = CreateFrame("Frame")
+local watchElapsed = 0
+sectionWatch:SetScript("OnUpdate", function(_, dt)
+    watchElapsed = watchElapsed + dt
+    if watchElapsed < 0.1 then return end
+    watchElapsed = 0
+    if not (SettingsPanel and SettingsPanel:IsShown()) then return end
+    local changed = false
+    for _, sec in ipairs(sections) do
+        local data = sectionData(sec)
+        local now = type(data) == "table" and data.expanded and true or false
+        if sec.webbyWas ~= now then sec.webbyWas = now; changed = true end
+    end
+    if changed then repaintSettings() end
+    refreshSectionIcons()
+end)
 
 local function buildSettings()
     local root, rootLayout = Settings.RegisterVerticalLayoutCategory("Webby Frames")
     settingsCategory = root
 
-    -- small builders; every setting reads and writes through a proxy table
+    -- Small builders; every setting reads and writes through a proxy table. B.section starts a
+    -- collapsible section (Blizzard's expandable header); the controls added after it only show while
+    -- it is expanded. Without that API the section is a plain header and everything shows.
     local function builders(category, layout, proxy, prefix)
         local B = {}
+        local current
+        local function attach(init)
+            local sec = current
+            if sec and init and init.AddShownPredicate then
+                init:AddShownPredicate(function()
+                    local data = sec.data or (sec.GetData and sec:GetData())
+                    if type(data) ~= "table" then return true end
+                    return data.expanded and true or false
+                end)
+            end
+            return init
+        end
         function B.header(text)
-            if layout and CreateSettingsListSectionHeaderInitializer then
+            current = nil
+            if CreateSettingsListSectionHeaderInitializer then
                 layout:AddInitializer(CreateSettingsListSectionHeaderInitializer(text))
             end
         end
+        function B.section(text, open)
+            if not CreateSettingsExpandableSectionInitializer then B.header(text); return end
+            local sec = CreateSettingsExpandableSectionInitializer(text)
+            local data = sectionData(sec)
+            if type(data) == "table" then data.expanded = open and true or false end
+            sec.webbyWas = open and true or false
+            sections[#sections + 1] = sec      -- watched, see sectionWatch
+            isSection[sec] = true
+            layout:AddInitializer(sec)
+            current = sec
+        end
         function B.check(key, label, tip, default)
             local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.Boolean, label, default)
-            Settings.CreateCheckbox(category, st, tip)
+            attach(Settings.CreateCheckbox(category, st, tip))
         end
-        function B.slider(key, label, tip, default, lo, hi, step)
+        function B.slider(key, label, tip, default, lo, hi, step, fmt)
             local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.Number, label, default)
             local o = Settings.CreateSliderOptions(lo, hi, step)
-            o:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function(v) return string.format(step >= 1 and "%d" or "%.2f", v) end)
-            Settings.CreateSlider(category, st, o, tip)
+            o:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, fmt or function(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end)
+            attach(Settings.CreateSlider(category, st, o, tip))
         end
         function B.dropdown(key, label, tip, default, choices)
             local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.String, label, default)
-            Settings.CreateDropdown(category, st, function()
+            attach(Settings.CreateDropdown(category, st, function()
                 local c = Settings.CreateControlTextContainer()
                 local list = type(choices) == "function" and choices() or choices
                 for _, ch in ipairs(list) do c:Add(ch[1], ch[2]) end
                 return c:GetData()
-            end, tip)
+            end, tip))
         end
         function B.button(label, text, onClick, tip)
-            if layout and CreateSettingsButtonInitializer then
-                layout:AddInitializer(CreateSettingsButtonInitializer(label, text, onClick, tip, true))
+            if CreateSettingsButtonInitializer then
+                local init = CreateSettingsButtonInitializer(label, text, onClick, tip, true)
+                layout:AddInitializer(init)
+                attach(init)
             end
         end
         return B
     end
 
-    -- General -------------------------------------------------------------
+    -- General ------------------------------------------------------------------
     do
         local general = setmetatable({}, {
             __index = function(_, k) if k == "enabled" then return DB.enabled ~= false end end,
@@ -1686,74 +2084,72 @@ local function buildSettings()
         })
         local B = builders(root, rootLayout, general, "WEBBY_general_")
         B.header("Webby Frames  v" .. addonVersion())
-        B.check("enabled", "Enable Webby Frames", "Replaces Blizzard's player, target and focus frames. Needs /reload to take effect.", true)
-        B.header("Layouts and positions")
-        B.button("Edit Mode", "Open Edit Mode", openEditMode,
-            "Drag the frames where you want them. Scale, name, text and colour options are in each frame's Edit Mode dialog too.")
-        B.button("Reset everything", "Reset all frames", function()
-            for _, unit in ipairs(UNITS) do resetFrame(unit) end
-        end, "Puts all three frames back to their defaults (settings and positions) for the current Edit Mode layout.")
-        B.header("Settings are saved per Edit Mode layout, so each layout can have its own positions and options.")
-        B.header("Commands:  /webby  opens this window    /webby edit  opens Edit Mode    /webby reset  resets all frames")
+        B.check("enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames. Needs /reload to take effect.", true)
+        B.button("Move frames", "Open Edit Mode", openEditMode, "Drag the frames where you want them.")
+        B.button("Reset", "Reset all frames", function()
+            for _, unit in ipairs(OPTION_UNITS) do resetFrame(unit) end
+        end, "Puts every frame back to its defaults (options and position) for the current Edit Mode layout.")
+        B.header("Each frame has its own page below. Options are saved per Edit Mode layout.")
     end
 
-    -- one page per frame ----------------------------------------------------
-    local PAGE_TEXT = {
-        player = "Your own frame.",
-        target = "The unit you are targeting.",
-        targettarget = "Who your target is targeting.",
-        focus  = "Your focus target.",
-        pet    = "Your pet.",
-        focustarget = "Who your focus is targeting.",
-    }
-    for _, unit in ipairs(UNITS) do
+    -- one page per frame ---------------------------------------------------------
+    local fontList = function() local l = {}; for _, c in ipairs(fontChoices()) do l[#l + 1] = { c[1], c[2] } end; return l end
+    for _, unit in ipairs(OPTION_UNITS) do
         local sub, subLayout = Settings.RegisterVerticalLayoutSubcategory(root, UNIT_LABEL[unit])
-        local B = builders(sub, subLayout, unitProxy(unit), "WEBBY_" .. unit .. "_")
+        unitPages[unit] = sub
+        local proxy = setmetatable({}, {
+            __index = function(_, k) return getSetting(unit, k) end,
+            __newindex = function(_, k, v) setSetting(unit, k, v) end,
+        })
+        local B = builders(sub, subLayout, proxy, "WEBBY_" .. unit .. "_")
 
-        B.header(UNIT_LABEL[unit] .. " frame  -  " .. PAGE_TEXT[unit])
-
-        B.header("Layout")
-        B.slider("scale", "Scale", "Size of the " .. unit .. " frame.", 1, 0.5, 2, 0.05)
-        if hasSideOption(unit) then
-            B.dropdown("portraitSide", "Portrait side",
-                "Left uses the player-frame art. Right uses Retail's target-frame art with the name plate.", "left", SIDES)
-        end
-        B.check("showName", "Show name", "Show the unit's name (and the name plate on the right-portrait layout).", true)
-        B.check("cornerAccent", "Corner accent", "The small pointed accent on the portrait ring. Off leaves just the level circle.", true)
-        B.check("showPvP", "PvP flag indicator", "Show the faction (or free-for-all) badge beside the portrait while the unit is PvP flagged.", true)
-        if unit ~= "player" and unit ~= "targettarget" and unit ~= "focustarget" and unit ~= "pet" then
-            B.check("flashInterrupt", "Flash on interruptible cast", "Pulse the frame red while the unit casts a spell you can interrupt.", true)
-            B.check("showThreat", "Threat indicator", "A small box with your threat percentage, coloured by threat status, on hostile units.", true)
-        end
-        if unit == "player" then
-            B.check("showCombat", "Combat indicator", "Show the crossed-swords icon on the portrait while you are in combat.", true)
-            B.check("showRest", "Resting indicator", "Show the Zzz icon while you are resting.", true)
+        B.section("Layout", true)
+        B.slider("scale", "Scale", "Size of the frame.", 1, 0.5, 2, 0.05)
+        B.check("showName", "Show name", nil, true)
+        if hasCorner(unit) then
+            B.check("cornerAccent", "Corner accent", "The pointed accent at the bottom of the portrait ring.", true)
         end
 
-        B.header("Bar text")
-        B.dropdown("textMode", "Show numbers", "When the numbers on the bars are shown.", defaultFor(unit, "textMode"), TEXT_MODES)
-        B.dropdown("barTexture", "Bar texture", "Fill texture for the health and power bars. Includes any textures registered with SharedMedia.", "default", textureChoices)
-        B.dropdown("font", "Font", "Font for the name and bar numbers. Includes fonts registered with SharedMedia.", "default",
-            function() local l = {}; for _, c in ipairs(fontChoices()) do l[#l + 1] = { c[1], c[2] } end; return l end)
-        B.dropdown("textFormat", "Number format", "Totals, percentages, or both.", defaultFor(unit, "textFormat"), TEXT_FORMATS)
+        B.section("Bars", false)
+        B.dropdown("barTexture", "Texture", "Fill texture for the health and power bars, including SharedMedia ones.", "default", textureChoices)
+        B.dropdown("textMode", "Numbers", "When the numbers on the bars show. On mouseover, only the bar under the cursor shows its number.",
+            defaultFor(unit, "textMode"), { { "always", "Always" }, { "mouseover", "On mouseover" }, { "off", "Off" } })
+        B.dropdown("textFormat", "Number style", "Totals, percentages, or both.",
+            defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } })
+        B.dropdown("font", "Font", "Font for the name and bar numbers, including SharedMedia ones.", "default", fontList)
 
-        B.header("Health bar colour")
-        B.check("smartColor", "Class colour for players, reaction colour for NPCs",
-            "Players always use their class colour. NPCs use reaction colour (friend, neutral, hostile).", true)
-        B.check("classColor", "Always use class colour", "Colour players by class everywhere. Used if the option above is off.", false)
-        B.check("reactionColor", "Always use reaction colour", "Colour by friend, neutral or hostile everywhere.", false)
-        B.dropdown("healthFade", "Health colour fade", "Change the health bar colour as health drops. \"Green, yellow, red\" is the classic gradient; \"Your colour, yellow, orange, red\" starts from the class / reaction colour.", "off",
-            { { "off", "Off" }, { "classic", "Green, yellow, orange, red" }, { "reactive", "Your colour, yellow, orange, red" } })
+        B.section("Colours", false)
+        if unit ~= "pet" then   -- the pet bar is always green
+            B.dropdown("colorMode", "Health colour", "How the health bar is coloured.", "smart", COLOR_MODES)
+        end
+        B.dropdown("healthFade", "Low health fade", "Shift the health bar colour as health drops.", "off",
+            { { "off", "Off" }, { "classic", "Green to red" }, { "reactive", "Health colour to red" } })
 
-        B.header("Actions")
+        B.section("Buffs and debuffs", false)
+        local whole = function(v) return string.format("%d", math.floor(v + 0.5)) end
+        B.check("auraBuffs", "Show buffs", nil, defaultFor(unit, "auraBuffs"))
+        B.check("auraDebuffs", "Show debuffs", nil, defaultFor(unit, "auraDebuffs"))
+        B.check("auraMine", "Only my debuffs", "Show only the debuffs you applied.", false)
+        B.dropdown("auraPos", "Position", "Where the icons sit.", defaultFor(unit, "auraPos"),
+            { { "below", "Below the frame" }, { "above", "Above the frame" }, { "right", "Right of the frame" } })
+        B.slider("auraSize", "Icon size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, whole)
+        B.slider("auraPerRow", "Icons per row", nil, defaultFor(unit, "auraPerRow"), 1, 16, 1, whole)
+        B.slider("auraMax", "Most of each", "How many buffs, and how many debuffs, can show.", defaultFor(unit, "auraMax"), 1, 32, 1, whole)
+
+        if hasCastAndThreat(unit) then
+            B.section("Combat", false)
+            B.check("flashInterrupt", "Interrupt flash", "Pulse the frame red while the unit casts a spell you can interrupt.", true)
+            B.check("showThreat", "Threat", "Your threat on hostile units: the frame glows yellow, orange or red, and your threat % shows by the name.", true)
+        end
+
+        B.section("Reset and copy", false)
         if unit ~= "player" then
-            B.button("Copy settings", "Copy from Player frame", function() copySettings("player", unit) end,
-                "Copies scale, name, text and colour options from the player frame (not the position).")
+            B.button("Copy", "Copy from player", function() copySettings("player", unit) end,
+                "Copies the player frame's options to this frame (not its position).")
         end
         B.button("Reset", "Reset this frame", function() resetFrame(unit) end,
             "Puts this frame back to its defaults, including its position, for the current Edit Mode layout.")
     end
-
     Settings.RegisterAddOnCategory(root)
 end
 
@@ -1784,6 +2180,9 @@ end
 local function hideAllBlizzard()
     hideBlizzard(_G.PlayerFrame); hideBlizzard(_G.TargetFrame); hideBlizzard(_G.FocusFrame)
     hideBlizzard(_G.TargetFrameToT); hideBlizzard(_G.FocusFrameToT); hideBlizzard(_G.PetFrame)
+    -- Blizzard's party frames (not the raid-style ones, if you use those)
+    hideBlizzard(_G.PartyFrame)
+    for i = 1, 4 do hideBlizzard(_G["PartyMemberFrame" .. i]) end
 end
 
 local init = CreateFrame("Frame")
@@ -1804,20 +2203,23 @@ init:SetScript("OnEvent", function(_, event)
     for _, unit in ipairs(UNITS) do
         if unit == "targettarget" or unit == "focustarget" or unit == "pet" then createSmallFrame(unit) else createFrame(unit) end
     end
+    createParty()
     hideAllBlizzard()
     C_Timer.After(2, hideAllBlizzard)
     setupEditMode()
     applyAll()
-    print("|cff33ccffWebby Frames|r v" .. addonVersion() .. " loaded. Type |cff33ccff/webby|r for settings.")
+    print("|cff33ccffWebby Frames|r v" .. addonVersion() .. " loaded. Type |cff33ccff/webby|r for options.")
 end)
 
 SLASH_WEBBYFRAMES1 = "/webby"
 SlashCmdList.WEBBYFRAMES = function(msg)
     msg = (msg or ""):lower():match("^%s*(%S*)") or ""
-    if msg == "edit" then
+    if msg == "" or msg == "options" then
+        openSettings()
+    elseif msg == "edit" then
         openEditMode()
     elseif msg == "reset" then
-        for _, unit in ipairs(UNITS) do resetFrame(unit) end
+        for _, unit in ipairs(OPTION_UNITS) do resetFrame(unit) end
         print("|cff33ccffWebby Frames:|r frames reset.")
     elseif msg == "debug" then
         for _, u in ipairs(UNITS) do
@@ -1834,10 +2236,21 @@ SlashCmdList.WEBBYFRAMES = function(msg)
             local f = frames[u]
             local c = f and f.corner
             if c then
-                local p, _, rp, x, y = c:GetPoint()
-                local ok, l, t, _, _, r, b = pcall(c.GetTexCoord, c)
-                print("corner", u, "shown", tostring(c:IsShown()), "w", c:GetWidth(), "h", c:GetHeight(), "pt", tostring(p), tostring(x), tostring(y),
-                    "tex", tostring(c:GetTexture()), "atlas", tostring(c:GetAtlas()), "left", tostring(f.layoutLeft), "setting", tostring(getSetting(u, "cornerAccent")))
+                print("corner", u, "shown", tostring(c:IsShown()), "visible", tostring(c:IsVisible()),
+                    "left", tostring(f.layoutLeft), "setting", tostring(getSetting(u, "cornerAccent")),
+                    "back", tostring(f.cornerBack and f.cornerBack:IsShown()))
+            end
+        end
+        -- mana bar: mask on/off, fill art, value, and the mask's size and tex coords
+        for _, u in ipairs(UNITS) do
+            local f = frames[u]
+            if f and f.mp then
+                local okv, lo, hi = pcall(f.mp.GetMinMaxValues, f.mp)
+                local okc, a, b, _, _, c = pcall(f.mpMask.GetTexCoord, f.mpMask)
+                print("mana", u, "maskOn", tostring(f.mpMaskOn), "art", tostring(f.mpCurrent),
+                    "shown", tostring(f.mp:IsShown()), "w", math.floor(f.mp:GetWidth()), "max", okv and tostring(hi) or "?",
+                    "mask", math.floor(f.mpMask:GetWidth()) .. "x" .. math.floor(f.mpMask:GetHeight()),
+                    "tc", okc and string.format("%.3f %.3f %.3f", a or -1, b or -1, c or -1) or "?", "maskAtlas", tostring(f.mpMask:GetAtlas()))
             end
         end
         local pf = _G.PlayerFrame
@@ -1856,8 +2269,8 @@ SlashCmdList.WEBBYFRAMES = function(msg)
             print((hasAtlas(n) and "|cff00ff00OK|r  " or "|cffff0000MISSING|r  ") .. n .. extra)
         end
     elseif msg == "help" then
-        print("|cff33ccffWebby Frames:|r /webby (settings)   /webby atlas (art check)   /webby edit (Edit Mode)   /webby reset (reset all frames)")
+        print("|cff33ccffWebby Frames:|r /webby (options)   /webby edit (move the frames)   /webby reset (reset all frames)   /webby debug")
     else
-        openSettings()
+        print("|cff33ccffWebby Frames:|r unknown command. Type |cff33ccff/webby help|r.")
     end
 end
