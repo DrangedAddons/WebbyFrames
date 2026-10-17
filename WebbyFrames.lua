@@ -72,6 +72,8 @@ local DEFAULT_SETTINGS = {
     auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below", auraTimers = true,
     -- cast bar (target and focus): Blizzard's own bar, moved under our frame
     castShow = true, castText = true, castIcon = true, castBorder = "bars",
+    -- health bar extras
+    smoothBars = true, healPrediction = true, absorbs = true,
 }
 
 -- fallback power bar art names if PowerBarColor doesn't supply one
@@ -525,7 +527,111 @@ end
 
 local refreshText   -- defined with the settings code below
 
+-- Sets a bar's value, sliding to it (Blizzard's own interpolation, so protected values are fine) when
+-- the frame's "Smooth bars" option is on and the client supports it.
+local SMOOTH = Enum and Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
+local function setBarValue(f, bar, value)
+    if SMOOTH and getSetting(f.baseUnit, "smoothBars") then
+        if pcall(bar.SetValue, bar, value, SMOOTH) then return end
+    end
+    bar:SetValue(value)
+end
+
+---------------------------------------------------------------------------
+-- Health bar extras: incoming heals and absorb shields past the end of the health fill, and healing
+-- absorbs eating back into it. Secret-safe: each is a bar as long as the health bar, anchored to the
+-- health fill's moving end (no maths on the values), with the same min / max; the values only ever go
+-- to setters. They're clipped to the health bar, so nothing spills past its end.
+---------------------------------------------------------------------------
+local PLAIN_FILL = "Interface\\TargetingFrame\\UI-StatusBar"
+
+local function newOverlay(f, r, g, b, a, reverse)
+    local bar = CreateFrame("StatusBar", nil, f.predClip)
+    bar:SetFrameLevel(f.predClip:GetFrameLevel())
+    bar:SetStatusBarTexture(PLAIN_FILL)
+    bar.color = { r, g, b, a }
+    if reverse then bar:SetReverseFill(true) end
+    bar:SetMinMaxValues(0, 1)
+    bar:SetValue(0)
+    return bar
+end
+
+-- The overlays wear the frame's own bar texture (a chosen SharedMedia one, or the frame's tintable
+-- default fill), tinted, with the health bar's shape mask.
+local function styleOverlay(f, bar)
+    local tex = f.customTex or f.hpStatusAtlas or PLAIN_FILL
+    if bar.tex ~= tex then
+        bar.tex = tex
+        if not pcall(bar.SetStatusBarTexture, bar, tex) or not bar:GetStatusBarTexture() then bar:SetStatusBarTexture(PLAIN_FILL) end
+        bar.masked = nil
+    end
+    local c = bar.color
+    bar:SetStatusBarColor(c[1], c[2], c[3], c[4])
+    pcall(function() bar:GetStatusBarTexture():SetDesaturated(not f.customTex) end)
+    if f.hpMaskOn and not bar.masked then
+        bar.masked = true
+        pcall(function() bar:GetStatusBarTexture():AddMaskTexture(f.hpMask) end)
+    end
+end
+
+local function value(fn, u)
+    local v
+    pcall(function() v = fn(u) end)
+    return v
+end
+
+local function updatePrediction(f)
+    if f.previewing then return end            -- /webby test is showing made-up values
+    local wantHeals = getSetting(f.baseUnit, "healPrediction")
+    local wantAbsorbs = getSetting(f.baseUnit, "absorbs")
+    if not (wantHeals or wantAbsorbs) and not f.predClip then return end
+    if not f.predClip then
+        -- clipped to the health bar, just above its fill
+        f.predClip = CreateFrame("Frame", nil, f.hp)
+        f.predClip:SetAllPoints(f.hp)
+        f.predClip:SetClipsChildren(true)
+        f.predClip:SetFrameLevel(f.hp:GetFrameLevel() + 1)
+        f.healBar = newOverlay(f, 0.1, 0.9, 0.3, 0.5)          -- incoming heals: green
+        f.absorbBar = newOverlay(f, 0.7, 0.9, 1, 0.7)          -- shields: pale blue
+        f.healAbsorbBar = newOverlay(f, 0.9, 0.1, 0.1, 0.6, true)   -- heal absorbs: red, eating back in
+    end
+    for _, bar in ipairs({ f.healBar, f.absorbBar, f.healAbsorbBar }) do styleOverlay(f, bar) end
+    local u = f.wfUnit
+    local fill = f.hp:GetStatusBarTexture()
+    local w = f.hp:GetWidth()
+    -- heals start at the end of the health fill, the shield at the end of the heals
+    f.healBar:ClearAllPoints()
+    f.healBar:SetPoint("TOPLEFT", fill, "TOPRIGHT")
+    f.healBar:SetPoint("BOTTOMLEFT", fill, "BOTTOMRIGHT")
+    f.healBar:SetWidth(w)
+    local healFill = f.healBar:GetStatusBarTexture()
+    f.absorbBar:ClearAllPoints()
+    f.absorbBar:SetPoint("TOPLEFT", healFill, "TOPRIGHT")
+    f.absorbBar:SetPoint("BOTTOMLEFT", healFill, "BOTTOMRIGHT")
+    f.absorbBar:SetWidth(w)
+    -- healing absorbs run backwards from the end of the health fill
+    f.healAbsorbBar:ClearAllPoints()
+    f.healAbsorbBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT")
+    f.healAbsorbBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+    f.healAbsorbBar:SetWidth(w)
+
+    local max = value(UnitHealthMax, u)
+    local dead = unitStatus(u) ~= nil
+    for _, bar in ipairs({ f.healBar, f.absorbBar, f.healAbsorbBar }) do
+        if max then pcall(bar.SetMinMaxValues, bar, 0, max) end
+    end
+    local heals = (wantHeals and not dead) and value(UnitGetIncomingHeals, u) or nil
+    local absorb = (wantAbsorbs and not dead) and value(UnitGetTotalAbsorbs, u) or nil
+    local healAbsorb = (wantAbsorbs and not dead) and value(UnitGetTotalHealAbsorbs, u) or nil
+    -- (a missing value counts as none; the heal bar stays at 0 so the shield still starts at the health end)
+    if not pcall(setBarValue, f, f.healBar, heals) then f.healBar:SetValue(0) end
+    if not pcall(setBarValue, f, f.absorbBar, absorb) then f.absorbBar:SetValue(0) end
+    if not pcall(setBarValue, f, f.healAbsorbBar, healAbsorb) then f.healAbsorbBar:SetValue(0) end
+end
+
+
 local function updateHealth(f)
+    if f.previewing then return end            -- /webby test is showing made-up values
     local u = f.wfUnit
     if not UnitExists(u) then return end
     local status = unitStatus(u)
@@ -533,12 +639,13 @@ local function updateHealth(f)
     f.hp:SetMinMaxValues(0, UnitHealthMax(u))
     if status == "Offline" then
         -- offline: a full grey bar, as the default UI does
-        f.hp:SetValue(UnitHealthMax(u))
+        setBarValue(f, f.hp, UnitHealthMax(u))
         f.hp:SetStatusBarColor(0.5, 0.5, 0.5, 1)
         pcall(function() f.hp:GetStatusBarTexture():SetDesaturated(true) end)
     else
-        f.hp:SetValue(UnitHealth(u))
+        setBarValue(f, f.hp, UnitHealth(u))
     end
+    pcall(updatePrediction, f)
     if status then f.hpText:SetText(status) else setBarText(f.hpText, f, "hp") end
     if status ~= f.statusText then
         f.statusText = status
@@ -577,7 +684,7 @@ local function updatePower(f)
     pcall(function() f.mp:GetStatusBarTexture():SetDesaturated(false) end)
     f.mp:SetStatusBarColor(pr, pg, pb, 1)
     f.mp:SetMinMaxValues(0, UnitPowerMax(u))
-    f.mp:SetValue(UnitPower(u))
+    setBarValue(f, f.mp, UnitPower(u))
     setBarText(f.mpText, f, "mp")
 end
 
@@ -762,6 +869,11 @@ local function createIndicators(f)
             f.restIcon:Hide()
         end
     end
+    -- party leader crown (shown by updateInfo, placed by placeIndicators)
+    f.leaderIcon = ov:CreateTexture(nil, "OVERLAY", nil, 6)
+    f.leaderIcon:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
+    f.leaderIcon:SetSize(16, 16)
+    f.leaderIcon:Hide()
     f.pvpIcon = ov:CreateTexture(nil, "OVERLAY", nil, 5)
     f.pvpIcon:SetSize(34, 34)
     f.pvpIcon:Hide()
@@ -829,6 +941,11 @@ local function placeIndicators(f)
             f.combatBack:SetSize(22, 22)
             f.combatBack:SetPoint("CENTER", f.combatIcon, "CENTER", 0, 0)
         end
+    end
+    if f.leaderIcon then
+        -- on top of the portrait ring, centred (the outer corner is the PvP badge's, the top right the Zzz's)
+        f.leaderIcon:ClearAllPoints()
+        f.leaderIcon:SetPoint("CENTER", p, "TOP", 0, 1)
     end
     if f.restIcon then
         f.restIcon:ClearAllPoints()
@@ -1852,16 +1969,21 @@ local function createFrame(unit)
         elseif event:find("^UNIT_SPELLCAST") then updateFlash(self)
         elseif event:find("^UNIT_THREAT") then updateThreat(self)
         elseif event == "UNIT_AURA" then updateAuras(self)
+        elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)
     for _, e in ipairs({ "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
-                         "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA" }) do
+                         "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA",
+                         "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_ABSORB_AMOUNT_CHANGED" }) do
         pcall(f.RegisterUnitEvent, f, e, unit)
     end
     -- smooth energy / rage / focus ticks on your own frame
     if isPlayer then pcall(f.RegisterUnitEvent, f, "UNIT_POWER_FREQUENT", unit) end
     f:RegisterEvent("PLAYER_ENTERING_WORLD")
     f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+    -- who leads the group (the crown)
+    f:RegisterEvent("GROUP_ROSTER_UPDATE")
+    f:RegisterEvent("PARTY_LEADER_CHANGED")
     if unit == "target" then f:RegisterEvent("PLAYER_TARGET_CHANGED") end
     if unit == "focus" then f:RegisterEvent("PLAYER_FOCUS_CHANGED") end
 
@@ -1975,10 +2097,12 @@ local function createSmallFrame(unit)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then updateHealth(self)
         elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
         elseif event == "UNIT_AURA" then updateAuras(self)
+        elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)
     for _, e in ipairs({ "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
-                         "UNIT_NAME_UPDATE", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA" }) do
+                         "UNIT_NAME_UPDATE", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA",
+                         "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_ABSORB_AMOUNT_CHANGED" }) do
         pcall(f.RegisterUnitEvent, f, e, unit)
     end
     if unit == "pet" then
@@ -2174,7 +2298,7 @@ end
 ---------------------------------------------------------------------------
 local COPY_KEYS = { "scale", "showName", "cornerAccent", "textMode", "textFormat", "barTexture", "font", "flashInterrupt", "showThreat",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraPerRow", "auraMax", "auraPos", "auraTimers",
-                    "castShow", "castText", "castIcon", "castBorder",
+                    "castShow", "castText", "castIcon", "castBorder", "smoothBars", "healPrediction", "absorbs",
                     "colorMode", "healthFade" }
 
 function resetFrame(unit)
@@ -2406,6 +2530,9 @@ local function buildSettings()
         B.dropdown("textFormat", "Number style", "Totals, percentages, or both.",
             defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } })
         B.dropdown("font", "Font", "Font for the name and bar numbers, including SharedMedia ones.", "default", fontList)
+        B.check("smoothBars", "Smooth bars", "Health and power slide to their new value instead of jumping.", true)
+        B.check("healPrediction", "Incoming heals", "Heals on their way to the unit, shown in green past the end of its health.", true)
+        B.check("absorbs", "Absorb shields", "Damage shields shown past the end of its health, and healing absorbs eating back into it in red.", true)
 
         B.section("Colours", false)
         if unit ~= "pet" then   -- the pet bar is always green
@@ -2565,8 +2692,27 @@ SlashCmdList.WEBBYFRAMES = function(msg)
             local extra = info and (" file=" .. tostring(info.file or info.filename) .. " " .. tostring(info.width) .. "x" .. tostring(info.height)) or ""
             print((hasAtlas(n) and "|cff00ff00OK|r  " or "|cffff0000MISSING|r  ") .. n .. extra)
         end
+    elseif msg == "test" then
+        -- a 10-second preview on your own frame: health slides to 60% (smooth bars), with 20% incoming
+        -- heals, a 15% shield and a 10% heal-absorb; then everything goes back to the real values
+        local f = frames.player
+        if not f then return end
+        pcall(updatePrediction, f)
+        if not f.healBar then print("|cff33ccffWebby Frames:|r turn on Incoming heals or Absorb shields for the player frame first."); return end
+        f.previewing = true
+        f.hp:SetMinMaxValues(0, 100)
+        f.hp:SetValue(100)
+        for _, b in ipairs({ f.healBar, f.absorbBar, f.healAbsorbBar }) do b:SetMinMaxValues(0, 100) end
+        C_Timer.After(0.3, function()
+            setBarValue(f, f.hp, 60)
+            f.healBar:SetValue(getSetting("player", "healPrediction") and 20 or 0)
+            f.absorbBar:SetValue(getSetting("player", "absorbs") and 15 or 0)
+            f.healAbsorbBar:SetValue(getSetting("player", "absorbs") and 10 or 0)
+        end)
+        C_Timer.After(10, function() f.previewing = nil; pcall(updateAll, f) end)
+        print("|cff33ccffWebby Frames:|r previewing heals (green), a shield and a heal-absorb (red) on your frame for 10 seconds.")
     elseif msg == "help" then
-        print("|cff33ccffWebby Frames:|r /webby (options)   /webby edit (move the frames)   /webby reset (reset all frames)   /webby debug")
+        print("|cff33ccffWebby Frames:|r /webby (options)   /webby edit (move the frames)   /webby reset (reset all frames)   /webby test (preview heals and shields)   /webby debug")
     else
         print("|cff33ccffWebby Frames:|r unknown command. Type |cff33ccff/webby help|r.")
     end
