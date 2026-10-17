@@ -48,7 +48,7 @@ local UNIT_DEFAULTS = {
 }
 
 local DEFAULT_SETTINGS = {
-    scale = 1, showName = true, healthFade = false, textMode = "always", textFormat = "value", barTexture = "default", font = "default", showThreat = true,
+    scale = 1, showName = true, healthFade = false, textMode = "always", textFormat = "value", barTexture = "default", font = "default", threatShow = "both",
     -- health bar colour: "smart" (class colour for players, reaction colour for NPCs), "class", "reaction" or "plain"
     colorMode = "smart",
     npcColor = "reaction",   -- hostile NPCs: "reaction" (red), "green" or "custom" (npcColorRGB = { r, g, b })
@@ -185,6 +185,8 @@ local function getSetting(unit, key)
     if key == "auraPos" and v == "right" then v = "custom" end
     if v == nil and key == "petHappy" and u and u.petHappiness == false then return "off" end
     if v == nil and key == "auraTimer" and u and u.auraTimers == false then return "swipe" end
+    -- the threat switch became a choice of glow, number, both or off
+    if v == nil and key == "threatShow" and u and u.showThreat == false then return "off" end
     if v == nil then v = defaultFor(unit, key) end
     return v
 end
@@ -547,6 +549,10 @@ local function applyHealthFade(f, r, g, b)
     -- on: the health colour chosen above (class, reaction or plain green) fades to red as health drops
     if not getSetting(f.baseUnit, "healthFade") then return false end
     if not (UnitHealthPercent and UnitExists(f.wfUnit)) then return false end
+    -- a mob someone else has tagged stays plain grey: its health is no business of yours
+    local tapped
+    pcall(function() tapped = (not UnitPlayerControlled(f.wfUnit)) and UnitIsTapDenied(f.wfUnit) end)
+    if tapped then return false end
     local curve = getFadeCurve(r or 0.1, g or 0.8, b or 0.1)
     if not curve then return false end
     local ok = pcall(function()
@@ -856,6 +862,8 @@ local function updateInfo(f)
     end
     if f.plate then
         local r, g, b = reactionColorOf(u)
+        -- a mob someone else has tagged: grey, like its health bar
+        pcall(function() if (not UnitPlayerControlled(u)) and UnitIsTapDenied(u) then r, g, b = 0.5, 0.5, 0.5 end end)
         if r then f.plate:SetVertexColor(r, g, b) else f.plate:SetVertexColor(1, 1, 1) end
     end
     -- gold dragon around elite portraits, silver for rares, the big one for world bosses
@@ -1185,9 +1193,12 @@ end
 
 local function updateThreat(f)
     if not f.threatText then return end
+    -- what to show: "both" (glow and %), "glow", "number" or "off"
+    local mode = getSetting(f.baseUnit, "threatShow")
+    local wantGlow, wantNumber = (mode == "both" or mode == "glow"), (mode == "both" or mode == "number")
     local status, pct
     pcall(function()
-        if not getSetting(f.baseUnit, "showThreat") then return end
+        if not (wantGlow or wantNumber) then return end
         local u = f.wfUnit
         if not UnitExists(u) or not UnitCanAttack("player", u) then return end
         status = UnitThreatSituation("player", u)
@@ -1197,13 +1208,15 @@ local function updateThreat(f)
     -- The percent may be a secret number: it only ever goes to SetFormattedText. The glow shows from
     -- status 1 up (about to pull, tanking insecurely, tanking); a status that can't be compared shows none.
     local shown, glowOn, has = false, false, false
-    pcall(function() has = (status ~= nil and pct ~= nil) end)
+    pcall(function() has = (status ~= nil) end)
     if has then
         local r, g, b = 0.7, 0.7, 0.7
         pcall(function() if GetThreatStatusColor then r, g, b = GetThreatStatusColor(status) end end)
-        shown = pcall(function() f.threatText:SetFormattedText("%d%%", pct) end)
-        if shown then f.threatText:SetTextColor(r, g, b) end
-        pcall(function() glowOn = status >= 1 end)
+        if wantNumber then
+            pcall(function() if pct ~= nil then shown = pcall(f.threatText.SetFormattedText, f.threatText, "%d%%", pct) end end)
+            if shown then f.threatText:SetTextColor(r, g, b) end
+        end
+        if wantGlow then pcall(function() glowOn = status >= 1 end) end
         if glowOn then f.threatGlow:SetVertexColor(r, g, b) end
     end
     f.threatText:SetShown(shown)
@@ -3003,7 +3016,7 @@ end
 ---------------------------------------------------------------------------
 -- Actions used by the settings pages and slash commands
 ---------------------------------------------------------------------------
-local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "showThreat",
+local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "smoothBars", "healPrediction", "absorbs",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB" }
@@ -3523,7 +3536,8 @@ local function buildSettings()
             B.under(cast, isOn("castShow"),
                 B.check("castText", "Spell name", nil, true),
                 B.check("castIcon", "Spell icon", "At the bar's left end.", true))
-            B.check("showThreat", "Threat", "Your threat on hostile units: the frame glows yellow, orange or red, with your threat % by the name.", true)
+            B.dropdown("threatShow", "Threat", "Your threat on hostile units: the frame glows yellow, orange or red by your threat status, and / or your threat % shows by the name in the same colour.", "both",
+                { { "both", "Glow and number" }, { "glow", "Glow only" }, { "number", "Number only" }, { "off", "Off" } })
         end
 
         B.section("Reset and copy", false)

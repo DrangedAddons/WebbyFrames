@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4
+- Threat is now a choice on target and focus: glow and number, glow only, number only, or off. (If you had threat turned off, it stays off.)
+- Mobs someone else has tagged stay plain grey: no fade to red on their health bar, and the name strip behind their name is grey too.
+
 ## 1.3
 - Fade to red: shamans, mages and warlocks each have their own route to red, so they never look like one another while their health drops. Shaman stays dark (navy, deep plum, crimson), mage stays light (pale sky, lilac, coral), warlock stays a bright violet (violet, magenta). The other classes keep the colour-wheel fade.
 
