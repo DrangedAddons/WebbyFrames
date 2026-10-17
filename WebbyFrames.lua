@@ -69,7 +69,9 @@ local DEFAULT_SETTINGS = {
     cornerAccent = true,   -- the pointed accent on the ring (off = just the level circle)
     -- buffs and debuffs (off unless a frame's defaults turn them on)
     auraBuffs = false, auraDebuffs = false, auraMine = false,
-    auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below",
+    auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below", auraTimers = true,
+    -- cast bar (target and focus): Blizzard's own bar, moved under our frame
+    castShow = true, castText = true, castIcon = true, castBorder = "bars",
 }
 
 -- fallback power bar art names if PowerBarColor doesn't supply one
@@ -620,7 +622,7 @@ local function updateInfo(f)
     pcall(function() f.portrait:SetDesaturated(offline) end)
     f.portrait:SetVertexColor(offline and 0.6 or 1, offline and 0.6 or 1, offline and 0.6 or 1)
     if offline and not f.offlineIcon then
-        f.offlineIcon = f:CreateTexture(nil, "ARTWORK", nil, 2)
+        f.offlineIcon = (f.portraitHolder or f):CreateTexture(nil, "ARTWORK", nil, 2)
         f.offlineIcon:SetTexture("Interface\\CharacterFrame\\Disconnect-Icon")
         f.offlineIcon:SetPoint("CENTER", f.portrait, "CENTER", 0, 0)
     end
@@ -678,10 +680,10 @@ local function createIndicators(f)
     -- a copy of just the portrait ring, drawn above the bars so the bar ends tuck under the circle
     f.ringTop = ov:CreateTexture(nil, "OVERLAY", nil, -6)
     -- ...limited to a circle around the portrait, so only the ring (not the dark bar trough beside it) is drawn on top
+    -- (Blizzard's plain portrait circle: Forever's CircleMask atlas isn't a tight circle, so the art's
+    -- trough beside the ring showed through over the health bar)
     f.ringMask = ov:CreateMaskTexture()
-    if hasAtlas("CircleMask") then f.ringMask:SetAtlas("CircleMask") else
-        f.ringMask:SetTexture(CIRCLE_FALLBACK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    end
+    f.ringMask:SetTexture(CIRCLE_FALLBACK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
     f.ringTop:AddMaskTexture(f.ringMask)
     if f.baseUnit == "player" then
         f.combatIcon = ov:CreateTexture(nil, "OVERLAY", nil, 5)
@@ -967,6 +969,259 @@ local function updateThreat(f)
 end
 
 ---------------------------------------------------------------------------
+-- Cast bars (target and focus): a box bolted on under the health and mana bars, bordered with slices
+-- of the frame art's own border round those bars (minus the line between health and mana), with the
+-- spell icon at its left end and the bar filling the rest. It runs on under the portrait ring, where
+-- Media\castbox-mask-target.tga (made for exactly this box) cuts its end along the ring, halfway through
+-- the ring's gold band, which is drawn on top: so it ends in the ring like the other bars.
+-- Hiding Blizzard's target / focus frames also hid their cast bars. Ours is driven by Blizzard's: it
+-- keeps running (it handles the protected cast data) but is parked off-screen, and every frame ours
+-- copies its progress, fade, cast type, spell name and icon. Values only ever go to setters.
+---------------------------------------------------------------------------
+local castHider = CreateFrame("Frame")
+castHider:Hide()
+local CAST_SLOT = 4      -- extra gap under the frame for the cast box's lower edge, above the auras
+-- The box, in the frame's TOPLEFT coordinates. Its top border line is the frame art's bottom border line
+-- (at y -71, under the mana bar): the cast bar shares that line with the mana bar.
+-- On the target layout it runs on to the level badge, which is drawn on top and hides its end.
+local CAST_BOX = { top = -71, right = { 20.5, 200 }, left = { 77.5, 210 } }
+-- Where the border slices come from in the frame art, in the same coordinates (measured from the decoded
+-- art): the art's left cap (its 1px side line at x 22 and the shadow inside it) and a plain stretch of
+-- its lines; the top rows are the line between the health and mana bars (at y -60) and the 4px shadow under
+-- it, where it meets the left line in a T (the cast bar continues the block, so no rounded corner), the middle
+-- is plain trough (40% black), the bottom rows are the mana bar's bottom line (at y -71) and the 4px soft
+-- shadow below it. No separator line between them.
+local CAST_ART = {
+    capX = { 20.5, 27 }, midX = { 40, 130 },
+    rows = { { -60, -65 }, { -46, -52 }, { -71, -76 } },   -- top, middle, bottom
+    rowH = { 5, 6, 5 },                                      -- their heights in the cast box
+    -- the fill sits right inside the lines, like the bars: under the top line, above the bottom line,
+    -- right of the side line (10px tall, like the mana bar)
+    inset = { left = 2.5, top = 1, bottom = 5 },
+}
+local CAST_EDGE = { 0.75, 0.75, 0.72 }  -- the light line colour (outline style, icon divider)
+
+-- fill colour by Blizzard's cast type
+local CAST_COLORS = {
+    standard        = { 1.0, 0.70, 0.0 },   -- casting: yellow
+    empowered       = { 1.0, 0.70, 0.0 },
+    channel         = { 0.0, 0.85, 0.2 },   -- channelling: green
+    uninterruptable = { 0.6, 0.6, 0.6 },    -- can't be interrupted: grey
+    interrupted     = { 0.9, 0.1, 0.1 },    -- interrupted / failed: red
+}
+
+local function castBoxHeight() local h = 0; for _, v in ipairs(CAST_ART.rowH) do h = h + v end; return h end
+
+-- Points a texture at a rectangle of the target frame art, given in frame coordinates (y1 above y2).
+local function artSlice(tex, x1, x2, y1, y2, flip)
+    local a = ART.targetBorder
+    local left, top = 116 + 0.5 - a[2] / 2, -50 + a[3] / 2      -- the art's top left corner in the frame
+    if flip then y1, y2 = y2, y1 end                              -- upside down
+    tex:SetTexture(MEDIA .. a[1])
+    tex:SetTexCoord((x1 - left) / a[2] * a[4], (x2 - left) / a[2] * a[4],
+                    (top - y1) / a[3] * a[5], (top - y2) / a[3] * a[5])
+end
+
+local function newCastBar(f)
+    local box = CreateFrame("Frame", nil, f)
+    box:SetFrameLevel(f:GetFrameLevel() + 1)
+    local cb = CreateFrame("StatusBar", nil, box)
+    cb.box = box
+    -- dark trough for the Outline / None styles (the frame-art border has its own trough)
+    cb.inside = box:CreateTexture(nil, "BACKGROUND", nil, 0)
+    cb.inside:SetColorTexture(0, 0, 0, 0.4)
+    -- "Like the bars" border: 3 rows x 2 columns of frame-art slices (left cap, stretched middle)
+    cb.slices = {}
+    for r = 1, 3 do
+        for c = 1, 2 do
+            local t = box:CreateTexture(nil, "BACKGROUND", nil, 2)
+            local xs = (c == 1) and CAST_ART.capX or CAST_ART.midX
+            artSlice(t, xs[1], xs[2], CAST_ART.rows[r][1], CAST_ART.rows[r][2], CAST_ART.rows[r][3])
+            t.row, t.col = r, c
+            cb.slices[#cb.slices + 1] = t
+        end
+    end
+    -- "Outline" border: a 1px light line round the box
+    cb.edge = box:CreateTexture(nil, "BACKGROUND", nil, 1)
+    cb.edge:SetAllPoints()
+    cb.edge:SetColorTexture(CAST_EDGE[1], CAST_EDGE[2], CAST_EDGE[3], 1)
+    cb.edgeInside = box:CreateTexture(nil, "BACKGROUND", nil, 1)
+    cb.edgeInside:SetPoint("TOPLEFT", 1, -1)
+    cb.edgeInside:SetPoint("BOTTOMRIGHT", -1, 1)
+    cb.edgeInside:SetColorTexture(0.05, 0.05, 0.05, 1)
+    cb.boxMask = box:CreateMaskTexture()
+    cb.boxMask:SetAllPoints(box)
+    cb:SetFrameLevel(box:GetFrameLevel() + 1)
+    cb:SetMinMaxValues(0, 1)
+    cb:SetValue(0)
+    -- spell icon in the box's left end, with a 1px divider after it
+    cb.icon = box:CreateTexture(nil, "ARTWORK")
+    cb.icon:SetTexCoord(0.1, 0.9, 0.1, 0.9)      -- cropped past Blizzard's own icon border, like the auras
+    -- the line between icon and bar, in the frame art's own line style: a 1px mid-grey line (the art's
+    -- measured colour) joining the top and bottom border lines, with a thin dark shadow on the bar side
+    cb.divider = box:CreateTexture(nil, "ARTWORK", nil, 1)
+    cb.divider:SetColorTexture(0.55, 0.55, 0.55, 1)
+    cb.dividerShadow = box:CreateTexture(nil, "ARTWORK")
+    cb.dividerShadow:SetColorTexture(0, 0, 0, 0.5)
+    local top = CreateFrame("Frame", nil, cb)
+    top:SetAllPoints()
+    top:SetFrameLevel(f.ov:GetFrameLevel() + 1)
+    cb.text = top:CreateFontString(nil, "OVERLAY", "TextStatusBarText")   -- same style as the bar numbers
+    cb.text:SetPoint("CENTER", cb, "CENTER", 0, 0)
+    cb.text:SetWidth(110)
+    cb.text:SetWordWrap(false)
+    box:Hide()
+    return cb
+end
+
+local function placeCastbar(f)
+    local bar, cb = f.castbar, f.cb
+    if not (bar and cb) then return end
+    if not getSetting(f.baseUnit, "castShow") then
+        if bar:GetParent() ~= castHider then bar:SetParent(castHider) end
+        cb.box:Hide()
+        return
+    end
+    -- Blizzard's bar keeps running (and updating) off-screen; ours shows its progress
+    if bar:GetParent() ~= f then bar:SetParent(f) end
+    bar:ClearAllPoints()
+    bar:SetPoint("TOPRIGHT", UIParent, "TOPLEFT", -1000, 1000)
+    local x = f.layoutLeft and CAST_BOX.left or CAST_BOX.right
+    local h = castBoxHeight()
+    local box = cb.box
+    box:ClearAllPoints()
+    box:SetPoint("TOPLEFT", f, "TOPLEFT", x[1], CAST_BOX.top)
+    box:SetPoint("BOTTOMRIGHT", f, "TOPLEFT", x[2], CAST_BOX.top - h)
+    -- the border slices: rows stacked down the box, the cap at the left, the middle stretched to the end
+    local capW = CAST_ART.capX[2] - CAST_ART.capX[1]
+    for _, t in ipairs(cb.slices) do
+        local y = 0
+        for r = 1, t.row - 1 do y = y + CAST_ART.rowH[r] end
+        t:ClearAllPoints()
+        if t.col == 1 then
+            t:SetPoint("TOPLEFT", box, "TOPLEFT", 0, -y)
+            t:SetSize(capW, CAST_ART.rowH[t.row])
+        else
+            t:SetPoint("TOPLEFT", box, "TOPLEFT", capW, -y)
+            t:SetPoint("BOTTOMRIGHT", box, "TOPRIGHT", 0, -(y + CAST_ART.rowH[t.row]))
+        end
+    end
+    -- the frame's own bar texture (a chosen SharedMedia one, or the default tintable fill) ...
+    local fill = f.customTex or ((f.layoutLeft and BAR_FILE.player or BAR_FILE.target) .. "Health-Status")
+    if cb.fill ~= fill then
+        cb.fill = fill
+        cb:SetStatusBarTexture(fill)
+        cb.fillMasked = nil
+    end
+    -- target layout: cut the box's end along the portrait ring (once per texture)
+    if not f.layoutLeft then
+        if not cb.boxMaskSet then
+            cb.boxMaskSet = true
+            cb.boxMask:SetTexture(MEDIA .. "castbox-mask-target", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+            for _, t in ipairs(cb.slices) do t:AddMaskTexture(cb.boxMask) end
+            for _, t in ipairs({ cb.inside, cb.edge, cb.edgeInside }) do t:AddMaskTexture(cb.boxMask) end
+        end
+        if not cb.fillMasked then
+            cb.fillMasked = true
+            local tex = cb:GetStatusBarTexture()
+            pcall(tex.AddMaskTexture, tex, cb.boxMask)   -- may already have it if the texture object was reused
+        end
+    end
+    -- ... and its font, at the size and style of the health bar numbers
+    pcall(function() cb.text:SetFont(f.hpText:GetFont()) end)
+    -- border style: "bars" = the frame art's border, "outline" = a 1px light line, "none" = no border
+    local style = getSetting(f.baseUnit, "castBorder")
+    for _, t in ipairs(cb.slices) do t:SetShown(style == "bars") end
+    cb.edge:SetShown(style == "outline")
+    cb.edgeInside:SetShown(style == "outline")
+    cb.inside:SetShown(style ~= "bars")
+    local inL, inT, inB = CAST_ART.inset.left, CAST_ART.inset.top, CAST_ART.inset.bottom
+    cb.inside:ClearAllPoints()
+    cb.inside:SetPoint("TOPLEFT", box, "TOPLEFT", inL, -inT)
+    cb.inside:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, inB)
+    local showIcon = getSetting(f.baseUnit, "castIcon") and true or false
+    local inner = h - inT - inB
+    cb.icon:ClearAllPoints()
+    cb.icon:SetPoint("TOPLEFT", box, "TOPLEFT", inL, -inT)
+    cb.icon:SetSize(inner, inner)
+    cb.icon:SetShown(showIcon)
+    local dx = inL + inner       -- where the divider line goes, right after the icon
+    cb.divider:ClearAllPoints()
+    cb.divider:SetPoint("TOPLEFT", box, "TOPLEFT", dx, 0)
+    cb.divider:SetPoint("BOTTOMRIGHT", box, "TOPLEFT", dx + 1, -(h - inB + 1))
+    cb.dividerShadow:ClearAllPoints()
+    cb.dividerShadow:SetPoint("TOPLEFT", box, "TOPLEFT", dx + 1, -inT)
+    cb.dividerShadow:SetPoint("BOTTOMRIGHT", box, "TOPLEFT", dx + 2, -(h - inB))
+    cb.divider:SetShown(showIcon)
+    cb.dividerShadow:SetShown(showIcon)
+    cb:ClearAllPoints()
+    cb:SetPoint("TOPLEFT", box, "TOPLEFT", inL + (showIcon and (inner + 1) or 0), -inT)
+    cb:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, inB)
+    -- the spell name is centred under the health bar (the bar itself runs on to the level badge)
+    local fillLeft = x[1] + inL + (showIcon and (inner + 1) or 0)   -- (the shadow sits over the fill's first px)
+    local hpMid = f.layoutLeft and (85 + 124 / 2) or (23 + 126 / 2)
+    cb.text:ClearAllPoints()
+    -- (1px up: the font string's box includes room for descenders, so it sits low when centred)
+    cb.text:SetPoint("CENTER", cb, "CENTER", hpMid - (fillLeft + x[2]) / 2, 1)
+    cb.text:SetShown(getSetting(f.baseUnit, "castText") and true or false)
+end
+
+-- Copies Blizzard's bar onto ours, every frame while the unit exists.
+local function mirrorCastbar(f)
+    local bar, cb = f.castbar, f.cb
+    local box = cb.box
+    if not getSetting(f.baseUnit, "castShow") or not bar:IsShown() then
+        if box:IsShown() then box:Hide() end
+        return
+    end
+    pcall(function() cb:SetMinMaxValues(bar:GetMinMaxValues()) end)
+    pcall(function() cb:SetValue(bar:GetValue()) end)
+    box:SetAlpha(bar:GetAlpha())
+    -- Retail bars name their cast type in barType; older ones have channeling / notInterruptible flags
+    local c = CAST_COLORS.standard
+    pcall(function()
+        if CAST_COLORS[bar.barType] then c = CAST_COLORS[bar.barType]
+        elseif bar.notInterruptible then c = CAST_COLORS.uninterruptable
+        elseif bar.channeling then c = CAST_COLORS.channel end
+    end)
+    cb:SetStatusBarColor(c[1], c[2], c[3], 1)
+    -- the default fill is grey art made for tinting; a chosen texture keeps its own look, like the health bar
+    local plain = not f.customTex
+    pcall(function() cb:GetStatusBarTexture():SetDesaturated(plain) end)
+    if bar.Text then pcall(function() cb.text:SetText(bar.Text:GetText()) end) end
+    if bar.Icon then pcall(function() cb.icon:SetTexture(bar.Icon:GetTexture()) end) end
+    if not box:IsShown() then box:Show() end
+end
+
+local function adoptCastbar(f, barName)
+    local bar = _G[barName]
+    if not bar then return end
+    f.castbar = bar
+    f.cb = newCastBar(f)
+    -- The cast box runs on under the portrait ring, so the portrait (with its backing, elite dragon and
+    -- offline bolt) moves into its own layer above the bars and the cast box, but below the ring overlay,
+    -- level badge and text (on f.ov): the cast bar then slides behind the portrait.
+    local holder = CreateFrame("Frame", nil, f)
+    holder:SetAllPoints(f)
+    holder:SetFrameLevel(f:GetFrameLevel() + 3)
+    for _, r in ipairs({ f.portrait, f.portraitBg, f.pmask, f.dragon, f.offlineIcon }) do
+        if r then r:SetParent(holder) end
+    end
+    f.portraitHolder = holder
+    -- Blizzard's AdjustPosition reads these from the bar's parent (comparing auraRows to numbers), so
+    -- give our frame safe values; after every adjustment the bar is parked off-screen again.
+    f.buffsOnTop, f.auraRows, f.haveToT, f.haveElite = true, 0, false, false
+    local function replace() pcall(placeCastbar, f) end
+    if bar.AdjustPosition then hooksecurefunc(bar, "AdjustPosition", replace) end
+    if _G.Target_Spellbar_AdjustPosition then
+        hooksecurefunc("Target_Spellbar_AdjustPosition", function(self) if self == bar then replace() end end)
+    end
+    bar:HookScript("OnShow", replace)
+    f:HookScript("OnUpdate", function() mirrorCastbar(f) end)
+    placeCastbar(f)
+end
+
+---------------------------------------------------------------------------
 -- Buffs and debuffs. Secret-safe: aura fields only ever go to setters, timers go through duration
 -- objects (SetCooldownFromDurationObject) and stack counts through the display-count API.
 ---------------------------------------------------------------------------
@@ -982,30 +1237,28 @@ end
 
 local function newAuraButton(parent)
     local b = CreateFrame("Frame", nil, parent)
-    -- thin dark edge round every icon, so buffs and debuffs line up neatly
+    -- a crisp 1px edge (black on buffs, the dispel colour on debuffs) with the icon inside it, cropped
+    -- past Blizzard's own icon border
     b.edge = b:CreateTexture(nil, "BACKGROUND")
-    b.edge:SetPoint("TOPLEFT", -1, 1)
-    b.edge:SetPoint("BOTTOMRIGHT", 1, -1)
-    b.edge:SetColorTexture(0, 0, 0, 0.9)
+    b.edge:SetAllPoints()
+    b.edge:SetColorTexture(0, 0, 0, 1)
     b.icon = b:CreateTexture(nil, "ARTWORK")
-    b.icon:SetAllPoints()
-    b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    b.icon:SetPoint("TOPLEFT", 1, -1)
+    b.icon:SetPoint("BOTTOMRIGHT", -1, 1)
+    b.icon:SetTexCoord(0.1, 0.9, 0.1, 0.9)
+    -- a soft dark swipe; the countdown numbers are Blizzard's own (safe with protected durations)
     b.cd = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
-    b.cd:SetAllPoints()
+    b.cd:SetAllPoints(b.icon)
     b.cd:SetReverse(true)
     b.cd:SetDrawEdge(false)
-    pcall(b.cd.SetHideCountdownNumbers, b.cd, true)
-    b.border = b:CreateTexture(nil, "OVERLAY")
-    b.border:SetTexture(DEBUFF_BORDER)
-    b.border:SetTexCoord(0.296875, 0.5703125, 0, 0.515625)
-    b.border:SetPoint("TOPLEFT", -1, 1)
-    b.border:SetPoint("BOTTOMRIGHT", 1, -1)
+    pcall(b.cd.SetSwipeColor, b.cd, 0, 0, 0, 0.6)
     -- stack count above the cooldown swipe
     local top = CreateFrame("Frame", nil, b)
     top:SetAllPoints()
     top:SetFrameLevel(b.cd:GetFrameLevel() + 1)
-    b.count = top:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
-    b.count:SetPoint("BOTTOMRIGHT", 2, -1)
+    b.count = top:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    b.count:SetPoint("BOTTOMRIGHT", 1, 0)
+    b.count:SetJustifyH("RIGHT")
     b:EnableMouse(true)
     b:SetScript("OnEnter", auraTooltip)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -1023,6 +1276,13 @@ local function auraAnchor(f, pos)
     local x = f.layoutLeft and 55 or 22
     if pos == "above" then return "BOTTOMLEFT", "TOPLEFT", f.layoutLeft and 85 or 22, -14 end
     if pos == "right" then return "TOPLEFT", "TOPRIGHT", -18, -20 end
+    -- With a cast bar they lock onto its bottom (always, cast or not, so the icons don't jump about),
+    -- lined up with its left line.
+    if f.castbar and getSetting(f.baseUnit, "castShow") then
+        local cx = (f.layoutLeft and CAST_BOX.left or CAST_BOX.right)[1]
+        -- just below the cast box (its bottom line's soft shadow included)
+        return "TOPLEFT", "TOPLEFT", cx + 1.5, CAST_BOX.top - castBoxHeight() - 1
+    end
     return "TOPLEFT", "TOPLEFT", x, -87
 end
 
@@ -1031,6 +1291,8 @@ local function updateAuras(f)
     local showB, showD = getSetting(base, "auraBuffs"), getSetting(base, "auraDebuffs")
     if not (showB or showD) or not C_UnitAuras then
         if f.auraButtons then for _, b in ipairs(f.auraButtons) do b:Hide() end end
+        f.auraHeight = 0
+        placeCastbar(f)
         return
     end
     if not f.auraBox then
@@ -1044,6 +1306,7 @@ local function updateAuras(f)
     f.auraBox:ClearAllPoints()
     f.auraBox:SetPoint(point, f, relPoint, x, y)
     local up = (pos == "above")
+    local timers = getSetting(base, "auraTimers") and true or false
     local u = f.wfUnit
     local n, col, row = 0, 0, 0
 
@@ -1086,11 +1349,23 @@ local function updateAuras(f)
                     local c = DebuffTypeColor and DebuffTypeColor[aura.dispelName]
                     if c then r, g, bl = c.r, c.g, c.b end
                 end)
-                b.border:SetVertexColor(r, g, bl)
-                b.border:Show()
+                b.edge:SetColorTexture(r, g, bl, 1)
             else
-                b.border:Hide()
+                b.edge:SetColorTexture(0, 0, 0, 1)
             end
+            -- countdown numbers and stack count sized to the icon
+            pcall(b.cd.SetHideCountdownNumbers, b.cd, not timers)
+            if timers then
+                pcall(function()
+                    local fs = b.cd:GetCountdownFontString()
+                    local fp = fs:GetFont()
+                    fs:SetFont(fp or STANDARD_TEXT_FONT, math.max(8, math.floor(size * 0.45)), "OUTLINE")
+                end)
+            end
+            pcall(function()
+                local fp = b.count:GetFont()
+                b.count:SetFont(fp or STANDARD_TEXT_FONT, math.max(8, math.floor(size * 0.5)), "OUTLINE")
+            end)
             place(b)
             b:Show()
         end
@@ -1100,6 +1375,10 @@ local function updateAuras(f)
     if showB then group("HELPFUL", false) end
     if showD then group(getSetting(base, "auraMine") and "HARMFUL|PLAYER" or "HARMFUL", true) end
     for i = n + 1, #f.auraButtons do f.auraButtons[i]:Hide() end
+    -- how tall the aura block is, so the cast bar can sit under it
+    local rows = (col > 0) and (row + 1) or row
+    f.auraHeight = rows * (size + AURA_GAP)
+    placeCastbar(f)
 end
 
 local function updateAll(f) updateInfo(f); updateHealth(f); updatePower(f); updateIndicators(f); updateFlash(f); updateThreat(f); pcall(updateAuras, f) end
@@ -1145,13 +1424,18 @@ local function applyLayout(f)
             t:Hide()
         else
             local a = ART.targetBorder
-            local cut = 126 / a[2]       -- the ring starts 126px into the 192px art
+            -- From 122px into the 192px art: the ring's outer edge reaches about 124px in at the health
+            -- bar's height (starting at 126 left a sliver of it under the health bar's end). The circle
+            -- mask below keeps the copy to the ring itself.
+            local from = 122
             t:SetTexture(MEDIA .. a[1])
-            t:SetTexCoord(a[4] * cut, a[4], 0, a[5])
-            t:SetSize(a[2] - 126, a[3])
+            t:SetTexCoord(a[4] * from / a[2], a[4], 0, a[5])
+            t:SetSize(a[2] - from, a[3])
             t:SetPoint("RIGHT", f, "RIGHT", -19.5, 0)
             f.ringMask:ClearAllPoints()
-            f.ringMask:SetSize(66, 66)
+            -- just the gold ring: its outer edge is ~29.5px from the portrait's centre (measured from the art);
+            -- a bigger circle took in the dark trough beside it, which then darkened the bars' ends
+            f.ringMask:SetSize(61, 61)
             f.ringMask:SetPoint("CENTER", f, "TOPLEFT", 177, -48)
             t:Show()
         end
@@ -1212,8 +1496,9 @@ local function applyLayout(f)
         f.hpMaskOn = setFileMask(f.hp, f.hpMask, "uiunitframetargethealthmask2x", 129, 32, -1, 6)
         f.mpMaskOn = setFileMask(f.mp, f.mpMask, "uiunitframetargetmanamask2x", 259, 16, -62, 3)
     end
-    -- (the default fills' dark top / bottom rows: 3 of 32 on health, 2.5 of 16 on power)
-    setClip(f.hp, 2); setClip(f.mp, 1.5)
+    -- No trim: with the bundled art the bars sit exactly between its lines (measured), so a custom
+    -- texture fills its section just like the default fill.
+    setClip(f.hp, 0); setClip(f.mp, 0)
 
     -- text
     f.mpText:ClearAllPoints()
@@ -1297,7 +1582,7 @@ local function applySmallLayout(f)
     f.mp:SetPoint("TOPLEFT", f, "TOPLEFT", left and 40 or 6, -27.5)
     f.hpMaskOn = setFileMask(f.hp, f.hpMask, "uipartyframeportraitonhealthmask", 128, 16.5, -29, 3, not left)
     f.mpMaskOn = setFileMask(f.mp, f.mpMask, "uipartyframeportraitonmanamask", 128, 16.5, -27, 4, not left)
-    setClip(f.hp, 1); setClip(f.mp, 1)
+    setClip(f.hp, 0); setClip(f.mp, 0)    -- no trim, see applyLayout
     f.hpCurrent, f.mpCurrent = nil, nil
     f.name:ClearAllPoints()
     if left then f.name:SetPoint("TOPLEFT", f.portrait, "TOPRIGHT", 2, 0) else f.name:SetPoint("TOPLEFT", f, "TOPLEFT", 6, -5) end
@@ -1333,6 +1618,7 @@ local function applyUnit(f)
     pcall(updateThreat, f)
     pcall(updateIndicators, f)
     pcall(updateAuras, f)
+    pcall(placeCastbar, f)
     if f.updateRest then pcall(f.updateRest) end
     local tex = resolveTexture(getSetting(unit, "barTexture"))
     if tex ~= f.customTex then
@@ -1596,6 +1882,8 @@ local function createFrame(unit)
     end
 
     if unit ~= "player" then RegisterUnitWatch(f) end
+    if unit == "target" then adoptCastbar(f, "TargetFrameSpellBar") end
+    if unit == "focus" then adoptCastbar(f, "FocusFrameSpellBar") end
     frames[unit] = f
     applyLayout(f)
     if f.updateRest then f.updateRest() end
@@ -1885,7 +2173,8 @@ end
 -- Actions used by the settings pages and slash commands
 ---------------------------------------------------------------------------
 local COPY_KEYS = { "scale", "showName", "cornerAccent", "textMode", "textFormat", "barTexture", "font", "flashInterrupt", "showThreat",
-                    "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraPerRow", "auraMax", "auraPos",
+                    "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraPerRow", "auraMax", "auraPos", "auraTimers",
+                    "castShow", "castText", "castIcon", "castBorder",
                     "colorMode", "healthFade" }
 
 function resetFrame(unit)
@@ -2130,6 +2419,7 @@ local function buildSettings()
         B.check("auraBuffs", "Show buffs", nil, defaultFor(unit, "auraBuffs"))
         B.check("auraDebuffs", "Show debuffs", nil, defaultFor(unit, "auraDebuffs"))
         B.check("auraMine", "Only my debuffs", "Show only the debuffs you applied.", false)
+        B.check("auraTimers", "Countdown numbers", "Time left on each buff and debuff.", true)
         B.dropdown("auraPos", "Position", "Where the icons sit.", defaultFor(unit, "auraPos"),
             { { "below", "Below the frame" }, { "above", "Above the frame" }, { "right", "Right of the frame" } })
         B.slider("auraSize", "Icon size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, whole)
@@ -2137,6 +2427,13 @@ local function buildSettings()
         B.slider("auraMax", "Most of each", "How many buffs, and how many debuffs, can show.", defaultFor(unit, "auraMax"), 1, 32, 1, whole)
 
         if hasCastAndThreat(unit) then
+            B.section("Cast bar", false)
+            B.check("castShow", "Show cast bar", "A bar under the mana bar showing what the unit is casting: yellow for a cast, green for a channel, grey when you can't interrupt it, red when interrupted.", true)
+            B.check("castText", "Spell name", "The spell's name on the cast bar.", true)
+            B.check("castIcon", "Spell icon", "The spell's icon, at the cast bar's left end.", true)
+            B.dropdown("castBorder", "Border", "How the cast bar is edged.", "bars",
+                { { "bars", "Like the bars" }, { "outline", "Outline" }, { "none", "None" } })
+
             B.section("Combat", false)
             B.check("flashInterrupt", "Interrupt flash", "Pulse the frame red while the unit casts a spell you can interrupt.", true)
             B.check("showThreat", "Threat", "Your threat on hostile units: the frame glows yellow, orange or red, and your threat % shows by the name.", true)

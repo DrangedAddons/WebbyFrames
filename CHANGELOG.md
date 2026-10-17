@@ -2,6 +2,8 @@
 
 ## 0.57
 New frames and features
+- Cast bars on target and focus (hiding Blizzard's frames had hidden theirs). The bar is built into the frame: it shares the mana bar's bottom border line, uses the frame art's own border, runs on under the portrait ring to the level badge, and takes the frame's bar texture and font. Spell icon and name, coloured by cast type (yellow cast, green channel, grey can't interrupt, red interrupted). Options: show, spell name, spell icon, border style.
+- Buffs and debuffs lock onto the bottom of the cast bar, with cleaner icons: tighter crop, a 1px edge (dispel colour on debuffs), countdown numbers (optional) and bigger stack counts.
 - Party frames: four frames in the target-of-target style, stacked in one movable group, with a leader crown. They show in a party and hide in a raid, replacing Blizzard's party frames.
 - Buffs and debuffs on every frame: show buffs / debuffs, only my debuffs, position (below, above, right), icon size, icons per row and how many. Debuffs are bordered by dispel type, timers and stacks work with Forever's protected aura data, and hovering an icon shows its tooltip. On by default for target and focus, debuffs only for party.
 - Threat, the Retail way: the target and focus frames glow yellow, orange or red by your threat status, with your threat % in small coloured text by the name.
@@ -11,7 +13,8 @@ New frames and features
 
 New look
 - Every frame uses DragonflightUI's bundled copies of the Retail art (borders, bar fills and masks, name plate, corner accent, combat glow, resting Zzz), because Forever replaces many of the Retail atlases and its mana bar art drew nothing.
-- Custom bar textures are trimmed to fit the bar's slot like the default ones.
+- Bars fill exactly the sections of the frame art, custom textures included, and the portrait ring covers their ends cleanly (no dark sliver or off-colour patch beside it).
+- The options' collapsible sections open and close straight away, with a + / - on each header.
 - The player's corner accent glows with the resting / combat glow, and gives way to the crossed swords (with a dark outline) in combat.
 - Target and focus have the portrait on the right, the other frames on the left; only the player has the corner accent.
 - PvP badge, combat swords and resting Zzz sit where DragonflightUI puts them, and are always on.
