@@ -5,6 +5,8 @@ New frames and features
 - Cast bars on target and focus (hiding Blizzard's frames had hidden theirs). The bar is built into the frame: it shares the mana bar's bottom border line, uses the frame art's own border, runs on under the portrait ring to the level badge, and takes the frame's bar texture and font. Spell icon and name, coloured by cast type (yellow cast, green channel, grey can't interrupt, red interrupted). Options: show, spell name, spell icon, border style.
 - Health bar extras: incoming heals (green) and absorb shields (pale blue) past the end of the health fill, and healing absorbs eating back into it (red), in the frame's own bar texture. Works with Forever's protected health values. `/webby test` previews them on your frame for 10 seconds.
 - Smooth bars: health and power slide to their new values (optional).
+- Combat numbers: damage (red), heals (green) and misses pop up over the portrait and fade, bigger on crits. On for player, target and focus; a switch per frame, and a master switch on the General page for anyone who prefers Blizzard's floating combat text.
+- Sturdier updates: one part of a frame failing can't stop the rest (buffs and debuffs included); `/webby errors` lists anything caught.
 - Party leader crown on the player, target and focus frames, on top of the portrait ring.
 - Buffs and debuffs lock onto the bottom of the cast bar, with cleaner icons: tighter crop, a 1px edge (dispel colour on debuffs), countdown numbers (optional) and bigger stack counts.
 - Party frames: four frames in the target-of-target style, stacked in one movable group, with a leader crown. They show in a party and hide in a raid, replacing Blizzard's party frames.

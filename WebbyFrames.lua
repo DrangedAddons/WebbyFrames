@@ -53,8 +53,9 @@ for _, u in ipairs(PARTY) do DEFAULT_POS[u] = DEFAULT_POS.party end
 
 -- per-frame defaults that differ from DEFAULT_SETTINGS (the small frame is too narrow for long numbers)
 local UNIT_DEFAULTS = {
-    target = { auraBuffs = true, auraDebuffs = true },
-    focus  = { auraBuffs = true, auraDebuffs = true },
+    player = { combatNumbers = true },
+    target = { auraBuffs = true, auraDebuffs = true, combatNumbers = true },
+    focus  = { auraBuffs = true, auraDebuffs = true, combatNumbers = true },
     targettarget = { textMode = "off", textFormat = "percent" },
     pet = { textMode = "off", textFormat = "percent" },
     focustarget = { textMode = "off", textFormat = "percent" },
@@ -74,6 +75,7 @@ local DEFAULT_SETTINGS = {
     castShow = true, castText = true, castIcon = true, castBorder = "bars",
     -- health bar extras
     smoothBars = true, healPrediction = true, absorbs = true,
+    combatNumbers = false,   -- damage / heal numbers over the portrait (on for player, target, focus)
 }
 
 -- fallback power bar art names if PowerBarColor doesn't supply one
@@ -1498,7 +1500,73 @@ local function updateAuras(f)
     placeCastbar(f)
 end
 
-local function updateAll(f) updateInfo(f); updateHealth(f); updatePower(f); updateIndicators(f); updateFlash(f); updateThreat(f); pcall(updateAuras, f) end
+---------------------------------------------------------------------------
+-- Combat numbers: damage and healing the unit takes pop up over its portrait and fade, like Blizzard's
+-- old portrait hit indicator. From UNIT_COMBAT; the amount may be protected, so it only goes to setters.
+---------------------------------------------------------------------------
+local HIT_WORDS = {   -- actions shown as a word instead of a number
+    DODGE = DODGE, PARRY = PARRY, BLOCK = BLOCK, MISS = MISS, IMMUNE = IMMUNE, ABSORB = ABSORB,
+    RESIST = RESIST, EVADE = EVADE, DEFLECT = DEFLECT, REFLECT = REFLECT,
+}
+
+local function hitText(f)
+    if f.hitText then return f.hitText end
+    local fs = f.ov:CreateFontString(nil, "OVERLAY", "NumberFontNormalHuge")
+    fs:SetDrawLayer("OVERLAY", 7)
+    fs:SetPoint("CENTER", f.portrait, "CENTER", 0, 0)
+    fs:Hide()
+    local ag = fs:CreateAnimationGroup()
+    local fade = ag:CreateAnimation("Alpha")
+    fade:SetFromAlpha(1); fade:SetToAlpha(0)
+    fade:SetStartDelay(0.7); fade:SetDuration(0.5)
+    ag:SetScript("OnFinished", function() fs:Hide() end)
+    fs.anim = ag
+    f.hitText = fs
+    return fs
+end
+
+local function showHit(f, action, indicator, amount)
+    -- the General page's master switch, then the frame's own option
+    if DB.combatNumbers == false or not getSetting(f.baseUnit, "combatNumbers") then return end
+    local fs = hitText(f)
+    -- (the action and crit flag may be protected too: compared inside pcall, a protected one counts as a hit)
+    local crit, word, kind = false, nil, "WOUND"
+    pcall(function() crit = (indicator == "CRITICAL" or indicator == "CRUSHING") end)
+    pcall(function() word = HIT_WORDS[action] end)
+    pcall(function() if action == "HEAL" or action == "ENERGIZE" or action == "WOUND" then kind = action elseif not word then kind = nil end end)
+    -- sized to the portrait: about 40% of it, more for a crit
+    local size = math.floor((f.portrait:GetHeight() or 60) * (crit and 0.5 or 0.38))
+    pcall(function() fs:SetFont(STANDARD_TEXT_FONT, math.max(10, size), "OUTLINE") end)
+    if word then
+        fs:SetText(word)
+        fs:SetTextColor(1, 1, 1)
+    elseif kind then
+        if not pcall(function() fs:SetText(AbbreviateLargeNumbers(amount)) end) then
+            if not pcall(function() fs:SetFormattedText("%d", amount) end) then return end
+        end
+        if kind == "HEAL" then fs:SetTextColor(0.1, 1, 0.3)
+        elseif kind == "ENERGIZE" then fs:SetTextColor(0.4, 0.6, 1)
+        else fs:SetTextColor(1, 0.15, 0.15) end
+    else
+        return
+    end
+    fs.anim:Stop()
+    fs:SetAlpha(1)
+    fs:Show()
+    fs.anim:Play()
+end
+
+-- Each part on its own, so one failing (say, on a protected value) can't stop the others, the
+-- buffs and debuffs included. Errors are still reported, once each, for /webby errors.
+local updateErrors = {}
+local function safely(fn, f)
+    local ok, err = pcall(fn, f)
+    if not ok and err and not updateErrors[err] then updateErrors[err] = true; updateErrors[#updateErrors + 1] = err end
+end
+local function updateAll(f)
+    safely(updateInfo, f); safely(updateHealth, f); safely(updatePower, f); safely(updateIndicators, f)
+    safely(updateFlash, f); safely(updateThreat, f); safely(updateAuras, f)
+end
 
 ---------------------------------------------------------------------------
 -- Layout: Retail's left-portrait (player) art, or right-portrait (target) art
@@ -1957,7 +2025,7 @@ local function createFrame(unit)
     addHover(f)
 
     -- events
-    f:SetScript("OnEvent", function(self, event)
+    f:SetScript("OnEvent", function(self, event, ...)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then updateHealth(self)
         elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_POWER_FREQUENT" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
         elseif event == "PLAYER_UPDATE_RESTING" then
@@ -1969,12 +2037,13 @@ local function createFrame(unit)
         elseif event:find("^UNIT_SPELLCAST") then updateFlash(self)
         elseif event:find("^UNIT_THREAT") then updateThreat(self)
         elseif event == "UNIT_AURA" then updateAuras(self)
+        elseif event == "UNIT_COMBAT" then local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)
     for _, e in ipairs({ "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
                          "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA",
-                         "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_ABSORB_AMOUNT_CHANGED" }) do
+                         "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", "UNIT_COMBAT" }) do
         pcall(f.RegisterUnitEvent, f, e, unit)
     end
     -- smooth energy / rage / focus ticks on your own frame
@@ -2093,16 +2162,17 @@ local function createSmallFrame(unit)
         end)
     end
 
-    f:SetScript("OnEvent", function(self, event)
+    f:SetScript("OnEvent", function(self, event, ...)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then updateHealth(self)
         elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
         elseif event == "UNIT_AURA" then updateAuras(self)
+        elseif event == "UNIT_COMBAT" then local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)
     for _, e in ipairs({ "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
                          "UNIT_NAME_UPDATE", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA",
-                         "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_ABSORB_AMOUNT_CHANGED" }) do
+                         "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", "UNIT_COMBAT" }) do
         pcall(f.RegisterUnitEvent, f, e, unit)
     end
     if unit == "pet" then
@@ -2298,7 +2368,7 @@ end
 ---------------------------------------------------------------------------
 local COPY_KEYS = { "scale", "showName", "cornerAccent", "textMode", "textFormat", "barTexture", "font", "flashInterrupt", "showThreat",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraPerRow", "auraMax", "auraPos", "auraTimers",
-                    "castShow", "castText", "castIcon", "castBorder", "smoothBars", "healPrediction", "absorbs",
+                    "castShow", "castText", "castIcon", "castBorder", "smoothBars", "healPrediction", "absorbs", "combatNumbers",
                     "colorMode", "healthFade" }
 
 function resetFrame(unit)
@@ -2492,12 +2562,14 @@ local function buildSettings()
     -- General ------------------------------------------------------------------
     do
         local general = setmetatable({}, {
-            __index = function(_, k) if k == "enabled" then return DB.enabled ~= false end end,
-            __newindex = function(_, k, v) if k == "enabled" then DB.enabled = v and true or false end end,
+            -- addon-wide switches, both on unless turned off
+            __index = function(_, k) if k == "enabled" or k == "combatNumbers" then return DB[k] ~= false end end,
+            __newindex = function(_, k, v) if k == "enabled" or k == "combatNumbers" then DB[k] = v and true or false end end,
         })
         local B = builders(root, rootLayout, general, "WEBBY_general_")
         B.header("Webby Frames  v" .. addonVersion())
         B.check("enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames. Needs /reload to take effect.", true)
+        B.check("combatNumbers", "Combat numbers on portraits", "Damage and healing numbers popping up over the frames' portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat). Each frame also has its own switch.", true)
         B.button("Move frames", "Open Edit Mode", openEditMode, "Drag the frames where you want them.")
         B.button("Reset", "Reset all frames", function()
             for _, unit in ipairs(OPTION_UNITS) do resetFrame(unit) end
@@ -2519,6 +2591,7 @@ local function buildSettings()
         B.section("Layout", true)
         B.slider("scale", "Scale", "Size of the frame.", 1, 0.5, 2, 0.05)
         B.check("showName", "Show name", nil, true)
+        B.check("combatNumbers", "Combat numbers", "Damage and healing the unit takes, popping up over its portrait.", defaultFor(unit, "combatNumbers"))
         if hasCorner(unit) then
             B.check("cornerAccent", "Corner accent", "The pointed accent at the bottom of the portrait ring.", true)
         end
@@ -2709,10 +2782,15 @@ SlashCmdList.WEBBYFRAMES = function(msg)
             f.absorbBar:SetValue(getSetting("player", "absorbs") and 15 or 0)
             f.healAbsorbBar:SetValue(getSetting("player", "absorbs") and 10 or 0)
         end)
+        pcall(showHit, f, "WOUND", "CRITICAL", 1234)      -- and a combat number on the portrait
         C_Timer.After(10, function() f.previewing = nil; pcall(updateAll, f) end)
-        print("|cff33ccffWebby Frames:|r previewing heals (green), a shield and a heal-absorb (red) on your frame for 10 seconds.")
+        print("|cff33ccffWebby Frames:|r previewing heals (green), a shield, a heal-absorb (red) and a combat number on your frame for 10 seconds.")
+    elseif msg == "errors" then
+        -- the errors caught while updating the frames (each shown once)
+        if #updateErrors == 0 then print("|cff33ccffWebby Frames:|r no errors caught.") end
+        for i, err in ipairs(updateErrors) do print("|cffff6060Webby Frames error " .. i .. ":|r " .. tostring(err)) end
     elseif msg == "help" then
-        print("|cff33ccffWebby Frames:|r /webby (options)   /webby edit (move the frames)   /webby reset (reset all frames)   /webby test (preview heals and shields)   /webby debug")
+        print("|cff33ccffWebby Frames:|r /webby (options)   /webby edit (move the frames)   /webby reset (reset all frames)   /webby test (preview heals and shields)   /webby errors   /webby debug")
     else
         print("|cff33ccffWebby Frames:|r unknown command. Type |cff33ccff/webby help|r.")
     end
