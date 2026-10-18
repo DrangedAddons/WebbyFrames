@@ -64,8 +64,9 @@ local DEFAULT_SETTINGS = {
     auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below", auraTimer = "both",   -- auraDebuffSize follows auraSize until set
     auraGap = 2, auraGrowth = "right", auraStack = 50,      -- gap between icons, row direction, stack count size (% of icon)
     -- text: name size / outline / colour, bar numbers size / outline / place (size 0 = the font's own)
-    nameSize = 0, nameOutline = "default", nameColor = "default",
-    textSize = 0, textOutline = "default", textAnchor = "center",
+    nameSize = 0, nameColor = "default",           -- nameColor "custom": nameColorRGB = { r, g, b }
+    textColor = "default",                         -- the bar numbers; "custom": textColorRGB = { r, g, b }
+    textSize = 0, textAnchor = "center",
     portraitStyle = "picture",   -- "picture" or "class" (class icon for players)
     -- cast bar (target and focus): Blizzard's own bar drives one built into our frame
     castShow = true, castText = true, castIcon = true,
@@ -452,10 +453,8 @@ local function resolveFont(key)
     end
 end
 
-local OUTLINES = { none = "", outline = "OUTLINE", thick = "THICKOUTLINE" }
-
--- Font, size and outline for the name ("name...") and the bar numbers ("text..."): a size of 0 and the
--- "default" outline keep each font string's own; and the numbers' place on their bar.
+-- Font and size for the name ("name...") and the bar numbers ("text..."): a size of 0 keeps each font
+-- string's own; the numbers' colour (their own, or one you pick) and their place on their bar.
 local function applyFont(f)
     local base = f.baseUnit
     local path = resolveFont(getSetting(base, "font"))
@@ -464,7 +463,8 @@ local function applyFont(f)
         if fs then
             if not f.fontDefaults[fs] then
                 local fp, fz, ff = fs:GetFont()
-                f.fontDefaults[fs] = { fp, fz, ff }
+                local r, g, b = fs:GetTextColor()
+                f.fontDefaults[fs] = { fp, fz, ff, r, g, b }
             end
             local d = f.fontDefaults[fs]
             local pre = (fs == f.name) and "name" or "text"
@@ -473,7 +473,13 @@ local function applyFont(f)
             if size and fs ~= f.name and fs == f.mpText and getSetting(base, "textSize") > 0 then
                 size = math.max(6, size - 1)          -- the power bar is thinner: its number a size down
             end
-            local ol = OUTLINES[getSetting(base, pre .. "Outline")] or d[3]
+            local ol = d[3]
+            if fs ~= f.name then
+                -- the numbers' colour: their own, or the one picked
+                local c = getSetting(base, "textColor") == "custom" and getSetting(base, "textColorRGB")
+                if type(c) == "table" then fs:SetTextColor(c[1] or 1, c[2] or 1, c[3] or 1)
+                elseif d[4] then fs:SetTextColor(d[4], d[5], d[6]) end
+            end
             local ok = false
             if path and size then ok = fs:SetFont(path, size, ol) end
             if not ok and d[1] then fs:SetFont(d[1], size or d[2], ol) end
@@ -898,6 +904,37 @@ local function updatePower(f)
     setBarText(f.mpText, f, "mp")
 end
 
+-- The colour of a mob's level against yours, as the default UI shows it: grey (no challenge), green, yellow
+-- (about your level), orange, red (5+ above). Blizzard's own way first, then the older one, then the
+-- classic rule worked out here.
+local function levelDifficultyColor(u, l)
+    local c
+    pcall(function()
+        if C_PlayerInfo and C_PlayerInfo.GetContentDifficultyCreatureForPlayer and GetDifficultyColor then
+            local d = GetDifficultyColor(C_PlayerInfo.GetContentDifficultyCreatureForPlayer(u))
+            if d and d.r then c = { d.r, d.g, d.b } end
+        end
+    end)
+    if c then return c end
+    pcall(function()
+        if GetCreatureDifficultyColor then
+            local d = GetCreatureDifficultyColor(l)
+            if d and d.r then c = { d.r, d.g, d.b } end
+        end
+    end)
+    if c then return c end
+    pcall(function()
+        local diff = l - UnitLevel("player")
+        local greyAt = (GetQuestGreenRange and GetQuestGreenRange()) or 5
+        if diff >= 5 then c = { 1, 0.1, 0.1 }
+        elseif diff >= 3 then c = { 1, 0.5, 0.25 }
+        elseif diff >= -2 then c = { 1, 1, 0 }
+        elseif -diff <= greyAt then c = { 0.25, 0.75, 0.25 }
+        else c = { 0.5, 0.5, 0.5 } end
+    end)
+    return c
+end
+
 local function updateInfo(f)
     local u = f.wfUnit
     if not UnitExists(u) then return end
@@ -912,21 +949,36 @@ local function updateInfo(f)
     -- white on the player. A secret level can't be compared, so it is shown as it is, uncoloured.
     local lr, lg, lb = 1, 0.82, 0
     if f.baseUnit == "player" then lr, lg, lb = 1, 1, 1 end
+    local skull = false
     local shown = pcall(function()
         local l = UnitLevel(u)
         if l and l > 0 then
             f.level:SetText(tostring(l))
-            if f.baseUnit ~= "player" and UnitCanAttack("player", u) and GetCreatureDifficultyColor then
-                local c = GetCreatureDifficultyColor(l)
-                if c then lr, lg, lb = c.r, c.g, c.b end
+            if f.baseUnit ~= "player" and UnitCanAttack("player", u) then
+                local c = levelDifficultyColor(u, l)
+                if c then lr, lg, lb = c[1], c[2], c[3] end
             end
         else
+            -- too high to tell (bosses, far higher mobs): the skull, as on Blizzard's frames
             f.level:SetText("??")
-            if f.baseUnit ~= "player" then lr, lg, lb = 1, 0.1, 0.1 end
+            if f.baseUnit ~= "player" then lr, lg, lb = 1, 0.1, 0.1; skull = true end
         end
     end)
     if not shown and not pcall(function() f.level:SetFormattedText("%d", UnitLevel(u)) end) then f.level:SetText("") end
     f.level:SetTextColor(lr, lg, lb)
+    -- the skull sits in the level badge in place of "??"
+    if skull and f.badge and not f.skull then
+        f.skull = f.ov:CreateTexture(nil, "OVERLAY", nil, 4)
+        if hasAtlas("UI-HUD-UnitFrame-Target-HighLevelTarget_Icon") then
+            f.skull:SetAtlas("UI-HUD-UnitFrame-Target-HighLevelTarget_Icon")
+        else
+            f.skull:SetTexture("Interface\\TargetingFrame\\UI-TargetingFrame-Skull")
+        end
+        f.skull:SetSize(16, 16)
+        f.skull:SetPoint("CENTER", f.badge, "CENTER", 0, 0)
+    end
+    if f.skull then f.skull:SetShown(skull) end
+    if f.badge then f.level:SetShown(not (skull and f.skull)) end
     -- name colour: the font's own (gold), white, the unit's class colour (players; NPCs keep the gold)
     -- or its reaction colour
     if not f.nameDefault then f.nameDefault = { f.name:GetTextColor() } end
@@ -943,6 +995,9 @@ local function updateInfo(f)
     elseif nm == "reaction" then
         local r, g, b = reactionColorOf(u)
         if r then nr, ng, nb = r, g, b end
+    elseif nm == "custom" then
+        local c = getSetting(f.baseUnit, "nameColorRGB")
+        if type(c) == "table" then nr, ng, nb = c[1] or 1, c[2] or 1, c[3] or 1 end
     end
     f.name:SetTextColor(nr, ng, nb)
     -- portrait: the unit's picture, or for players their class icon
@@ -1199,27 +1254,18 @@ local function createIndicators(f)
         f.threatText:SetPoint("CENTER", box, "CENTER", 0, 0)
         f.threatText:SetJustifyH("CENTER")
         f.threatText:Hide()
-        -- or a round badge like the level circle (same ring art, dark inside, in the frame colour), at the
-        -- top of the portrait beside the raid marker
-        local badge = CreateFrame("Frame", nil, ov)
-        badge:SetSize(42, 42)        -- room for "100%" inside the ring
-        badge:SetFrameLevel(ov:GetFrameLevel() + 2)
-        badge.inside = badge:CreateTexture(nil, "BACKGROUND")
-        badge.inside:SetTexture(CIRCLE_FALLBACK)
-        badge.inside:SetPoint("TOPLEFT", 4, -4); badge.inside:SetPoint("BOTTOMRIGHT", -4, 4)
-        badge.inside:SetVertexColor(0.06, 0.06, 0.06, 0.95)
-        badge.ring = badge:CreateTexture(nil, "ARTWORK")
-        badge.ring:SetAllPoints()
-        if hasAtlas("UI-HUD-UnitFrame-SmallCircle") then badge.ring:SetAtlas("UI-HUD-UnitFrame-SmallCircle")
-        else badge.ring:SetTexture(CIRCLE_FALLBACK); badge.ring:SetVertexColor(0.85, 0.7, 0.35) end
-        badge.text = badge:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        badge.text:SetPoint("CENTER", badge, "CENTER", 0, 0)
+        -- or just the number, at the top of the portrait beside the raid marker (see updateThreat)
+        local spot = CreateFrame("Frame", nil, ov)
+        spot:SetSize(42, 20)
+        spot:SetFrameLevel(ov:GetFrameLevel() + 2)
+        spot.text = spot:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        spot.text:SetPoint("CENTER", spot, "CENTER", 0, 0)
         pcall(function()
-            local fp = badge.text:GetFont()
-            badge.text:SetFont(fp or STANDARD_TEXT_FONT, 9, "OUTLINE")
+            local fp = spot.text:GetFont()
+            spot.text:SetFont(fp or STANDARD_TEXT_FONT, 11, "OUTLINE")
         end)
-        badge:Hide()
-        f.threatBadge = badge
+        spot:Hide()
+        f.threatBadge = spot
     end
 end
 
@@ -1275,11 +1321,11 @@ local function placeIndicators(f)
             f.threatBox:ClearAllPoints()
             f.threatBox:SetPoint("BOTTOMRIGHT", f.hp, "TOPRIGHT", 0, 15)
         end
-        -- the threat badge: on the portrait ring's top, on the bars' side of the raid marker (which sits at
-        -- the top centre), so the two sit side by side
+        -- the threat number's spot: on the portrait ring's top, on the bars' side of the raid marker (which
+        -- sits at the top centre), clear of the portrait
         if f.threatBadge then
             f.threatBadge:ClearAllPoints()
-            f.threatBadge:SetPoint("CENTER", p, "TOP", left and 28 or -28, -2)
+            f.threatBadge:SetPoint("CENTER", p, "TOP", left and 36 or -36, -2)
         end
     end
 end
@@ -1463,16 +1509,10 @@ local function updateThreat(f)
     if f.threatBadge then
         -- just the number, beside the raid marker on the bars' side, clear of the portrait
         f.threatBadge:SetShown(shown and byMarker)
-        f.threatBadge.ring:Hide()
-        f.threatBadge.inside:Hide()
         if f.portrait then
             f.threatBadge:ClearAllPoints()
             f.threatBadge:SetPoint("CENTER", f.portrait, "TOP", f.layoutLeft and 36 or -36, -2)
         end
-        pcall(function()
-            local fp = f.threatBadge.text:GetFont()
-            f.threatBadge.text:SetFont(fp or STANDARD_TEXT_FONT, 11, "OUTLINE")
-        end)
     end
     f.threatGlow:SetShown(glowOn)
     -- (the number sits in its own box above the name row now, so the name keeps its full width)
@@ -1489,12 +1529,10 @@ end
 -- the screen (see hideAllBlizzard), so their cast bars handle the protected cast data as usual, and
 -- every frame ours copies the progress, fade, cast type, spell name and icon. Values only go to setters.
 ---------------------------------------------------------------------------
--- The box, in the frame's TOPLEFT coordinates. Its top border line is the frame art's bottom border line
--- (at y -71, under the mana bar): the cast bar shares that line with the mana bar.
--- On the target layout it runs on to the level badge, which is drawn on top and hides its end.
--- On the player layout it runs from just right of the ring to the end of the bars, with a side line at
--- each end level with the bars' own ends (x 83.5 and 210).
-local CAST_BOX = { top = -71, right = { 20.5, 200 }, left = { 82, 211.5 } }
+-- The box, in the frame's TOPLEFT coordinates (target and focus: portrait on the right). Its top border
+-- line is the frame art's bottom border line (at y -71, under the mana bar): the cast bar shares that line
+-- with the mana bar. It runs on to the level badge, which is drawn on top and hides its end.
+local CAST_BOX = { top = -71, x1 = 20.5, x2 = 200 }
 -- Where the border slices come from in the frame art, in the same coordinates (measured from the decoded
 -- art): the art's left cap (its 1px side line at x 22 and the shadow inside it) and a plain stretch of
 -- its lines; the top rows are the line between the health and mana bars (at y -60) and the 4px shadow under
@@ -1536,14 +1574,13 @@ local function newCastBar(f)
     box:SetFrameLevel(f:GetFrameLevel() + 1)
     local cb = CreateFrame("StatusBar", nil, box)
     cb.box = box
-    -- the border: 3 rows x 3 columns of frame-art slices (left cap, stretched middle, and the
-    -- left cap mirrored as a right cap: only the player layout uses that, the target's end is under the ring)
+    -- the border: 3 rows x 2 columns of frame-art slices (left cap, stretched middle; the right end runs
+    -- under the portrait ring)
     cb.slices = {}
     for r = 1, 3 do
-        for c = 1, 3 do
+        for c = 1, 2 do
             local t = box:CreateTexture(nil, "BACKGROUND", nil, 2)
             local xs = (c == 2) and CAST_ART.midX or CAST_ART.capX
-            if c == 3 then xs = { xs[2], xs[1] } end
             artSlice(t, xs[1], xs[2], CAST_ART.rows[r][1], CAST_ART.rows[r][2], CAST_ART.rows[r][3])
             t.row, t.col = r, c
             cb.slices[#cb.slices + 1] = t
@@ -1582,18 +1619,12 @@ local function placeCastbar(f)
         cb.box:Hide()
         return
     end
-    -- the player layout (portrait left) runs from the ring to the frame's right end; the target layout
-    -- from the frame's left end on under the ring
-    local left = f.layoutLeft
-    if left == nil then left = portraitOnLeft(f.baseUnit) end
-    local x = left and CAST_BOX.left or CAST_BOX.right
     local h = castBoxHeight()
     local box = cb.box
     box:ClearAllPoints()
-    box:SetPoint("TOPLEFT", f, "TOPLEFT", x[1], CAST_BOX.top)
-    box:SetPoint("BOTTOMRIGHT", f, "TOPLEFT", x[2], CAST_BOX.top - h)
+    box:SetPoint("TOPLEFT", f, "TOPLEFT", CAST_BOX.x1, CAST_BOX.top)
+    box:SetPoint("BOTTOMRIGHT", f, "TOPLEFT", CAST_BOX.x2, CAST_BOX.top - h)
     -- the border slices: rows stacked down the box, the cap at the left, the middle stretched to the end
-    -- (or to the right cap, on the player layout)
     local capW = CAST_ART.capX[2] - CAST_ART.capX[1]
     for _, t in ipairs(cb.slices) do
         local y = 0
@@ -1602,40 +1633,32 @@ local function placeCastbar(f)
         if t.col == 1 then
             t:SetPoint("TOPLEFT", box, "TOPLEFT", 0, -y)
             t:SetSize(capW, CAST_ART.rowH[t.row])
-        elseif t.col == 3 then
-            t:SetPoint("TOPRIGHT", box, "TOPRIGHT", 0, -y)
-            t:SetSize(capW, CAST_ART.rowH[t.row])
         else
             t:SetPoint("TOPLEFT", box, "TOPLEFT", capW, -y)
-            t:SetPoint("BOTTOMRIGHT", box, "TOPRIGHT", left and -capW or 0, -(y + CAST_ART.rowH[t.row]))
+            t:SetPoint("BOTTOMRIGHT", box, "TOPRIGHT", 0, -(y + CAST_ART.rowH[t.row]))
         end
     end
     -- the frame's own bar texture (a chosen SharedMedia one, or the default tintable fill) ...
-    local fill = f.customTex or ((left and BAR_FILE.player or BAR_FILE.target) .. "Health-Status")
+    local fill = f.customTex or (BAR_FILE.target .. "Health-Status")
     if cb.fill ~= fill then
         cb.fill = fill
         cb:SetStatusBarTexture(fill)
         cb.fillMasked = nil
     end
-    -- target layout: cut the box's end along the portrait ring (once per texture)
-    if not left then
-        if not cb.boxMaskSet then
-            cb.boxMaskSet = true
-            cb.boxMask:SetTexture(MEDIA .. "castbox-mask-target", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-            for _, t in ipairs(cb.slices) do t:AddMaskTexture(cb.boxMask) end
-        end
-        if not cb.fillMasked then
-            cb.fillMasked = true
-            local tex = cb:GetStatusBarTexture()
-            pcall(tex.AddMaskTexture, tex, cb.boxMask)   -- may already have it if the texture object was reused
-        end
+    -- the box's end cut along the portrait ring (once per texture)
+    if not cb.boxMaskSet then
+        cb.boxMaskSet = true
+        cb.boxMask:SetTexture(MEDIA .. "castbox-mask-target", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        for _, t in ipairs(cb.slices) do t:AddMaskTexture(cb.boxMask) end
+    end
+    if not cb.fillMasked then
+        cb.fillMasked = true
+        local tex = cb:GetStatusBarTexture()
+        pcall(tex.AddMaskTexture, tex, cb.boxMask)   -- may already have it if the texture object was reused
     end
     -- ... and its font, at the size and style of the health bar numbers
     pcall(function() cb.text:SetFont(f.hpText:GetFont()) end)
-    -- the frame art's border (the right cap only on the player layout)
-    for _, t in ipairs(cb.slices) do t:SetShown(t.col ~= 3 or left) end
     local inL, inT, inB = CAST_ART.inset.left, CAST_ART.inset.top, CAST_ART.inset.bottom
-    local inR = left and inL or 0        -- the player layout's right cap has a side line too
     local showIcon = getSetting(f.baseUnit, "castIcon") and true or false
     local inner = h - inT - inB
     cb.icon:ClearAllPoints()
@@ -1653,13 +1676,13 @@ local function placeCastbar(f)
     cb.dividerShadow:SetShown(showIcon)
     cb:ClearAllPoints()
     cb:SetPoint("TOPLEFT", box, "TOPLEFT", inL + (showIcon and (inner + 1) or 0), -inT)
-    cb:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -inR, inB)
+    cb:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, inB)
     -- the spell name is centred under the health bar (the bar itself runs on to the level badge)
-    local fillLeft = x[1] + inL + (showIcon and (inner + 1) or 0)   -- (the shadow sits over the fill's first px)
-    local hpMid = left and (85 + 124 / 2) or (23 + 126 / 2)
+    local fillLeft = CAST_BOX.x1 + inL + (showIcon and (inner + 1) or 0)
+    local hpMid = 23 + 126 / 2
     cb.text:ClearAllPoints()
     -- (1px up: the font string's box includes room for descenders, so it sits low when centred)
-    cb.text:SetPoint("CENTER", cb, "CENTER", hpMid - (fillLeft + x[2] - inR) / 2, 1)
+    cb.text:SetPoint("CENTER", cb, "CENTER", hpMid - (fillLeft + CAST_BOX.x2) / 2, 1)
     cb.text:SetShown(getSetting(f.baseUnit, "castText") and true or false)
 end
 
@@ -1712,47 +1735,9 @@ local function adoptCastbar(f, barName)
 end
 
 ---------------------------------------------------------------------------
--- Buffs and debuffs. Secret-safe: aura fields only ever go to setters, timers go through duration
--- objects (SetCooldownFromDurationObject) and stack counts through the display-count API.
+-- Buffs and debuffs: where the block sits, and the timer option.
 ---------------------------------------------------------------------------
-local AURA_GAP = 2
-
-local function auraTooltip(self)
-    GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
-    local ok = self.auraID ~= nil and pcall(GameTooltip.SetUnitAuraByAuraInstanceID, GameTooltip, self.unit, self.auraID)
-    if not ok then pcall(GameTooltip.SetUnitAura, GameTooltip, self.unit, self.index, self.filter) end
-    GameTooltip:Show()
-end
-
-local function newAuraButton(parent)
-    local b = CreateFrame("Frame", nil, parent)
-    -- a crisp 1px edge (black on buffs, the dispel colour on debuffs) with the icon inside it, cropped
-    -- past Blizzard's own icon border
-    b.edge = b:CreateTexture(nil, "BACKGROUND")
-    b.edge:SetAllPoints()
-    b.edge:SetColorTexture(0, 0, 0, 1)
-    b.icon = b:CreateTexture(nil, "ARTWORK")
-    b.icon:SetPoint("TOPLEFT", 1, -1)
-    b.icon:SetPoint("BOTTOMRIGHT", -1, 1)
-    b.icon:SetTexCoord(0.1, 0.9, 0.1, 0.9)
-    -- a soft dark swipe; the countdown numbers are Blizzard's own (safe with protected durations)
-    b.cd = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
-    b.cd:SetAllPoints(b.icon)
-    b.cd:SetReverse(true)
-    b.cd:SetDrawEdge(false)
-    pcall(b.cd.SetSwipeColor, b.cd, 0, 0, 0, 0.6)
-    -- stack count above the cooldown swipe
-    local top = CreateFrame("Frame", nil, b)
-    top:SetAllPoints()
-    top:SetFrameLevel(b.cd:GetFrameLevel() + 1)
-    b.count = top:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
-    b.count:SetPoint("BOTTOMRIGHT", 1, 0)
-    b.count:SetJustifyH("RIGHT")
-    b:EnableMouse(true)
-    b:SetScript("OnEnter", auraTooltip)
-    b:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    return b
-end
+local AURA_GAP = 2       -- default gap between icons
 
 -- Where the aura block starts: below the frame art (default), just above its name, or wherever it was
 -- dragged in Edit Mode ("custom": auraX / auraY from the frame's top left; it starts where "below" is).
@@ -1773,9 +1758,8 @@ local function auraAnchor(f, pos)
     -- With a cast bar they lock onto its bottom (always, cast or not, so the icons don't jump about),
     -- lined up with its left line.
     if f.castbar and getSetting(f.baseUnit, "castShow") then
-        local cx = (f.layoutLeft and CAST_BOX.left or CAST_BOX.right)[1]
         -- just below the cast box (its bottom line's soft shadow included)
-        return "TOPLEFT", "TOPLEFT", cx + 1.5, CAST_BOX.top - castBoxHeight() - 1
+        return "TOPLEFT", "TOPLEFT", CAST_BOX.x1 + 1.5, CAST_BOX.top - castBoxHeight() - 1
     end
     return "TOPLEFT", "TOPLEFT", x, -87
 end
@@ -1786,107 +1770,11 @@ local function auraTimerParts(base)
     return mode == "both" or mode == "swipe", mode == "both" or mode == "numbers"
 end
 
-local function updateAurasLegacy(f)
-    local base = f.baseUnit
-    local showB, showD = getSetting(base, "auraBuffs"), getSetting(base, "auraDebuffs")
-    if not (showB or showD) or not C_UnitAuras then
-        if f.auraButtons then for _, b in ipairs(f.auraButtons) do b:Hide() end end
-        f.auraHeight = 0
-        placeCastbar(f)
-        return
-    end
-    if not f.auraBox then
-        f.auraBox = CreateFrame("Frame", nil, f.ov or f)
-        f.auraBox:SetSize(1, 1)
-        f.auraButtons = {}
-    end
-    local perRow, max = getSetting(base, "auraPerRow"), getSetting(base, "auraMax")
-    local pos = getSetting(base, "auraPos")
-    local point, relPoint, x, y = auraAnchor(f, pos)
-    f.auraBox:ClearAllPoints()
-    f.auraBox:SetPoint(point, f, relPoint, x, y)
-    local up = (pos == "above")
-    local swipe, timers = auraTimerParts(base)
-    local u = f.wfUnit
-    local n, col, rowY, size = 0, 0, 0, 0     -- rowY: how far the current row starts from the box edge
-
-    local function place(b)
-        b:SetSize(size, size)
-        b:ClearAllPoints()
-        local bx = col * (size + AURA_GAP)
-        if up then b:SetPoint("BOTTOMLEFT", f.auraBox, "BOTTOMLEFT", bx, rowY)
-        else b:SetPoint("TOPLEFT", f.auraBox, "TOPLEFT", bx, -rowY) end
-        col = col + 1
-        if col >= perRow then col, rowY = 0, rowY + size + AURA_GAP end
-    end
-
-    local function group(filter, isDebuff)
-        size = getSetting(base, isDebuff and "auraDebuffSize" or "auraSize")
-        local count = 0
-        for i = 1, 40 do
-            if count >= max then break end
-            local aura
-            pcall(function() aura = C_UnitAuras.GetAuraDataByIndex(u, i, filter) end)
-            if not aura then break end
-            n, count = n + 1, count + 1
-            local b = f.auraButtons[n] or newAuraButton(f.auraBox)
-            f.auraButtons[n] = b
-            b.unit, b.index, b.filter, b.auraID = u, i, filter, aura.auraInstanceID
-            pcall(b.icon.SetTexture, b.icon, aura.icon)
-            if not pcall(function() b.count:SetText(C_UnitAuras.GetAuraApplicationDisplayCount(u, aura.auraInstanceID, 2, 99)) end) then
-                b.count:SetText("")
-            end
-            if not pcall(function() b.cd:SetCooldownFromDurationObject(C_UnitAuras.GetAuraDuration(u, aura.auraInstanceID)) end) then
-                -- older clients: plain numbers, when they are readable
-                if not pcall(function()
-                    if aura.duration and aura.duration > 0 then b.cd:SetCooldown(aura.expirationTime - aura.duration, aura.duration)
-                    else b.cd:Clear() end
-                end) then b.cd:Clear() end
-            end
-            if isDebuff then
-                -- coloured by dispel type (magic blue, curse purple, ...); red when unknown or protected
-                local r, g, bl = 0.8, 0, 0
-                pcall(function()
-                    local c = DebuffTypeColor and DebuffTypeColor[aura.dispelName]
-                    if c then r, g, bl = c.r, c.g, c.b end
-                end)
-                b.edge:SetColorTexture(r, g, bl, 1)
-            else
-                b.edge:SetColorTexture(0, 0, 0, 1)
-            end
-            -- sweep, countdown numbers and stack count sized to the icon
-            pcall(b.cd.SetDrawSwipe, b.cd, swipe)
-            pcall(b.cd.SetHideCountdownNumbers, b.cd, not timers)
-            if timers then
-                pcall(function()
-                    local fs = b.cd:GetCountdownFontString()
-                    local fp = fs:GetFont()
-                    fs:SetFont(fp or STANDARD_TEXT_FONT, math.max(8, math.floor(size * 0.45)), "OUTLINE")
-                end)
-            end
-            pcall(function()
-                local fp = b.count:GetFont()
-                b.count:SetFont(fp or STANDARD_TEXT_FONT, math.max(8, math.floor(size * 0.5)), "OUTLINE")
-            end)
-            place(b)
-            b:Show()
-        end
-        if count > 0 and col > 0 then col, rowY = 0, rowY + size + AURA_GAP end   -- the next group starts a new row
-    end
-
-    if showB then group("HELPFUL", false) end
-    if showD then group(getSetting(base, "auraMine") and "HARMFUL|PLAYER" or "HARMFUL", true) end
-    for i = n + 1, #f.auraButtons do f.auraButtons[i]:Hide() end
-    -- how tall the aura block is, so the cast bar can sit under it
-    f.auraHeight = rowY
-    placeCastbar(f)
-end
-
 ---------------------------------------------------------------------------
 -- Buffs and debuffs through Blizzard's AuraContainer (12.1, on Forever too). In combat the aura data is
 -- protected, so addons can't read it; the container tracks and filters the unit's auras itself and fills
 -- buttons we've styled: we give each button its icon texture, cooldown swipe, stack count and dispel
--- border, and set the layout. (updateAurasLegacy above is the fallback for clients without it.)
+-- border, and set the layout.
 ---------------------------------------------------------------------------
 local AuraKit = { GROUPS = { "buffs", "debuffs" } }
 
@@ -2060,7 +1948,7 @@ end
 
 function updateAuras(f)       -- (the local declared above)
     local c = AuraKit.container(f)
-    if not c then return updateAurasLegacy(f) end
+    if not c then return end          -- (a client without Blizzard's aura container: no auras)
     local base = f.baseUnit
     local showB = getSetting(base, "auraBuffs") and true or false
     local showD = getSetting(base, "auraDebuffs") and true or false
@@ -2310,8 +2198,6 @@ function Extras.happiness(f)
         ic.back = ic:CreateTexture(nil, "BACKGROUND")
         ic.back:SetTexture(CIRCLE_FALLBACK)
         ic.back:SetVertexColor(0, 0, 0, 1)
-        ic.ring = ic:CreateTexture(nil, "BORDER")
-        if hasAtlas("UI-HUD-UnitFrame-SmallCircle") then ic.ring:SetAtlas("UI-HUD-UnitFrame-SmallCircle") else ic.ring:Hide() end
         ic.tex = ic:CreateTexture(nil, "ARTWORK")
         ic.tex:SetTexture("Interface\\PetPaperDollFrame\\UI-PetHappiness")
         ic:EnableMouse(true)
@@ -2319,20 +2205,17 @@ function Extras.happiness(f)
         ic:SetScript("OnLeave", function() GameTooltip:Hide() end)
         f.happyIcon = ic
     end
-    -- (the small frame never shows a level number; this only matters on a frame with a level badge)
-    local function showLevel(on) if f.level and f.badge then f.level:SetShown(on) end end
-    if not f.happyIcon then showLevel(true); return end
+    if not f.happyIcon then return end
     local ic = f.happyIcon
     if coords then
         local p = f.portrait or f
         ic:ClearAllPoints()
-        ic.tex:ClearAllPoints(); ic.back:ClearAllPoints(); ic.ring:ClearAllPoints()
+        ic.tex:ClearAllPoints(); ic.back:ClearAllPoints()
         if mode == "badge" then
             -- where the player's level badge sits (39px by a 60px portrait), at the portrait's bottom left:
-            -- just the face on its dark round backing, no badge ring
+            -- just the face on its dark round backing
             ic:SetSize(24, 24)
             ic:SetPoint("CENTER", p, "BOTTOMLEFT", 5, 3)
-            ic.ring:Hide()
             ic.back:SetPoint("TOPLEFT", 3, -3); ic.back:SetPoint("BOTTOMRIGHT", -3, 3)
             ic.back:Show()
             ic.tex:SetPoint("TOPLEFT", 4, -4); ic.tex:SetPoint("BOTTOMRIGHT", -4, 4)
@@ -2341,13 +2224,11 @@ function Extras.happiness(f)
             -- the corner spot (the player frame's combat swords: 18px on a 22px backing, by a 60px portrait)
             ic:SetSize(16, 16)
             ic:SetPoint("CENTER", p, "BOTTOMRIGHT", -6, 4)
-            ic.ring:Hide()
             ic.back:SetAllPoints()
             ic.back:Show()
             ic.tex:SetPoint("TOPLEFT", 1.5, -1.5); ic.tex:SetPoint("BOTTOMRIGHT", -1.5, 1.5)
             ic.level = nil
         end
-        if f.badge then showLevel(mode ~= "badge") end
         -- Forever's mood icons, or the Classic texture sheet when the client lacks them
         if not (atlas and pcall(ic.tex.SetAtlas, ic.tex, atlas) and ic.tex:GetAtlas()) then
             ic.tex:SetTexture("Interface\\PetPaperDollFrame\\UI-PetHappiness")
@@ -2357,7 +2238,6 @@ function Extras.happiness(f)
         ic:Show()
     else
         ic:Hide()
-        showLevel(true)
     end
 end
 
@@ -3303,8 +3183,8 @@ local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture",
                     "castShow", "castText", "castIcon", "smoothBars", "healPrediction", "absorbs",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
-                    "auraGap", "auraGrowth", "auraStack", "nameSize", "nameOutline", "nameColor",
-                    "textSize", "textOutline", "textAnchor", "portraitStyle" }
+                    "auraGap", "auraGrowth", "auraStack", "nameSize", "nameColor", "nameColorRGB",
+                    "textSize", "textColor", "textColorRGB", "textAnchor", "portraitStyle" }
 
 function resetFrame(unit)
     if InCombatLockdown() then print("|cff33ccffWebby Frames:|r can't reset in combat."); return end
@@ -3690,22 +3570,34 @@ local function buildSettings()
             end
         end
         -- The name and bar number text options (a section of their own).
-        function B.text()
+        -- read: whose settings to show; set(unit, key, value) for the colour pickers.
+        function B.text(read, set)
             B.section("Text", false)
             local sizeText = function(v) v = math.floor(v + 0.5); return v <= 0 and "Default" or string.format("%d", v) end
-            local outlines = { { "default", "Default" }, { "none", "None" }, { "outline", "Outline" }, { "thick", "Thick outline" } }
-            B.dropdown("nameColor", "Name colour", "Default: the font's own gold. Class colour: players in their class colour (NPCs keep the gold). Reaction: green, yellow or red by how they see you.", "default",
-                { { "default", "Default (gold)" }, { "white", "White" }, { "class", "Class colour" }, { "reaction", "Reaction colour" } })
+            local function picker(colorKey, modeKey)
+                return function()
+                    local c = getSetting(read, colorKey)
+                    local old = type(c) == "table" and { c[1] or 1, c[2] or 1, c[3] or 1 } or { 1, 1, 1 }
+                    Extras.openPicker(old, function(r, g, b)
+                        set(read, colorKey, { r, g, b })
+                        set(read, modeKey, "custom")
+                    end)
+                end
+            end
+            B.dropdown("nameColor", "Name colour", "Default: the font's own gold. Class colour: players in their class colour (NPCs keep the gold). Reaction: green, yellow or red by how they see you. Custom: the colour you pick below.", "default",
+                { { "default", "Default (gold)" }, { "white", "White" }, { "class", "Class colour" }, { "reaction", "Reaction colour" }, { "custom", "Custom" } })
+            B.button("Name colour", "Pick colour", picker("nameColorRGB", "nameColor"), "Pick any colour for the name (sets Name colour to Custom).")
             B.slider("nameSize", "Name size", "0 keeps the font's own size.", 0, 0, 20, 1, sizeText)
-            B.dropdown("nameOutline", "Name outline", nil, "default", outlines)
+            B.dropdown("textColor", "Number colour", "The colour of the health and power numbers: the font's own white, or the colour you pick below.", "default",
+                { { "default", "Default" }, { "custom", "Custom" } })
+            B.button("Number colour", "Pick colour", picker("textColorRGB", "textColor"), "Pick any colour for the numbers (sets Number colour to Custom).")
             B.slider("textSize", "Number size", "The health and power numbers. 0 keeps the font's own size.", 0, 0, 20, 1, sizeText)
-            B.dropdown("textOutline", "Number outline", nil, "default", outlines)
             B.dropdown("textAnchor", "Number position", "Where the numbers sit on their bars.", "center",
                 { { "center", "Centre" }, { "left", "Left" }, { "right", "Right" } })
         end
         -- Buff and debuff layout details (in the Buffs and debuffs section).
         function B.auraDetails()
-            B.dropdown("auraGrowth", "Rows grow", "Right: the first icon at the left end. Left: the first icon at the right end, the row filling leftwards.", "right",
+            B.dropdown("auraGrowth", "Rows grow", "To the right: the first icon at the left end. To the left: the first icon at the right end, with the row filling leftwards.", "right",
                 { { "right", "To the right" }, { "left", "To the left" } })
             B.slider("auraGap", "Gap", "Space between the icons.", 2, 0, 10, 1, function(v) return string.format("%d px", math.floor(v + 0.5)) end)
             B.slider("auraStack", "Stack count size", "How big the stack count is, as a share of the icon.", 50, 30, 90, 5,
@@ -3715,7 +3607,7 @@ local function buildSettings()
         function B.fade(read, set, tip)
             local fade = B.check("healthFade", "Fade to red", tip, false)
             local function fadeOn() return getSetting(read, "healthFade") and true or false end
-            local style = B.dropdown("fadeStyle", "Fade style", "Automatic: your colour turns to red round the colour wheel (with its own route for shamans, mages and warlocks), fully red from 25%.\n\nCustom: your own stops below, each a health % and a colour.", "auto",
+            local style = B.dropdown("fadeStyle", "Fade style", "Automatic: the colour turns to red around the colour wheel (shamans, mages and warlocks each have their own route), and is fully red from 25% health.\n\nCustom stops: up to three stops below, each a health % and a colour.", "auto",
                 { { "auto", "Automatic" }, { "custom", "Custom stops" } })
             B.under(fade, fadeOn, style)
             local function custom() return fadeOn() and getSetting(read, "fadeStyle") == "custom" end
@@ -3725,7 +3617,7 @@ local function buildSettings()
             local inits = { B.check("fadeBlend", "Smooth blend", "On: the colours blend from one stop to the next. Off: the bar switches colour right at each stop.", true) }
             local names = { "First", "Second", "Third" }
             for i = 1, 3 do
-                inits[#inits + 1] = B.slider("fade" .. i .. "Pct", names[i] .. " stop", "At this health % the bar reaches this stop's colour. 0 turns the stop off. (Fade style: Custom stops.)",
+                inits[#inits + 1] = B.slider("fade" .. i .. "Pct", names[i] .. " stop", "The health % at which the bar reaches this stop's colour. 0 turns the stop off.",
                     DEFAULT_SETTINGS["fade" .. i .. "Pct"], 0, 100, 5, pctText)
             end
             B.under(style, custom, unpack(inits))
@@ -3738,7 +3630,7 @@ local function buildSettings()
                     local c = getSetting(read, "fade" .. i .. "Color")
                     local old = type(c) == "table" and { c[1] or 1, c[2] or 1, c[3] or 1 } or { 1, 1, 1 }
                     Extras.openPicker(old, function(r, g, b) set(read, "fade" .. i .. "Color", { r, g, b }) end)
-                end, "The bar's colour at the " .. names[i]:lower() .. " stop (Fade style: Custom stops).")
+                end, "The bar's colour at the " .. names[i]:lower() .. " stop. Works when Fade style is set to Custom stops.")
             end
         end
         return B
@@ -3757,7 +3649,7 @@ local function buildSettings()
         B.check("combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on the player, target and focus frames.", true)
 
         B.header("Frames")
-        B.button("Position", "Open Edit Mode", openEditMode, "Drag the frames where you want them. They snap to each other and to the screen edges.")
+        B.button("Position", "Open Edit Mode", openEditMode, "Drag the frames where you want them. They snap to each other and to the middle of the screen, and a frame dropped next to another moves with it.")
         B.button("Start over", "Reset all frames", function()
             for _, unit in ipairs(UNITS) do resetFrame(unit) end
         end, "Puts every frame back to its default options and position, for the current Edit Mode layout.")
@@ -3788,40 +3680,41 @@ local function buildSettings()
         local B = builders(sub, subLayout, proxy, "WEBBY_all_")
         B.header("|cff808080Changes here apply to every frame. Each frame's own page can then differ.|r")
 
-        B.section("Look", true)
+        -- (the same sections, in the same order, as each frame's page)
+        B.section("Frame", true)
         B.dropdown("frameTint", "Frame colour", "Colours the frame art on every frame. The player's resting glow takes the colour too.", "default",
             { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "unitclass", "The unit's class colour" }, { "custom", "Custom" } })
         B.button("Custom colour", "Pick colour", function() Extras.pickColor("player", setAll) end,
             "Pick any colour for every frame's art (sets Frame colour to Custom).")
+        B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
+            { { "picture", "Picture" }, { "class", "Class icon (players)" } })
+
+        B.section("Bars", false)
         B.dropdown("barTexture", "Health texture", "Every frame's health bar fill (and cast bar and heal / shield overlays).", "default", textureChoices)
         B.dropdown("powerTexture", "Power texture", "Every frame's mana, rage or energy fill.", "default", textureChoices)
         B.dropdown("font", "Font", "For the names and bar numbers on every frame.", "default", fontList)
-
-        B.section("Bars", false)
         local numbers = B.dropdown("textMode", "Numbers", "When the bars show their numbers, on every frame.", "always",
             { { "always", "Always" }, { "mouseover", "On mouseover" }, { "off", "Never" } })
         B.under(numbers, function() return getSetting("player", "textMode") ~= "off" end,
             B.dropdown("textFormat", "Style", "Totals, percentages, or both.", "value",
                 { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
         B.check("smoothBars", "Smooth bars", "Health and power slide to their new value instead of jumping.", true)
-        B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
-        B.dropdown("npcColor", "Enemy NPCs", "The health colour for hostile NPCs on every frame (with the Class / reaction or Reaction colour). Green lets Fade to red show their health dropping.", "reaction",
+
+        B.text("player", setAll)
+
+        B.section("Health", false)
+        B.dropdown("npcColor", "Enemy NPCs", "The health colour for hostile NPCs on every frame, when Colour is set to class and reaction, or reaction. Green lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
             { { "reaction", "Red (reaction colour)" }, { "green", "Green" }, { "custom", "Custom" } })
         B.button("Enemy NPC colour", "Pick colour", function() Extras.pickNpcColor("target", setAll) end,
             "Pick any health colour for hostile NPCs on every frame (sets Enemy NPCs to Custom).")
+        B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
         B.check("healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true)
         B.check("absorbs", "Absorbs", "Damage shields and healing absorbs on the health bars.", true)
-
-        B.text()
 
         B.section("Buffs and debuffs", false)
         B.dropdown("auraTimer", "Time left", "How each icon shows the time it has left, on every frame.", "both",
             { { "both", "Sweep and numbers" }, { "swipe", "Sweep" }, { "numbers", "Numbers" }, { "none", "Nothing" } })
         B.auraDetails()
-
-        B.section("Portraits", false)
-        B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
-            { { "picture", "Picture" }, { "class", "Class icon (players)" } })
     end
 
     for _, unit in ipairs(UNITS) do
@@ -3841,9 +3734,11 @@ local function buildSettings()
         B.section("Frame", true)
         B.slider("scale", "Scale", "How big the frame is.", defaultFor(unit, "scale"), 0.5, 2, 0.05)
         B.check("showName", "Name", "The unit's name above its health bar.", true)
-        B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
-            { { "picture", "Picture" }, { "class", "Class icon (players)" } })
-        B.dropdown("frameTint", "Frame colour", "Colours the frame art: its border, portrait ring, corner accent, level circle and cast bar border."
+        if unit ~= "pet" then   -- (a pet has no class: it always shows its picture)
+            B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
+                { { "picture", "Picture" }, { "class", "Class icon (players)" } })
+        end
+        B.dropdown("frameTint", "Frame colour", "Colours the frame art: its border, portrait ring, corner accent, level circle and cast bar border. The unit's class colour follows whoever the frame shows (NPCs stay gold)."
             .. (unit == "player" and " The resting glow takes the colour too." or ""), "default",
             { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "unitclass", "The unit's class colour" }, { "custom", "Custom" } })
         B.button("Custom colour", "Pick colour", function() Extras.pickColor(unit, setSetting) end,
@@ -3868,7 +3763,7 @@ local function buildSettings()
                 defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
         B.check("smoothBars", "Smooth bars", "Health and power slide to their new value instead of jumping.", true)
 
-        B.text()
+        B.text(unit, setSetting)
 
         -- the health bar's colour and what's drawn past its end
         B.section("Health", false)
@@ -3912,20 +3807,20 @@ local function buildSettings()
             B.under(cast, isOn("castShow"),
                 B.check("castText", "Spell name", nil, true),
                 B.check("castIcon", "Spell icon", "At the bar's left end.", true))
-            local threat = B.dropdown("threatShow", "Threat", "Your threat on hostile units: the frame glows in your threat status colour, and / or your threat shows as a number in the same colour.", "both",
+            local threat = B.dropdown("threatShow", "Threat", "Your threat on hostile mobs: a glow round the frame and / or your threat %, both in your threat colour.", "both",
                 { { "both", "Glow and number" }, { "glow", "Glow only" }, { "number", "Number only" }, { "off", "Off" } })
             B.under(threat, function() local m = getSetting(unit, "threatShow"); return m == "both" or m == "number" end,
-                B.dropdown("threatStyle", "Number in", "Your threat %: about 110% is a melee pull and 130% a ranged pull; while you hold aggro it's your threat against the next highest in your group.\n\nJust the number: beside the raid marker on the portrait. Box: a little box above the end of the name row.", "text",
-                    { { "text", "Just the number" }, { "box", "Box above the name" } }))
+                B.dropdown("threatStyle", "Threat number", "Your threat %. About 110% pulls aggro in melee and 130% at range. While you have aggro, it's your threat compared with the next highest in your group.\n\nJust the number: beside the raid marker on the portrait.\nBox: a small box above the end of the name.", "text",
+                    { { "text", "Just the number" }, { "box", "In a box above the name" } }))
             B.under(threat, function() return getSetting(unit, "threatShow") ~= "off" end,
-                B.dropdown("threatColors", "Threat colours", "Status: yellow safe, red about to pull, blue tanking, purple losing aggro. Colourblind: grey, orange, cyan, yellow. Gradient: green to red as you near a pull. Class: your class colour. Blizzard: the game's own threat colours.", "status",
+                B.dropdown("threatColors", "Threat colours", "Status: yellow when safe, red when you're about to pull, blue when you have aggro but someone is about to take it, purple when you hold it securely.\nColourblind-friendly: the same in grey, orange, cyan and yellow.\nGradient: green to red as you get closer to pulling.\nYour class colour: always your class colour.\nBlizzard's: the game's own threat colours.", "status",
                     { { "status", "Status" }, { "colorblind", "Colourblind-friendly" }, { "gradient", "Gradient (green to red)" }, { "class", "Your class colour" }, { "blizzard", "Blizzard's" } }))
         end
 
         B.section("Reset and copy", false)
         if unit ~= "player" then
             B.button("Copy", "Copy from player", function() copySettings("player", unit) end,
-                "Gives this frame the player frame's options. Its position stays put.")
+                "Gives this frame the player frame's options. Its position doesn't change.")
         end
         B.button("Reset", "Reset this frame", function() resetFrame(unit) end,
             "Puts this frame back to its default options and position, for the current Edit Mode layout.")
@@ -4008,15 +3903,6 @@ init:SetScript("OnEvent", function(_, event)
     end
 
     DB = WebbyFramesDB
-    -- a 0.57 test build briefly gave the pet the player's (larger) frame and cut a saved pet scale to
-    -- match; the pet is the small frame again, so a scale cut then is put back
-    if DB.petFrameV2 then
-        DB.petFrameV2 = nil
-        for _, l in pairs(DB.layouts or {}) do
-            local u = type(l) == "table" and l.pet
-            if type(u) == "table" and type(u.scale) == "number" then u.scale = u.scale * 198 / 120 end
-        end
-    end
     if not pcall(buildSettings) then
         print("|cffff9900Webby Frames:|r couldn't build the settings page; Edit Mode still works.")
     end
@@ -4065,7 +3951,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         print("Pet happiness:", (C_PetInfo and C_PetInfo.GetPetHappiness) and "C_PetInfo API" or (GetPetHappiness and "old API" or "no API"),
             "hunter pet", tostring(hunterPet), "pet", tostring(UnitExists("pet")), "->", tostring(hok), tostring(h), tostring(dmg), tostring(loyalty))
         local ac = frames.target and frames.target.auraContainer
-        print("Aura containers:", ac and "in use" or (ac == false and "not available, using the old aura code" or "not made yet"))
+        print("Aura containers:", ac and "in use" or (ac == false and "not available on this client (no buffs or debuffs)" or "not made yet"))
         print("Version", addonVersion())
     elseif msg == "test" then
         -- a 10-second preview on your own frame: health slides to 60% (smooth bars), with 20% incoming
@@ -4117,7 +4003,11 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         if #updateErrors == 0 then print("|cff33ccffWebby Frames:|r no errors caught.") end
         for i, err in ipairs(updateErrors) do print("|cffff6060Webby Frames error " .. i .. ":|r " .. tostring(err)) end
     elseif msg == "help" then
-        print("|cff33ccffWebby Frames:|r /webby (options)   /webby edit (move the frames)   /webby reset (reset all frames)   /webby test (preview heals and shields)   /webby export / import (profiles)   /webby errors   /webby debug")
+        print("|cff33ccffWebby Frames|r commands:")
+        print("  /webby - options   /webby edit - move the frames   /webby reset - reset every frame")
+        print("  /webby test - preview heals, shields and a combat number on your frame")
+        print("  /webby threat - what the game reports for your target's threat")
+        print("  /webby export, /webby import - share a profile   /webby errors - anything that went wrong")
     else
         print("|cff33ccffWebby Frames:|r unknown command. Type |cff33ccff/webby help|r.")
     end

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.2
+- Enemy levels are coloured by difficulty again (grey, green, yellow, orange, red), and unknown levels show the skull in the level badge.
+- Name and number colours: a Custom name colour and a Number colour, each with a colour picker. The outline options are gone.
+- The Pet page no longer offers the portrait style (pets always show their picture).
+- The All frames page now has the same sections, in the same order, as each frame's page.
+- Clearer tooltips throughout, `/webby help` lists every command, and the threat colours are described correctly (blue: about to lose aggro, purple: holding it securely).
+- Behind the scenes: old code for removed features and older clients is gone.
+
 ## 1.7.1
 - The threat % keeps updating while you hold aggro: it's then your threat against the next highest in your group (pets included), so after a re-pull it climbs again instead of standing still. It's also re-read five times a second, since the game sends few threat updates while you tank.
 - Simpler threat number: always the percentage, shown as just the number beside the raid marker (default) or in the box above the name. The differential and the round badge are gone; a badge setting reads as just the number.

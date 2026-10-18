@@ -8,36 +8,38 @@ Unzip the `WebbyFrames` folder into `World of Warcraft/_classic_beta_/Interface/
 (delete any older `DFFramesForever` or `WebbyFrames` folder first; settings carry over).
 
 ## Use
-- `/webby` opens the options (Esc > Options > AddOns > Webby Frames): a General page, an All frames page that
-  sets the common options (frame colour, textures, font, numbers, bar extras, aura timers) on every frame at once,
-  and one page per frame, in collapsible sections.
+- `/webby` opens the options (Esc > Options > AddOns > Webby Frames): **General**, **All frames** (sets the
+  common options on every frame at once) and one page per frame, in collapsible sections.
 - `/webby edit` opens Edit Mode to move the frames: they snap to each other, a frame dropped next to another
   sticks to it and moves with it, and the arrow keys nudge the clicked frame (1px, or 10px with Shift).
-- `/webby reset` resets every frame, `/webby test` previews heals, shields and a combat number on your frame,
-  `/webby export` and `/webby import` share a profile as text, `/webby errors` lists anything that went wrong,
-  `/webby help` lists the commands.
-- Everything is saved per Edit Mode layout.
+- Everything is saved per Edit Mode layout. Profiles can be exported and imported as text (General page).
+
+Commands: `/webby` (options), `/webby edit`, `/webby reset`, `/webby test` (preview heals, shields and a combat
+number), `/webby threat` (what the game reports for your target's threat), `/webby export` / `import`,
+`/webby errors`, `/webby help`.
 
 ## Options per frame
-- **Frame:** scale, name, frame colour (gold, dark, silver, class or any colour; the player's resting glow follows it),
-  combo points (target), pet happiness on the portrait's corner or in a level-style badge (pet)
-- **Text:** name colour (gold, white, class or reaction), size and outline; bar number size, outline and position
-- **Portrait:** the unit's picture or, for players, their class icon
-- **Bars:** separate health and power textures, and font (SharedMedia ones too), numbers always / on mouseover / never as totals, percentages or both, smooth bars
-- **Health:** class or reaction colour, fade to red as health drops, incoming heals (yours and others'), absorb shields
-- **Buffs and debuffs:** on or off and sized separately, only your debuffs, below or above the frame or dragged
-  anywhere in Edit Mode, icons per row, how many,
-  and the time left as a sweep, numbers, both or nothing (debuffs are edged in their dispel colour)
-- **Cast bar and threat** (target, focus): a cast bar built into the frame art, with spell name and icon; Retail-style threat
-- Always on: the player's corner accent and raid target markers on the portraits
-- **Combat numbers** on the player, target and focus portraits: one switch on the General page
-- Always on: combat swords and resting Zzz on the player, PvP badge on the large frames
+- **Frame:** scale, name, portrait (picture or class icon), frame colour (gold, dark, silver, your class, the
+  unit's class or any colour; the player's resting glow follows it), combo points (target), pet happiness (pet)
+- **Bars:** health and power textures, font (SharedMedia ones too), numbers always / on mouseover / never as
+  totals, percentages or both, smooth bars
+- **Text:** name colour (gold, white, class, reaction or any colour) and size; number colour (theirs or any
+  colour), size and position
+- **Health:** class or reaction colour, enemy NPC colour, fade as health drops (automatic or your own stops),
+  incoming heals, absorbs
+- **Buffs and debuffs:** buffs and debuffs sized separately, only your debuffs, below / above the frame or
+  dragged anywhere in Edit Mode, row direction, gap, per row, how many, stack size, and time left as a sweep,
+  numbers, both or nothing
+- **Cast bar and threat** (target, focus): a cast bar built into the frame art (spell name and icon), and
+  threat as a glow and / or a % (by the raid marker or in a box), in status, colourblind, gradient, class or
+  Blizzard's colours
 
-Dead, ghost and offline units are labelled on the health bar, and hovering a frame shows the unit tooltip.
-Party frames are left as they are (Blizzard's, or whichever addon you use for them).
+Always on: the player's corner accent, raid markers, combat swords and resting Zzz, the PvP shield, enemy level
+colours (and the skull for unknown levels). Combat numbers on the player, target and focus have one switch on
+the General page. Mobs tagged by someone else stay grey. Party frames are left to Blizzard or your party addon.
 
 ## Credits
 Includes LibEditMode by p3lim (unmodified, see Libs/LibEditMode/LICENSE.txt) and the public-domain LibStub.
 The frame art, bar fills, masks, elite dragons and resting animation in `Media/` come from
 [DragonflightUI](https://github.com/Karl-HeinzSchneider/WoW-DragonflightUI) by Karl-Heinz Schneider
-(MIT, see Media/LICENSE-DragonflightUI.txt), as are the art positions.
+(MIT, see Media/LICENSE-DragonflightUI.txt), as are the art positions. Threat maths follow Foofi's ThreatDisplay.
