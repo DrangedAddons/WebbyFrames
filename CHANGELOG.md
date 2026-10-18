@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.7.4
+- Spell cost shade (Player page, under Spell cost): show the cost lighter or darker than the bar, and by how much.
+
 ## 1.7.3
 - Druid mana: in bear or cat form, your mana shows in a slim bar just under the player frame (Player page, on by default).
 - The player's resting and combat glows pulse the way the default player frame's do, in your frame colour.

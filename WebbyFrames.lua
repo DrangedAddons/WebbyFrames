@@ -80,6 +80,7 @@ local DEFAULT_SETTINGS = {
     druidMana = true,        -- player: a druid's mana in a slim bar under the frame while in a form
     restTint = false,        -- player: the resting Zzz takes the frame colour
     costPredict = true,      -- player: while casting, the spell's cost shows on the power bar
+    costShade = 55,          -- player: how much lighter (above 0) or darker (below 0) the cost shows
     petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (green)
     petHappy = "corner",     -- hunter pet happiness: "corner" (over the corner accent), "badge" (in the level circle) or "off"
 }
@@ -905,7 +906,6 @@ local function fitCostBar(f, bar, side)
     if bar.tex ~= tex then
         bar.tex = tex
         if not pcall(bar.SetStatusBarTexture, bar, tex) or not bar:GetStatusBarTexture() then bar:SetStatusBarTexture(PLAIN_FILL) end
-        pcall(function() bar:GetStatusBarTexture():SetBlendMode("ADD") end)
         if f.mpMaskOn then pcall(function() bar:GetStatusBarTexture():AddMaskTexture(f.mpMask) end) end
     end
     bar:ClearAllPoints()
@@ -914,6 +914,24 @@ local function fitCostBar(f, bar, side)
     bar:SetPoint(side, f.mp:GetStatusBarTexture(), "RIGHT")
     bar:SetWidth(f.mp:GetWidth())
     pcall(bar.SetMinMaxValues, bar, 0, UnitPowerMax("player"))
+end
+
+-- Shades a cost bar by the "Spell cost shade" slider (-100 to 100): above 0 it lightens the fill
+-- (added white), below 0 it darkens it (black laid over), by that much. `boost` makes the flash a
+-- little stronger than the preview. False at 0 (nothing to show).
+local function shadeCostBar(bar, boost)
+    local v = tonumber(getSetting("player", "costShade")) or 55
+    if v == 0 then return false end
+    local a = math.min(1, math.abs(v) / 100 + (boost or 0))
+    local tex = bar:GetStatusBarTexture()
+    if v > 0 then
+        pcall(tex.SetBlendMode, tex, "ADD")
+        bar:SetStatusBarColor(1, 1, 1, a)
+    else
+        pcall(tex.SetBlendMode, tex, "BLEND")
+        bar:SetStatusBarColor(0, 0, 0, a)
+    end
+    return true
 end
 
 local function updateCostPrediction(f)
@@ -925,7 +943,7 @@ local function updateCostPrediction(f)
     end
     if not cost then cp:Hide(); return end
     fitCostBar(f, cp, "RIGHT")
-    cp:SetStatusBarColor(1, 1, 1, 0.55)
+    if not shadeCostBar(cp) then cp:Hide(); return end
     pcall(cp.SetValue, cp, cost)
     cp:Show()
 end
@@ -939,7 +957,7 @@ local function flashSpent(f, spell)
     cost, f.costInfo = spellCost(spell, "spent")
     if not cost then return end
     fitCostBar(f, sb, "LEFT")
-    sb:SetStatusBarColor(1, 1, 1, 0.8)
+    if not shadeCostBar(sb, 0.25) then return end
     pcall(sb.SetValue, sb, cost)
     sb.left = SPENT_FADE
     sb:SetAlpha(1)
@@ -4000,7 +4018,14 @@ local function buildSettings()
         end
         if unit == "player" then
             B.check("restTint", "Colour the Zzz", "The resting Zzz by the portrait takes the frame colour (it stays as drawn while the frame is gold).", false)
-            B.check("costPredict", "Spell cost", "Shows spell costs on your mana (or other power) bar. While you cast, the part the spell will use shows lighter; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true)
+            local costOn = B.check("costPredict", "Spell cost", "Shows spell costs on your mana (or other power) bar. While you cast, the part the spell will use is shaded; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true)
+            B.under(costOn, function() return getSetting("player", "costPredict") end,
+                B.slider("costShade", "Spell cost shade", "How the cost shows on the bar: lighter (right) or darker (left), and by how much.", 55, -100, 100, 5,
+                    function(v)
+                        v = math.floor(v + 0.5)
+                        if v == 0 then return "Off" end
+                        return string.format(v > 0 and "Lighter %d%%" or "Darker %d%%", math.abs(v))
+                    end))
             B.check("druidMana", "Druid mana", "Druids: while you're in bear or cat form, your mana shows in a slim bar just under the frame.", true)
         end
         if unit == "pet" then
