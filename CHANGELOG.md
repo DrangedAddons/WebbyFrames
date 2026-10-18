@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.10
+- Damage prediction clears the moment the spell lands (the target's health moves, or it's hit, missed or resisted), instead of lingering and looking like another cast.
+- Fixed the "blocked from an action" Disable / Ignore popup that 1.7.9 could bring up (it listened to the combat log, which addons may not on this client).
+
 ## 1.7.9
 - Damage prediction stays on the bar after the cast while the spell is on its way, until it hits, misses or is resisted (at most 3 seconds). A failed or interrupted cast still clears it at once, as does changing target.
 

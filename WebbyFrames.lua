@@ -981,11 +981,11 @@ local function updateDamagePrediction(f, spell)
     bar:Show()
 end
 
--- After the cast: the shading stays while the spell is on its way (a Fireball in the air), until the
--- combat log says it hit, missed, was resisted or absorbed on that unit. Where the combat log can't be
--- read, the unit's next combat event (UNIT_COMBAT) ends it instead; either way at most FLY_MAX seconds.
+-- After the cast: the shading stays while the spell is on its way (a Fireball in the air), until it
+-- lands: the unit's health moves or it has a combat event (hit, miss, resist). At most FLY_MAX seconds.
+-- (Someone else hitting it first ends it early too: nothing tells the hits apart. The combat log
+-- would, but registering for it is forbidden to addons on 12.x and brings up the blocked-addon popup.)
 local FLY_MAX = 3
-local cleuOK = false
 local function landDamage(f)
     if f and f.dmgFlying then
         f.dmgFlying = nil
@@ -1004,21 +1004,6 @@ local function flyDamage(spell)
         for _, f in ipairs({ frames.target, frames.focus }) do
             if f and f.dmgFlying == token then landDamage(f) end
         end
-    end)
-end
-
-do
-    local cl = CreateFrame("Frame")
-    cleuOK = pcall(cl.RegisterEvent, cl, "COMBAT_LOG_EVENT_UNFILTERED") and true or false
-    cl:SetScript("OnEvent", function()
-        pcall(function()
-            local _, sub, _, src, _, _, _, dst, _, _, _, spellId = CombatLogGetCurrentEventInfo()
-            if src ~= UnitGUID("player") then return end
-            if not (sub:find("_DAMAGE$") or sub:find("_MISSED$") or sub == "SPELL_ABSORBED") then return end
-            for _, f in ipairs({ frames.target, frames.focus }) do
-                if f and f.dmgFlying and spellId == f.dmgSpell and dst == UnitGUID(f.wfUnit) then landDamage(f) end
-            end
-        end)
     end)
 end
 
@@ -1066,6 +1051,8 @@ local function updateHealth(f)
     end
     pcall(updatePrediction, f)
     pcall(updateDamageTrail, f, status)
+    -- the spell on its way has landed: the health moved after the cast went off
+    if f.dmgFlying and GetTime() - (f.dmgFlyStart or 0) > 0.05 then landDamage(f) end
     -- the damage shading belongs to the unit it was cast at: gone if the frame now shows someone else
     if f.dmgBar and f.dmgBar:IsShown() then
         pcall(function()
@@ -3269,8 +3256,8 @@ local function createFrame(unit)
         elseif event == "UNIT_AURA" then safely(updateAuras, self)
         elseif event == "UNIT_COMBAT" then
             local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
-            -- no combat log to tell when your spell landed: its next combat event will do
-            if self.dmgFlying and not cleuOK and GetTime() - (self.dmgFlyStart or 0) > 0.05 then landDamage(self) end
+            -- the spell landed (or missed): its next combat event after the cast
+            if self.dmgFlying and GetTime() - (self.dmgFlyStart or 0) > 0.05 then landDamage(self) end
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)
@@ -3396,8 +3383,8 @@ local function createSmallFrame(unit)
         elseif event == "UNIT_AURA" then safely(updateAuras, self)
         elseif event == "UNIT_COMBAT" then
             local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
-            -- no combat log to tell when your spell landed: its next combat event will do
-            if self.dmgFlying and not cleuOK and GetTime() - (self.dmgFlyStart or 0) > 0.05 then landDamage(self) end
+            -- the spell landed (or missed): its next combat event after the cast
+            if self.dmgFlying and GetTime() - (self.dmgFlyStart or 0) > 0.05 then landDamage(self) end
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)
