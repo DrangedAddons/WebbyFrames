@@ -21,6 +21,8 @@ Unzip the `WebbyFrames` folder into `World of Warcraft/_classic_beta_/Interface/
 ## Options per frame
 - **Frame:** scale, name, frame colour (gold, dark, silver, class or any colour; the player's resting glow follows it),
   combo points (target), pet happiness on the portrait's corner or in a level-style badge (pet)
+- **Text:** name colour (gold, white, class or reaction), size and outline; bar number size, outline and position
+- **Portrait:** the unit's picture or, for players, their class icon
 - **Bars:** separate health and power textures, and font (SharedMedia ones too), numbers always / on mouseover / never as totals, percentages or both, smooth bars
 - **Health:** class or reaction colour, fade to red as health drops, incoming heals (yours and others'), absorb shields
 - **Buffs and debuffs:** on or off and sized separately, only your debuffs, below or above the frame or dragged

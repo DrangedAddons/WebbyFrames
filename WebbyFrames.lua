@@ -60,6 +60,11 @@ local DEFAULT_SETTINGS = {
     -- buffs and debuffs (off unless a frame's defaults turn them on)
     auraBuffs = false, auraDebuffs = false, auraMine = false,
     auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below", auraTimer = "both",   -- auraDebuffSize follows auraSize until set
+    auraGap = 2, auraGrowth = "right", auraStack = 50,      -- gap between icons, row direction, stack count size (% of icon)
+    -- text: name size / outline / colour, bar numbers size / outline / place (size 0 = the font's own)
+    nameSize = 0, nameOutline = "default", nameColor = "default",
+    textSize = 0, textOutline = "default", textAnchor = "center",
+    portraitStyle = "picture",   -- "picture" or "class" (class icon for players)
     -- cast bar (target and focus): Blizzard's own bar drives one built into our frame
     castShow = true, castText = true, castIcon = true,
     -- frame art colour: "default" (as drawn), "dark", "silver", "class" or "custom" (frameColor = { r, g, b })
@@ -443,8 +448,13 @@ local function resolveFont(key)
     end
 end
 
+local OUTLINES = { none = "", outline = "OUTLINE", thick = "THICKOUTLINE" }
+
+-- Font, size and outline for the name ("name...") and the bar numbers ("text..."): a size of 0 and the
+-- "default" outline keep each font string's own; and the numbers' place on their bar.
 local function applyFont(f)
-    local path = resolveFont(getSetting(f.baseUnit, "font"))
+    local base = f.baseUnit
+    local path = resolveFont(getSetting(base, "font"))
     f.fontDefaults = f.fontDefaults or {}
     for _, fs in ipairs({ f.name, f.hpText, f.mpText }) do
         if fs then
@@ -453,9 +463,27 @@ local function applyFont(f)
                 f.fontDefaults[fs] = { fp, fz, ff }
             end
             local d = f.fontDefaults[fs]
+            local pre = (fs == f.name) and "name" or "text"
+            local size = getSetting(base, pre .. "Size")
+            size = (type(size) == "number" and size > 0) and size or d[2]
+            if size and fs ~= f.name and fs == f.mpText and getSetting(base, "textSize") > 0 then
+                size = math.max(6, size - 1)          -- the power bar is thinner: its number a size down
+            end
+            local ol = OUTLINES[getSetting(base, pre .. "Outline")] or d[3]
             local ok = false
-            if path and d[2] then ok = fs:SetFont(path, d[2], d[3]) end
-            if not ok and d[1] then fs:SetFont(d[1], d[2], d[3]) end
+            if path and size then ok = fs:SetFont(path, size, ol) end
+            if not ok and d[1] then fs:SetFont(d[1], size or d[2], ol) end
+        end
+    end
+    -- the numbers: in the middle of their bar, or at its left or right end
+    local where = getSetting(base, "textAnchor")
+    for _, pair in ipairs({ { f.hpText, f.hp }, { f.mpText, f.mp } }) do
+        local fs, bar = pair[1], pair[2]
+        if fs and bar then
+            fs:ClearAllPoints()
+            if where == "left" then fs:SetPoint("LEFT", bar, "LEFT", 4, 0); fs:SetJustifyH("LEFT")
+            elseif where == "right" then fs:SetPoint("RIGHT", bar, "RIGHT", -4, 0); fs:SetJustifyH("RIGHT")
+            else fs:SetPoint("CENTER", bar, "CENTER", 0, 0); fs:SetJustifyH("CENTER") end
         end
     end
 end
@@ -895,7 +923,42 @@ local function updateInfo(f)
     end)
     if not shown and not pcall(function() f.level:SetFormattedText("%d", UnitLevel(u)) end) then f.level:SetText("") end
     f.level:SetTextColor(lr, lg, lb)
-    SetPortraitTexture(f.portrait, u)
+    -- name colour: the font's own (gold), white, the unit's class colour (players; NPCs keep the gold)
+    -- or its reaction colour
+    if not f.nameDefault then f.nameDefault = { f.name:GetTextColor() } end
+    local nm = getSetting(f.baseUnit, "nameColor")
+    local nr, ng, nb = f.nameDefault[1], f.nameDefault[2], f.nameDefault[3]
+    if nm == "white" then nr, ng, nb = 1, 1, 1
+    elseif nm == "class" then
+        pcall(function()
+            if UnitIsPlayer(u) then
+                local c = RAID_CLASS_COLORS[select(2, UnitClass(u))]
+                if c then nr, ng, nb = c.r, c.g, c.b end
+            end
+        end)
+    elseif nm == "reaction" then
+        local r, g, b = reactionColorOf(u)
+        if r then nr, ng, nb = r, g, b end
+    end
+    f.name:SetTextColor(nr, ng, nb)
+    -- portrait: the unit's picture, or for players their class icon
+    local classIcon = false
+    if getSetting(f.baseUnit, "portraitStyle") == "class" then
+        pcall(function()
+            if UnitIsPlayer(u) then
+                local coords = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[select(2, UnitClass(u))]
+                if coords then
+                    f.portrait:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
+                    f.portrait:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+                    classIcon = true
+                end
+            end
+        end)
+    end
+    if not classIcon then
+        f.portrait:SetTexCoord(0, 1, 0, 1)
+        SetPortraitTexture(f.portrait, u)
+    end
     if f.leaderIcon then
         local lead = false
         pcall(function() lead = UnitIsGroupLeader(u) and true or false end)
@@ -1111,8 +1174,26 @@ local function createIndicators(f)
         f.threatGlow:SetBlendMode("ADD")
         f.threatGlow:SetAlpha(0.9)
         f.threatGlow:Hide()
-        f.threatText = ov:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        f.threatText:SetJustifyH("RIGHT")
+        -- the % in its own little box sitting on the frame's top edge above the end of the name row, so a red
+        -- number never lands on a red name strip: a dark inside and the frame's line style round it (1px
+        -- mid-grey line with a dark shadow inside, as the bars and cast bar have)
+        local box = CreateFrame("Frame", nil, ov)
+        box:SetSize(40, 16)
+        box:SetFrameLevel(ov:GetFrameLevel() + 1)
+        box.line = box:CreateTexture(nil, "BACKGROUND", nil, 0)
+        box.line:SetAllPoints()
+        box.line:SetColorTexture(0.55, 0.55, 0.55, 1)
+        box.shadow = box:CreateTexture(nil, "BACKGROUND", nil, 1)
+        box.shadow:SetPoint("TOPLEFT", 1, -1); box.shadow:SetPoint("BOTTOMRIGHT", -1, 1)
+        box.shadow:SetColorTexture(0, 0, 0, 1)
+        box.inside = box:CreateTexture(nil, "BACKGROUND", nil, 2)
+        box.inside:SetPoint("TOPLEFT", 2, -2); box.inside:SetPoint("BOTTOMRIGHT", -2, 2)
+        box.inside:SetColorTexture(0.08, 0.08, 0.08, 0.92)
+        box:Hide()
+        f.threatBox = box
+        f.threatText = box:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        f.threatText:SetPoint("CENTER", box, "CENTER", 0, 0)
+        f.threatText:SetJustifyH("CENTER")
         f.threatText:Hide()
     end
 end
@@ -1164,8 +1245,11 @@ local function placeIndicators(f)
             f.threatGlow:SetPoint("CENTER", f, "CENTER", 0, 1.5)
         end
         -- right end of the name row, just above the health bar
-        f.threatText:ClearAllPoints()
-        f.threatText:SetPoint("BOTTOMRIGHT", f.hp, "TOPRIGHT", -2, 2)
+        -- the threat box: on the frame art's top edge, above the end of the name row
+        if f.threatBox then
+            f.threatBox:ClearAllPoints()
+            f.threatBox:SetPoint("BOTTOMRIGHT", f.hp, "TOPRIGHT", 0, 15)
+        end
     end
 end
 
@@ -1277,9 +1361,10 @@ local function updateThreat(f)
         if glowOn then f.threatGlow:SetVertexColor(r, g, b) end
     end
     f.threatText:SetShown(shown)
+    if f.threatBox then f.threatBox:SetShown(shown) end
     f.threatGlow:SetShown(glowOn)
-    -- make room for the number at the end of the name row
-    if f.nameBaseW then f.name:SetWidth(shown and f.nameBaseW - 30 or f.nameBaseW) end
+    -- (the number sits in its own box above the name row now, so the name keeps its full width)
+    if f.nameBaseW then f.name:SetWidth(f.nameBaseW) end
 end
 
 ---------------------------------------------------------------------------
@@ -1767,7 +1852,9 @@ function AuraKit.sizeButton(f, b)
         end)
     end
     if b.webbyCount then
-        pcall(function() b.webbyCount:SetFont(b.webbyCount:GetFont() or STANDARD_TEXT_FONT, math.max(8, math.floor(size * 0.5)), "OUTLINE") end)
+        -- stack count: a share of the icon's size (Stack count size, 30 - 90%)
+        local share = (getSetting(f.baseUnit, "auraStack") or 50) / 100
+        pcall(function() b.webbyCount:SetFont(b.webbyCount:GetFont() or STANDARD_TEXT_FONT, math.max(7, math.floor(size * share)), "OUTLINE") end)
     end
 end
 
@@ -1871,28 +1958,34 @@ function updateAuras(f)       -- (the local declared above)
     if size == 0 then size = getSetting(base, "auraSize") end
     local pos = getSetting(base, "auraPos")
     local up = (pos == "above")
+    local gap = getSetting(base, "auraGap")
+    gap = (type(gap) == "number" and gap >= 0) and gap or AURA_GAP
+    local leftward = getSetting(base, "auraGrowth") == "left"
     pcall(function() if c:GetUnit() ~= f.wfUnit then c:SetUnit(f.wfUnit) end end)
     pcall(c.SetAuraGroupEnabled, c, "buffs", showB)
     pcall(c.SetAuraGroupEnabled, c, "debuffs", showD)
     pcall(c.SetAuraGroupFilterString, c, "debuffs", getSetting(base, "auraMine") and "HARMFUL|PLAYER" or "HARMFUL")
     for _, g in ipairs(AuraKit.GROUPS) do
         pcall(c.SetAuraGroupMaxFrameCount, c, g, max)
-        pcall(c.SetAuraGroupLayout, c, g, { elementSpacing = AURA_GAP, lineSpacing = AURA_GAP, groupSpacing = AURA_GAP, groupLineSpacing = AURA_GAP })
+        pcall(c.SetAuraGroupLayout, c, g, { elementSpacing = gap, lineSpacing = gap, groupSpacing = gap, groupLineSpacing = gap })
     end
-    -- flow: rows of perRow icons, growing right and down (up when above the frame)
+    -- flow: rows of perRow icons, growing right (or filling from the right, growing left) and down (up
+    -- when above the frame); the block keeps the same spot either way
     pcall(function()
         local A = AnchorUtil
         c:SetFlowLayoutAxis(A.FlowLayoutAxis.Horizontal)
-        c:SetFlowLayoutAnchorPoint(up and "BOTTOMLEFT" or "TOPLEFT")
-        c:SetFlowLayoutGrowthDirection(A.FlowDirection.Right, up and A.FlowDirection.Up or A.FlowDirection.Down)
-        c:SetFlowLayoutMaximumLineSize(perRow * (size + AURA_GAP))
+        local side = leftward and "RIGHT" or "LEFT"
+        c:SetFlowLayoutAnchorPoint((up and "BOTTOM" or "TOP") .. side)
+        local across = leftward and (A.FlowDirection.Left or -1) or A.FlowDirection.Right
+        c:SetFlowLayoutGrowthDirection(across, up and A.FlowDirection.Up or A.FlowDirection.Down)
+        c:SetFlowLayoutMaximumLineSize(perRow * (size + gap))
     end)
     local point, relPoint, x, y = auraAnchor(f, pos)
     c:ClearAllPoints()
     c:SetPoint(point, f, relPoint, x, y)
     -- one row's size, so the first row sits exactly on the anchor (more rows grow on past it)
-    pcall(c.SetSize, c, perRow * (size + AURA_GAP), size)
-    AuraKit.placeMover(f, perRow * (size + AURA_GAP) - AURA_GAP, size)
+    pcall(c.SetSize, c, perRow * (size + gap), size)
+    AuraKit.placeMover(f, perRow * (size + gap) - gap, size)
     -- resize the buttons made so far (new ones are sized as they're made)
     for _, g in ipairs(AuraKit.GROUPS) do
         local n = 0
@@ -2217,11 +2310,22 @@ function Extras.pickNpcColor(unit, set)
 end
 
 -- Blizzard's colour picker, starting at `old`; apply(r, g, b) as it changes (and back to old on cancel).
+-- The picker reports every movement while you drag; the frames are updated with the latest colour at
+-- most every 0.1s, and an error can't escape into the picker.
 function Extras.openPicker(old, apply)
+    local pending, queued
+    local function flush()
+        queued = nil
+        if pending then local c = pending; pending = nil; pcall(apply, c[1], c[2], c[3]) end
+    end
+    local function later(r, g, b)
+        pending = { r, g, b }
+        if not queued then queued = true; C_Timer.After(0.1, flush) end
+    end
     local info = {
         r = old[1], g = old[2], b = old[3], hasOpacity = false,
-        swatchFunc = function() apply(ColorPickerFrame:GetColorRGB()) end,
-        cancelFunc = function() apply(old[1], old[2], old[3]) end,
+        swatchFunc = function() pcall(function() later(ColorPickerFrame:GetColorRGB()) end) end,
+        cancelFunc = function() pending = nil; pcall(apply, old[1], old[2], old[3]) end,
     }
     if ColorPickerFrame.SetupColorPickerAndShow then
         ColorPickerFrame:SetupColorPickerAndShow(info)
@@ -2511,6 +2615,7 @@ local function applyUnit(f)
     applyCorner(f)
     placeIndicators(f)
     pcall(applyFont, f)
+    pcall(updateInfo, f)          -- name colour and portrait style
     pcall(updateThreat, f)
     pcall(updateIndicators, f)
     pcall(updateAuras, f)
@@ -3077,7 +3182,9 @@ local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "smoothBars", "healPrediction", "absorbs",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
-                    "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color" }
+                    "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
+                    "auraGap", "auraGrowth", "auraStack", "nameSize", "nameOutline", "nameColor",
+                    "textSize", "textOutline", "textAnchor", "portraitStyle" }
 
 function resetFrame(unit)
     if InCombatLockdown() then print("|cff33ccffWebby Frames:|r can't reset in combat."); return end
@@ -3336,7 +3443,10 @@ end
 local function refreshSettingStates()
     pcall(function()
         SettingsPanel:GetSettingsList().ScrollBox:ForEachFrame(function(frame)
-            if frame.EvaluateState then pcall(frame.EvaluateState, frame) end
+            -- only rows with a setting of their own (buttons and headers have nothing to re-check)
+            local has = false
+            pcall(function() has = frame.GetSetting and frame:GetSetting() ~= nil end)
+            if has and frame.EvaluateState then pcall(frame.EvaluateState, frame) end
         end)
     end)
 end
@@ -3435,6 +3545,28 @@ local function buildSettings()
                 return attach(init)
             end
         end
+        -- The name and bar number text options (a section of their own).
+        function B.text()
+            B.section("Text", false)
+            local sizeText = function(v) v = math.floor(v + 0.5); return v <= 0 and "Default" or string.format("%d", v) end
+            local outlines = { { "default", "Default" }, { "none", "None" }, { "outline", "Outline" }, { "thick", "Thick outline" } }
+            B.dropdown("nameColor", "Name colour", "Default: the font's own gold. Class colour: players in their class colour (NPCs keep the gold). Reaction: green, yellow or red by how they see you.", "default",
+                { { "default", "Default (gold)" }, { "white", "White" }, { "class", "Class colour" }, { "reaction", "Reaction colour" } })
+            B.slider("nameSize", "Name size", "0 keeps the font's own size.", 0, 0, 20, 1, sizeText)
+            B.dropdown("nameOutline", "Name outline", nil, "default", outlines)
+            B.slider("textSize", "Number size", "The health and power numbers. 0 keeps the font's own size.", 0, 0, 20, 1, sizeText)
+            B.dropdown("textOutline", "Number outline", nil, "default", outlines)
+            B.dropdown("textAnchor", "Number position", "Where the numbers sit on their bars.", "center",
+                { { "center", "Centre" }, { "left", "Left" }, { "right", "Right" } })
+        end
+        -- Buff and debuff layout details (in the Buffs and debuffs section).
+        function B.auraDetails()
+            B.dropdown("auraGrowth", "Rows grow", "Right: the first icon at the left end. Left: the first icon at the right end, the row filling leftwards.", "right",
+                { { "right", "To the right" }, { "left", "To the left" } })
+            B.slider("auraGap", "Gap", "Space between the icons.", 2, 0, 10, 1, function(v) return string.format("%d px", math.floor(v + 0.5)) end)
+            B.slider("auraStack", "Stack count size", "How big the stack count is, as a share of the icon.", 50, 30, 90, 5,
+                function(v) return string.format("%d%%", math.floor(v + 0.5)) end)
+        end
         -- Fade to red with its style and custom stops. read: whose settings to show; set(unit, key, value).
         function B.fade(read, set, tip)
             local fade = B.check("healthFade", "Fade to red", tip, false)
@@ -3444,18 +3576,26 @@ local function buildSettings()
             B.under(fade, fadeOn, style)
             local function custom() return fadeOn() and getSetting(read, "fadeStyle") == "custom" end
             local pctText = function(v) v = math.floor(v + 0.5); return v <= 0 and "Off" or string.format("%d%%", v) end
+            -- (only real settings go under the style: Blizzard's button rows error when made to depend on
+            -- another setting, so the colour buttons are plain rows that only act while Custom is on)
             local inits = { B.check("fadeBlend", "Smooth blend", "On: the colours blend from one stop to the next. Off: the bar switches colour right at each stop.", true) }
             local names = { "First", "Second", "Third" }
             for i = 1, 3 do
-                inits[#inits + 1] = B.slider("fade" .. i .. "Pct", names[i] .. " stop", "At this health % the bar reaches this stop's colour. 0 turns the stop off.",
+                inits[#inits + 1] = B.slider("fade" .. i .. "Pct", names[i] .. " stop", "At this health % the bar reaches this stop's colour. 0 turns the stop off. (Fade style: Custom stops.)",
                     DEFAULT_SETTINGS["fade" .. i .. "Pct"], 0, 100, 5, pctText)
-                inits[#inits + 1] = B.button(names[i] .. " stop colour", "Pick colour", function()
+            end
+            B.under(style, custom, unpack(inits))
+            for i = 1, 3 do
+                B.button(names[i] .. " stop colour", "Pick colour", function()
+                    if not custom() then
+                        print("|cff33ccffWebby Frames:|r set Fade style to Custom stops first.")
+                        return
+                    end
                     local c = getSetting(read, "fade" .. i .. "Color")
                     local old = type(c) == "table" and { c[1] or 1, c[2] or 1, c[3] or 1 } or { 1, 1, 1 }
                     Extras.openPicker(old, function(r, g, b) set(read, "fade" .. i .. "Color", { r, g, b }) end)
-                end, "The bar's colour at the " .. names[i]:lower() .. " stop.")
+                end, "The bar's colour at the " .. names[i]:lower() .. " stop (Fade style: Custom stops).")
             end
-            B.under(style, custom, unpack(inits))
         end
         return B
     end
@@ -3528,9 +3668,16 @@ local function buildSettings()
         B.check("healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true)
         B.check("absorbs", "Absorbs", "Damage shields and healing absorbs on the health bars.", true)
 
+        B.text()
+
         B.section("Buffs and debuffs", false)
         B.dropdown("auraTimer", "Time left", "How each icon shows the time it has left, on every frame.", "both",
             { { "both", "Sweep and numbers" }, { "swipe", "Sweep" }, { "numbers", "Numbers" }, { "none", "Nothing" } })
+        B.auraDetails()
+
+        B.section("Portraits", false)
+        B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
+            { { "picture", "Picture" }, { "class", "Class icon (players)" } })
     end
 
     for _, unit in ipairs(UNITS) do
@@ -3550,6 +3697,8 @@ local function buildSettings()
         B.section("Frame", true)
         B.slider("scale", "Scale", "How big the frame is.", defaultFor(unit, "scale"), 0.5, 2, 0.05)
         B.check("showName", "Name", "The unit's name above its health bar.", true)
+        B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
+            { { "picture", "Picture" }, { "class", "Class icon (players)" } })
         B.dropdown("frameTint", "Frame colour", "Colours the frame art: its border, portrait ring, corner accent, level circle and cast bar border."
             .. (unit == "player" and " The resting glow takes the colour too." or ""), "default",
             { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "unitclass", "The unit's class colour" }, { "custom", "Custom" } })
@@ -3574,6 +3723,8 @@ local function buildSettings()
             B.dropdown("textFormat", "Style", "Totals, percentages, or both.",
                 defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
         B.check("smoothBars", "Smooth bars", "Health and power slide to their new value instead of jumping.", true)
+
+        B.text()
 
         -- the health bar's colour and what's drawn past its end
         B.section("Health", false)
@@ -3609,6 +3760,7 @@ local function buildSettings()
         B.slider("auraMax", "Most shown", "How many buffs, and how many debuffs, can show at once.", defaultFor(unit, "auraMax"), 1, 32, 1, whole)
         B.dropdown("auraTimer", "Time left", "How each icon shows the time it has left: a dark sweep across the icon, countdown numbers, or both.", "both",
             { { "both", "Sweep and numbers" }, { "swipe", "Sweep" }, { "numbers", "Numbers" }, { "none", "Nothing" } })
+        B.auraDetails()
 
         if hasCastAndThreat(unit) then
             B.section("Cast bar and threat", false)

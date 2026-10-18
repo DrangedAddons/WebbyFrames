@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.0
+New options
+- Text: name colour (gold, white, class colour or reaction colour), name size and outline; bar number size, outline and position (centre, left or right). On every frame page and the All frames page.
+- Portrait: the unit's picture or, for players, their class icon.
+- Buffs and debuffs: rows can grow to the right or to the left, the gap between icons (0 - 10px), and the stack count size.
+
+Threat
+- The threat % sits in its own small box above the name strip, dark inside with the frames' line style round it, so it's easy to read even at 100% on a red enemy name strip. The name keeps its full width.
+
+Fixes
+- No more errors when changing the custom fade stops or picking their colours. The stop colour buttons work while Fade style is Custom stops, and dragging in the colour picker is smoother.
+
+Versions
+- Small updates now go 1.6.1, 1.6.2 ...; big ones move on to the next number (1.7.0).
+
 ## 1.5
 - Custom health fade: under Fade to red, choose Automatic (the class-aware fade) or Custom stops. Custom gives three stops, each a health % and a colour you pick (yellow at 60%, orange at 35% and red at 20% to start; 0% turns a stop off), and Smooth blend to blend between stops or switch colour right at each one. On every frame page and the All frames page.
 

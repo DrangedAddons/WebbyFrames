@@ -1,7 +1,11 @@
-# Every push to main is a release: the version goes up by one (1.0 -> 1.1 -> 1.2), the .toc and CHANGELOG
-# get the new number, that is committed back to main and tagged, and the zip is published as a GitHub
-# Release (which the Discord announcement picks up).
+# Every push to main is a release: the version goes up, the .toc and CHANGELOG get the new number, that
+# is committed back to main and tagged, and the zip is published as a GitHub Release (which the Discord
+# announcement picks up).
 #
+# Versions are major.minor.patch:
+# - small changes bump the patch: 1.5 -> 1.5.1 -> 1.5.2
+# - a big change bumps the minor and starts the patch again: 1.5.2 -> 1.6.0. Mark it by putting [big] in
+#   any commit message since the last release.
 # - If the .toc already has a newer version than the last tag (you bumped it by hand), that one is used.
 # - If CHANGELOG.md has no section for the new version, one is written from the commit messages.
 # - Pushing a v* tag yourself still releases that tag as it is (no bump).
@@ -45,8 +49,13 @@ jobs:
           elif [ "$TOC" != "$LAST" ] && [ "$(printf '%s\n%s\n' "$LAST" "$TOC" | sort -V | tail -1)" = "$TOC" ]; then
             NEW="$TOC"                                     # bumped by hand past the last release
           else
-            MAJOR="${LAST%%.*}"; MINOR="${LAST#*.}"
-            NEW="${MAJOR}.$((10#$MINOR + 1))"            # 1.0 -> 1.1 (not zero-padded)
+            IFS=. read -r MAJOR MINOR PATCH <<< "$LAST"
+            MINOR="${MINOR:-0}"; PATCH="${PATCH:-0}"
+            if git log "v${LAST}..HEAD" --format=%B | grep -qi '\[big\]'; then
+              NEW="${MAJOR}.$((10#$MINOR + 1)).0"         # a big change: 1.5.2 -> 1.6.0
+            else
+              NEW="${MAJOR}.${MINOR}.$((10#$PATCH + 1))"  # a small change: 1.5 -> 1.5.1
+            fi
           fi
           if git rev-parse -q --verify "refs/tags/v${NEW}" >/dev/null; then
             echo "Tag v${NEW} already exists" >&2; exit 1
