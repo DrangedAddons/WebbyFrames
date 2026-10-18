@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.11.0
+Party frames, part two
+- Layout: stacked or side by side (side by side leaves room for each member's buffs, debuffs and target).
+- Order: as in your group, or by role (tanks, healers, damage).
+- Pets (on by default): each member's pet as a small copy of the party frame under theirs (same border, round portrait, health and power bars, in the frame's colour), only for members with a pet out.
+- Their targets: what each member is targeting, in a small bar to their right. Both clickable.
+- Status on the portrait: summons (pending, accepted, declined), incoming resurrections and members in another phase, after the ready check.
+- Threat glow round a member about to pull or holding aggro, following the target frame's threat options (on when they show a glow, in their threat colours).
+- Click casting: a new Click casting page. Each mouse button, alone or with Shift, Ctrl or Alt, can target, open the menu, do nothing or cast one of your spells on the member you click. Saved per class.
+- Click casting for healers: Main heal, Heal over time, Dispel and Second dispel choices that always cast your best rank of your class's spell, and a "Set up for healing" button (Shift-click heals, Ctrl-click dispels, middle click heals).
+- Changes that move members between slots, and click bindings changed in combat, wait for combat to end (the game doesn't allow them during it).
+
 ## 1.10.1
 - In Edit Mode every frame's buffs and debuffs fill with sample icons (Blizzard's own aura preview), so you can see how they sit, party frames included.
 - Buffs and debuffs "Right of the frame" (party, target of target, focus target, pet): two rows beside the frame, at most a row of buffs and a row of debuffs, the ones that matter first, so nothing spills over the next frame. The party's default, with the members 6 px apart.
