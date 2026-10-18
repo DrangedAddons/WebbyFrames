@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.3
+- Options window: the frame pages fold away under All frames; click its + to show them (it remembers). Frames turned off on the General page drop out of the list.
+- Every section starts closed, so each page opens as a short list of headings.
+
 ## 1.9.2
 - Threat colours are Green to red or Blizzard's. An older saved choice (status, colourblind, class) draws as the gradient.
 - The frames do less work while they are shown: the cast bar, damage trail, heal and absorb overlays, threat and the options window. What you see is the same.

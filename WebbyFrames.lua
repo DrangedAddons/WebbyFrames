@@ -4277,6 +4277,39 @@ function Opt.layout()
     local max = math.max(0, y + 10 - Opt.scroll:GetHeight())
     if Opt.scroll:GetVerticalScroll() > max then Opt.scroll:SetVerticalScroll(max) end
     for id, b in pairs(Opt.navButtons or {}) do b.selected:SetShown(id == Opt.current) end
+    Opt.layoutNav()
+end
+
+-- The page list: General, All frames, and under All frames the frame pages, folded away until its +
+-- is clicked. Frames turned off on the General page aren't listed.
+function Opt.layoutNav()
+    if not Opt.navButtons then return end
+    -- the page on show was a frame just turned off: go to All frames instead
+    local cur = Opt.current
+    if cur and cur ~= "general" and cur ~= "all" and not frameOn(cur) then
+        Opt.current = "all"
+        Opt.changed()
+    end
+    local i = 0
+    for _, id in ipairs(Opt.order) do
+        local b = Opt.navButtons[id]
+        local isFrame = id ~= "general" and id ~= "all"
+        local shown = not isFrame or (Opt.framesOpen and frameOn(id))
+        if b then
+            b:SetShown(shown and true or false)
+            if shown then
+                b:ClearAllPoints()
+                b:SetPoint("TOPLEFT", 4, -6 - i * 24)
+                b:SetPoint("RIGHT", b:GetParent(), "RIGHT", -4, 0)
+                i = i + 1
+            end
+        end
+    end
+    local all = Opt.navButtons.all
+    if all and all.toggle then
+        local t = Opt.framesOpen and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up"
+        all.toggle:SetNormalTexture(t)
+    end
 end
 
 -- After a change: redraw once, on the next frame (several settings can change in one click).
@@ -4295,6 +4328,8 @@ end
 
 function Opt.select(id)
     if not Opt.pages[id] then id = "general" end
+    -- a frame turned off has no page to show
+    if id ~= "general" and id ~= "all" and not frameOn(id) then id = "all" end
     Opt.current = id
     Opt.closeMenu()
     Opt.layout()
@@ -4353,8 +4388,23 @@ function Opt.buildWindow()
         fs:SetPoint("LEFT", (id == "general" or id == "all") and 8 or 18, 0)
         fs:SetText(page.name)
         b:SetScript("OnClick", function() Opt.select(id) end)
+        if id == "all" then
+            -- the + / - that shows or folds away the frame pages under it
+            local t = CreateFrame("Button", nil, b)
+            t:SetSize(16, 16)
+            t:SetPoint("RIGHT", -4, 0)
+            t:SetHighlightTexture("Interface\\Buttons\\UI-PlusButton-Hilight", "ADD")
+            t:SetScript("OnClick", function()
+                Opt.framesOpen = not Opt.framesOpen
+                if DB then DB.optionsFramesOpen = Opt.framesOpen end
+                Opt.layoutNav()
+            end)
+            b.toggle = t
+        end
         Opt.navButtons[id] = b
     end
+    Opt.framesOpen = DB and DB.optionsFramesOpen and true or false
+    Opt.layoutNav()
 
     -- the page itself, scrolling
     local area = CreateFrame("Frame", nil, w, "BackdropTemplate")
@@ -4826,7 +4876,7 @@ local function buildSettings()
         B.header("|cff808080Changes here apply to every frame. Each frame's own page can then differ.|r")
 
         -- (the same sections, in the same order, as each frame's page)
-        B.section("Frame", true)
+        B.section("Frame", false)
         B.dropdown("frameTint", "Frame colour", "Colours the frame art on every frame. The player's resting glow takes the colour too.", "default",
             { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
         B.showIf(function() return getSetting("player", "frameTint") == "custom" end,
@@ -4876,7 +4926,7 @@ local function buildSettings()
         local function isOn(key) return function() return getSetting(unit, key) and true or false end end
 
         -- the frame itself and the icons on its portrait
-        B.section("Frame", true)
+        B.section("Frame", false)
         local myClass = select(2, UnitClass("player"))
         local nameItem = { "showName", "Show name", "The unit's name above its health bar.", true }
         if unit == "player" then   -- (your own name always shows)
