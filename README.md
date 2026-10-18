@@ -8,8 +8,10 @@ Unzip the `WebbyFrames` folder into `World of Warcraft/_classic_beta_/Interface/
 (delete any older `DFFramesForever` or `WebbyFrames` folder first; settings carry over).
 
 ## Use
-- `/webby` opens the options (Esc > Options > AddOns > Webby Frames): **General**, **All frames** (sets the
-  common options on every frame at once) and one page per frame, in collapsible sections.
+- `/webby` (or the web icon on the minimap) opens the options window: **General**, **All frames** (sets the
+  common options on every frame at once) and one page per frame, in collapsible sections. It's a window of its
+  own, so it can stay open while you play. Esc > Options > AddOns > Webby Frames has a button that opens it.
+  Right-click the minimap icon for Edit Mode; it can be turned off on the General page.
 - `/webby edit` opens Edit Mode to move the frames: they snap to each other, a frame dropped next to another
   sticks to it and moves with it, and the arrow keys nudge the clicked frame (1px, or 10px with Shift).
 - With EllesmereUI, the frames can also be moved in its Unlock Mode (same saved positions).
@@ -41,7 +43,8 @@ the General page. Mobs tagged by someone else stay grey. Party frames are left t
 ## Credits
 Made by **Webby**, **Lexible** and **Dranged**.
 
-Includes LibEditMode by p3lim (unmodified, see Libs/LibEditMode/LICENSE.txt) and the public-domain LibStub.
+Includes LibEditMode by p3lim (unmodified, see Libs/LibEditMode/LICENSE.txt), the public-domain LibStub, and
+CallbackHandler-1.0, LibDataBroker-1.1 and LibDBIcon-1.0 for the minimap button.
 The frame art, bar fills, masks, elite dragons and resting animation in `Media/` come from
 [DragonflightUI](https://github.com/Karl-HeinzSchneider/WoW-DragonflightUI) by Karl-Heinz Schneider
 (MIT, see Media/LICENSE-DragonflightUI.txt), as are the art positions. Threat maths follow Foofi's ThreatDisplay.

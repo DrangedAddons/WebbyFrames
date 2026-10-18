@@ -4068,10 +4068,12 @@ local function openEditMode()
 end
 
 ---------------------------------------------------------------------------
--- Settings (Esc > Options > AddOns > Webby Frames): a General page, plus one page per frame with
--- its options in collapsible sections. Edit Mode is only for moving the frames.
+-- Settings window (/webby): a window of its own, with the pages on the left (General, All frames, one
+-- per frame) and the page's options on the right in collapsible sections. Being an ordinary frame, it
+-- can stay open while you play, target things or use Edit Mode. Esc > Options > AddOns > Webby Frames
+-- only describes the addon and has a button that opens this window.
 ---------------------------------------------------------------------------
-local unitPages = {}    -- unit -> settings subcategory
+local Opt = { pages = {}, order = {}, ROW_H = 28, LABEL_X = 16, CONTROL_X = 300, CONTROL_W = 240, CONTENT_W = 580, MENU_ROWS = 14 }
 
 local function addonVersion()
     local v
@@ -4079,351 +4081,645 @@ local function addonVersion()
     return v or "?"
 end
 
+function Opt.tip(frame, title, tip)
+    if not tip then return end
+    frame:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT")
+        GameTooltip:SetText(title or "", 1, 1, 1)
+        GameTooltip:AddLine(tip, 1, 0.82, 0, true)
+        GameTooltip:Show()
+    end)
+    frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
+end
+
+-- A plain check box made from textures (nothing depends on a template this client may not have).
+function Opt.newCheck(parent)
+    local cb = CreateFrame("CheckButton", nil, parent)
+    cb:SetSize(26, 26)
+    cb:SetNormalTexture("Interface\\Buttons\\UI-CheckBox-Up")
+    cb:SetPushedTexture("Interface\\Buttons\\UI-CheckBox-Down")
+    cb:SetHighlightTexture("Interface\\Buttons\\UI-CheckBox-Highlight", "ADD")
+    cb:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
+    pcall(cb.SetDisabledCheckedTexture, cb, "Interface\\Buttons\\UI-CheckBox-Check-Disabled")
+    return cb
+end
+
+function Opt.dark(frame, edge)
+    frame:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+    frame:SetBackdropColor(0, 0, 0, 0.6)
+    frame:SetBackdropBorderColor(edge or 0.4, edge or 0.4, edge or 0.4, 1)
+end
+
+-- The open dropdown's list (one, shared by every dropdown). Long lists scroll with the mouse wheel;
+-- a click anywhere else closes it.
+function Opt.closeMenu() if Opt.menu then Opt.menu:Hide() end end
+
+function Opt.openMenu(owner, choices, current, pick)
+    local m = Opt.menu
+    if not m then
+        m = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        Opt.menu = m
+        m:SetFrameStrata("FULLSCREEN_DIALOG")
+        m:SetClampedToScreen(true)
+        m:EnableMouse(true)
+        m:EnableMouseWheel(true)
+        m:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 14,
+            insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+        m:SetBackdropColor(0.06, 0.06, 0.06, 0.97)
+        m.buttons = {}
+        for i = 1, Opt.MENU_ROWS do
+            local b = CreateFrame("Button", nil, m)
+            b:SetHeight(20)
+            b:SetPoint("TOPLEFT", 6, -6 - (i - 1) * 20)
+            b:SetPoint("RIGHT", m, "RIGHT", -6, 0)
+            b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+            b.check = b:CreateTexture(nil, "ARTWORK")
+            b.check:SetSize(16, 16)
+            b.check:SetPoint("LEFT", 2, 0)
+            b.check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+            b.text = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            b.text:SetPoint("LEFT", 22, 0)
+            b.text:SetPoint("RIGHT", -4, 0)
+            b.text:SetJustifyH("LEFT")
+            pcall(b.text.SetWordWrap, b.text, false)
+            b:SetScript("OnClick", function(self)
+                m:Hide()
+                if self.value ~= nil and m.pick then m.pick(self.value) end
+            end)
+            m.buttons[i] = b
+        end
+        m.more = m:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        m.more:SetPoint("BOTTOMRIGHT", -8, 4)
+        function m:Fill()
+            local n = #self.choices
+            for i, b in ipairs(self.buttons) do
+                local c = self.choices[self.offset + i]
+                b:SetShown(c ~= nil)
+                if c then
+                    b.value = c[1]
+                    b.text:SetText(c[2] or tostring(c[1]))
+                    b.check:SetShown(c[1] == self.current)
+                end
+            end
+            local more = n > Opt.MENU_ROWS
+            self.more:SetText(more and string.format("%d-%d of %d, scroll for more", self.offset + 1, math.min(n, self.offset + Opt.MENU_ROWS), n) or "")
+            self:SetHeight(math.min(n, Opt.MENU_ROWS) * 20 + 12 + (more and 14 or 0))
+        end
+        m:SetScript("OnMouseWheel", function(self, delta)
+            self.offset = math.max(0, math.min(#self.choices - Opt.MENU_ROWS, self.offset - delta * 3))
+            self:Fill()
+        end)
+        pcall(m.RegisterEvent, m, "GLOBAL_MOUSE_DOWN")
+        m:SetScript("OnEvent", function(self)
+            if self:IsShown() and not self:IsMouseOver() and not (self.owner and self.owner:IsMouseOver()) then self:Hide() end
+        end)
+    end
+    m.owner, m.choices, m.current, m.pick = owner, choices or {}, current, pick
+    m.offset = 0
+    for i, c in ipairs(m.choices) do
+        if c[1] == current then m.offset = math.max(0, math.min(#m.choices - Opt.MENU_ROWS, i - math.floor(Opt.MENU_ROWS / 2))) end
+    end
+    m:ClearAllPoints()
+    m:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", 0, -2)
+    m:SetWidth(math.max(owner:GetWidth(), 240))
+    m:Fill()
+    m:Show()
+    m:Raise()
+end
+
+-- Greys a row out (and stops its controls taking clicks) while what it depends on is off.
+function Opt.setRowEnabled(row, on)
+    if row.enabled == on then return end
+    row.enabled = on
+    for _, c in ipairs(row.controls or {}) do
+        if c.SetEnabled then pcall(c.SetEnabled, c, on)
+        elseif on and c.Enable then pcall(c.Enable, c)
+        elseif c.Disable then pcall(c.Disable, c) end
+        if c.EnableMouse then pcall(c.EnableMouse, c, on) end
+    end
+    for _, t in ipairs(row.texts or {}) do
+        if on then t:SetTextColor(1, 1, 1) else t:SetTextColor(0.5, 0.5, 0.5) end
+    end
+end
+
+function Opt.newPage(id, name)
+    local page = { id = id, name = name, rows = {} }
+    Opt.pages[id] = page
+    Opt.order[#Opt.order + 1] = id
+    return page
+end
+
+-- Redraws the shown page: which rows show (closed sections and B.showIf hide them), where they sit,
+-- which are greyed out (B.under) and what each control shows. Cheap enough to run on every change.
+local layoutErrorShown = false
+function Opt.layout()
+    local w = Opt.window
+    if not (w and w:IsShown()) then return end
+    local page = Opt.pages[Opt.current]
+    if not page then return end
+    if not page.content then
+        page.content = CreateFrame("Frame", nil, Opt.scroll)
+        page.content:SetSize(Opt.CONTENT_W, 10)
+        for _, row in ipairs(page.rows) do
+            local f = CreateFrame("Frame", nil, page.content)
+            f:SetHeight(row.height)
+            row.frame = f
+            local ok, err = pcall(row.make, f, row)
+            if not ok and not layoutErrorShown then
+                layoutErrorShown = true
+                print("|cffff9900Webby Frames:|r an options row couldn't be drawn: " .. tostring(err))
+            end
+        end
+    end
+    for _, p in pairs(Opt.pages) do
+        if p.content then p.content:SetShown(p == page) end
+    end
+    if Opt.scroll:GetScrollChild() ~= page.content then
+        Opt.scroll:SetScrollChild(page.content)
+        Opt.scroll:SetVerticalScroll(0)
+    end
+    local y = 6
+    for _, row in ipairs(page.rows) do
+        local shown = not row.section or row.section.expanded
+        if shown then
+            for _, pred in ipairs(row.preds) do
+                local ok, v = pcall(pred)
+                if not (ok and v) then shown = false; break end
+            end
+        end
+        row.frame:SetShown(shown)
+        if shown then
+            row.frame:ClearAllPoints()
+            row.frame:SetPoint("TOPLEFT", page.content, "TOPLEFT", 0, -y)
+            row.frame:SetPoint("RIGHT", page.content, "RIGHT")
+            y = y + row.height
+            local on = true
+            if row.enabledIf then
+                local ok, v = pcall(row.enabledIf)
+                on = ok and v and true or false
+            end
+            if row.parentRow and row.parentRow.enabled == false then on = false end
+            Opt.setRowEnabled(row, on)
+            if row.refresh then
+                row.updating = true
+                pcall(row.refresh)
+                row.updating = false
+            end
+        end
+    end
+    page.content:SetHeight(y + 10)
+    -- (the plain scroll frame doesn't keep its position inside the new height by itself)
+    local max = math.max(0, y + 10 - Opt.scroll:GetHeight())
+    if Opt.scroll:GetVerticalScroll() > max then Opt.scroll:SetVerticalScroll(max) end
+    for id, b in pairs(Opt.navButtons or {}) do b.selected:SetShown(id == Opt.current) end
+end
+
+-- After a change: redraw once, on the next frame (several settings can change in one click).
+function Opt.changed()
+    if Opt.pendingLayout then return end
+    Opt.pendingLayout = true
+    C_Timer.After(0, function() Opt.pendingLayout = false; Opt.layout() end)
+end
+
+function Opt.select(id)
+    if not Opt.pages[id] then id = "general" end
+    Opt.current = id
+    Opt.closeMenu()
+    Opt.layout()
+end
+
+function Opt.buildWindow()
+    if Opt.window then return Opt.window end
+    local w = CreateFrame("Frame", "WebbyFramesOptions", UIParent, "BackdropTemplate")
+    Opt.window = w
+    w:Hide()
+    w:SetSize(820, 600)
+    local pos = DB and DB.optionsPos
+    if type(pos) == "table" and pos[1] then w:SetPoint(pos[1], UIParent, pos[2] or pos[1], pos[3] or 0, pos[4] or 0)
+    else w:SetPoint("CENTER") end
+    w:SetFrameStrata("HIGH")
+    w:SetToplevel(true)
+    w:SetClampedToScreen(true)
+    w:SetMovable(true)
+    w:EnableMouse(true)
+    w:RegisterForDrag("LeftButton")
+    w:SetScript("OnDragStart", w.StartMoving)
+    w:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        local p, _, rp, x, y = self:GetPoint()
+        if DB then DB.optionsPos = { p, rp, x, y } end
+    end)
+    w:SetBackdrop({ bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark", edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 32, insets = { left = 11, right = 12, top = 12, bottom = 11 } })
+    tinsert(UISpecialFrames, "WebbyFramesOptions")     -- (Esc closes it)
+
+    local title = w:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 22, -18)
+    title:SetText("Webby Frames  |cff808080v" .. addonVersion() .. "|r")
+    local close = CreateFrame("Button", nil, w, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", -6, -6)
+
+    -- the page list
+    local nav = CreateFrame("Frame", nil, w, "BackdropTemplate")
+    nav:SetPoint("TOPLEFT", 16, -44)
+    nav:SetPoint("BOTTOMLEFT", 16, 16)
+    nav:SetWidth(160)
+    Opt.dark(nav, 0.25)
+    Opt.navButtons = {}
+    for i, id in ipairs(Opt.order) do
+        local page = Opt.pages[id]
+        local b = CreateFrame("Button", nil, nav)
+        b:SetHeight(22)
+        b:SetPoint("TOPLEFT", 4, -6 - (i - 1) * 24)
+        b:SetPoint("RIGHT", nav, "RIGHT", -4, 0)
+        b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        b.selected = b:CreateTexture(nil, "BACKGROUND")
+        b.selected:SetAllPoints()
+        b.selected:SetColorTexture(1, 0.82, 0, 0.18)
+        b.selected:Hide()
+        local fs = b:CreateFontString(nil, "OVERLAY", (id == "general" or id == "all") and "GameFontNormal" or "GameFontHighlight")
+        fs:SetPoint("LEFT", (id == "general" or id == "all") and 8 or 18, 0)
+        fs:SetText(page.name)
+        b:SetScript("OnClick", function() Opt.select(id) end)
+        Opt.navButtons[id] = b
+    end
+
+    -- the page itself, scrolling
+    local area = CreateFrame("Frame", nil, w, "BackdropTemplate")
+    area:SetPoint("TOPLEFT", nav, "TOPRIGHT", 8, 0)
+    area:SetPoint("BOTTOMRIGHT", -16, 16)
+    Opt.dark(area, 0.25)
+    local ok, scroll = pcall(CreateFrame, "ScrollFrame", "WebbyFramesOptionsScroll", area, "UIPanelScrollFrameTemplate")
+    if not ok then
+        scroll = CreateFrame("ScrollFrame", nil, area)
+        scroll:EnableMouseWheel(true)
+        scroll:SetScript("OnMouseWheel", function(self, delta)
+            local child = self:GetScrollChild()
+            local max = math.max(0, (child and child:GetHeight() or 0) - self:GetHeight())
+            self:SetVerticalScroll(math.max(0, math.min(max, self:GetVerticalScroll() - delta * 40)))
+        end)
+    end
+    scroll:SetPoint("TOPLEFT", 4, -4)
+    scroll:SetPoint("BOTTOMRIGHT", -26, 4)
+    Opt.scroll = scroll
+    Opt.CONTENT_W = 820 - 16 - 160 - 8 - 16 - 4 - 26
+
+    w:SetScript("OnShow", function() Opt.layout() end)
+    w:SetScript("OnHide", function() Opt.closeMenu(); GameTooltip:Hide() end)
+    -- picks up changes made elsewhere (Edit Mode's dialogs, a layout switch), but not mid-drag
+    local elapsed = 0
+    w:SetScript("OnUpdate", function(_, dt)
+        elapsed = elapsed + dt
+        if elapsed < 1 then return end
+        elapsed = 0
+        if not (IsMouseButtonDown and (IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton"))) then Opt.layout() end
+    end)
+    return w
+end
+
 function openSettings(unit)
-    local cat = (unit and unitPages[unit]) or settingsCategory
-    if cat and Settings and Settings.OpenToCategory then
-        pcall(function()
-            if EditModeManagerFrame and EditModeManagerFrame:IsShown() then HideUIPanel(EditModeManagerFrame) end
-        end)
-        Settings.OpenToCategory(cat:GetID())
-    else
-        print("|cff33ccffWebby Frames:|r the settings page isn't available.")
+    local ok, err = pcall(Opt.buildWindow)
+    if not ok then
+        print("|cffff9900Webby Frames:|r the settings window couldn't be made: " .. tostring(err))
+        return
     end
-end
-
--- Collapsible sections: Blizzard's header flips its `expanded` flag when clicked, but on this client the
--- list doesn't re-filter its rows until the page is shown again. So while the options are open, a
--- watcher checks every section's flag and, when one changes, shows the page again (the same thing a
--- page switch does) and puts the scroll position back.
-local sections = {}          -- every section initializer
-local function sectionData(sec) return sec.data or (sec.GetData and sec:GetData()) end
-
-local function repaintSettings()
     pcall(function()
-        local list = SettingsPanel:GetSettingsList()
-        local box = list and list.ScrollBox
-        local pct = box and box.GetScrollPercentage and box:GetScrollPercentage()
-        SettingsPanel:SelectCategory(SettingsPanel:GetCurrentCategory(), true)
-        if pct and box.SetScrollPercentage then box:SetScrollPercentage(pct) end
+        if SettingsPanel and SettingsPanel:IsShown() then HideUIPanel(SettingsPanel) end
     end)
+    Opt.window:Show()
+    Opt.window:Raise()
+    Opt.select((unit and Opt.pages[unit]) and unit or Opt.current or "general")
 end
 
--- Makes each visible section header show + when closed and - when open (the header doesn't redraw its
--- own icon on this client either).
-local isSection = {}
-local function refreshSectionIcons()
-    pcall(function()
-        local box = SettingsPanel:GetSettingsList().ScrollBox
-        box:ForEachFrame(function(frame, elementData)
-            if not isSection[elementData] then return end
-            -- Forever's header click handler calls something its header doesn't have, so every click
-            -- errored. Our headers get their own click instead: flip the section, and the watcher below
-            -- redraws the page as it does for every change.
-            if type(frame.OnExpandedChanged) ~= "function" then frame.OnExpandedChanged = function() end end
-            if frame.Button and not frame.webbyClick then
-                frame.webbyClick = true
-                frame.Button:SetScript("OnClick", function()
-                    pcall(function()
-                        local d = sectionData(frame:GetElementData())
-                        if type(d) == "table" then d.expanded = not d.expanded end
-                    end)
-                    pcall(PlaySound, SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or 856)
-                end)
-            end
-            local data = sectionData(elementData)
-            local open = type(data) == "table" and data.expanded and true or false
-            -- frames are recycled between rows, so set the icon every time rather than remembering it
-            if frame.webbyOpen ~= open and frame.OnExpandedChanged then pcall(frame.OnExpandedChanged, frame, open) end
-            frame.webbyOpen = open
-            local icon = frame.Button and frame.Button.Right
-            if icon and icon.SetAtlas then
-                pcall(icon.SetAtlas, icon, open and "Options_ListExpand_Right_Expanded" or "Options_ListExpand_Right", true)
-            end
-        end)
-    end)
+function Opt.toggle()
+    if Opt.window and Opt.window:IsShown() then Opt.window:Hide() else openSettings() end
 end
 
--- Re-checks the shown rows' enabled state (options greyed out while what they depend on is off).
-local function refreshSettingStates()
-    pcall(function()
-        SettingsPanel:GetSettingsList().ScrollBox:ForEachFrame(function(frame)
-            -- only rows with a setting of their own (buttons and headers have nothing to re-check)
-            local has = false
-            pcall(function() has = frame.GetSetting and frame:GetSetting() ~= nil end)
-            if has and frame.EvaluateState then pcall(frame.EvaluateState, frame) end
-        end)
-    end)
-end
-
-local sectionWatch = CreateFrame("Frame")
-local watchElapsed = 0
-sectionWatch:SetScript("OnUpdate", function(_, dt)
-    watchElapsed = watchElapsed + dt
-    if watchElapsed < 0.1 then return end
-    watchElapsed = 0
-    if not (SettingsPanel and SettingsPanel:IsShown()) then return end
-    local changed = false
-    for _, sec in ipairs(sections) do
-        local data = sectionData(sec)
-        local now = type(data) == "table" and data.expanded and true or false
-        if sec.webbyWas ~= now then sec.webbyWas = now; changed = true end
-    end
-    if changed then repaintSettings() end
-    refreshSectionIcons()
-end)
-
--- Draws one two-checkbox options row (B.pair) on a row frame from our own template: two plain check
--- boxes (made from textures, so nothing depends on a template this client may not have), each with its
--- label and tooltip, reused whenever the list recycles the row. items: { setting, label, tip } x 1 - 2.
-local pairErrorShown = false
-local function pairRow(init, frame, items)
-    -- Blizzard's row set-up (its text and tooltip) and the callback handles it clears when the row is
-    -- put away: make sure those are there, or putting the row away errors
-    pcall(frame.Init, frame, init)
-    if frame.Tooltip then frame.Tooltip:EnableMouse(false) end   -- (each box has its own tooltip)
-    if not frame.cbrHandles then
-        local ok, h = pcall(function() return Settings.CreateCallbackHandleContainer() end)
-        frame.cbrHandles = (ok and h) or setmetatable({}, { __index = function() return function() end end })
-    end
-    if frame.Text then frame.Text:SetText("") end
-    if not frame.webbyBoxes then
-        frame.webbyBoxes = {}
-        for i = 1, 2 do
-            local cb = CreateFrame("CheckButton", nil, frame)
-            cb:SetSize(26, 26)
-            -- above the row's own tooltip area, which covers the row and took the clicks
-            cb:SetFrameLevel(frame:GetFrameLevel() + 10)
-            cb:SetPoint("LEFT", frame, i == 1 and "LEFT" or "CENTER", i == 1 and 32 or 8, 0)
-            cb:SetNormalTexture("Interface\\Buttons\\UI-CheckBox-Up")
-            cb:SetPushedTexture("Interface\\Buttons\\UI-CheckBox-Down")
-            cb:SetHighlightTexture("Interface\\Buttons\\UI-CheckBox-Highlight", "ADD")
-            cb:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
-            cb.label = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-            cb.label:SetPoint("LEFT", cb, "RIGHT", 4, 0)
-            cb:SetScript("OnClick", function(btn)
-                if btn.item then btn.item.setting:SetValue(btn:GetChecked() and true or false) end
-            end)
-            cb:SetScript("OnEnter", function(btn)
-                if not (btn.item and btn.item.tip) then return end
-                GameTooltip:SetOwner(btn, "ANCHOR_TOPLEFT")
-                GameTooltip:SetText(btn.item.label, 1, 1, 1)
-                GameTooltip:AddLine(btn.item.tip, 1, 0.82, 0, true)
-                GameTooltip:Show()
-            end)
-            cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
-            frame.webbyBoxes[i] = cb
-        end
-    end
-    for i, cb in ipairs(frame.webbyBoxes) do
-        local item = items[i]
-        cb.item = item
-        cb:SetShown(item ~= nil)
-        if item then
-            cb.label:SetText(item.label)
-            cb:SetChecked(item.setting:GetValue() and true or false)
-        end
+-- Esc > Options > AddOns > Webby Frames: what the addon is, and a button to the settings window.
+function Opt.buildAddOnsPage()
+    local p = CreateFrame("Frame")
+    p.name = "Webby Frames"
+    local title = p:CreateFontString(nil, "ARTWORK", "GameFontNormalHuge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("Webby Frames")
+    local sub = p:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
+    sub:SetText("|cff808080v" .. addonVersion() .. "  -  by Webby, Lexible & Dranged|r")
+    local desc = p:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    desc:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -16)
+    desc:SetWidth(560)
+    desc:SetJustifyH("LEFT")
+    desc:SetText("Retail-style player, target, target of target, focus, focus target and pet frames for WoW Forever, drawn from Blizzard's own unit frame art.\n\n"
+        .. "Health and power bars with your choice of textures, fonts and colours, buffs and debuffs, cast bars, threat, incoming heals and shields, "
+        .. "spell cost and damage previews, and combat numbers on the portraits.\n\n"
+        .. "Move the frames in Edit Mode. Every other option is in the Webby Frames settings window.")
+    local open = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+    open:SetSize(240, 28)
+    open:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 0, -20)
+    open:SetText("Open Webby Frames settings")
+    open:SetScript("OnClick", function() openSettings() end)
+    local edit = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+    edit:SetSize(160, 28)
+    edit:SetPoint("LEFT", open, "RIGHT", 10, 0)
+    edit:SetText("Open Edit Mode")
+    edit:SetScript("OnClick", openEditMode)
+    local hint = p:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+    hint:SetPoint("TOPLEFT", open, "BOTTOMLEFT", 0, -12)
+    hint:SetText("You can also type /webby, or click the Webby Frames minimap button.")
+    if Settings and Settings.RegisterCanvasLayoutCategory then
+        local cat = Settings.RegisterCanvasLayoutCategory(p, "Webby Frames")
+        Settings.RegisterAddOnCategory(cat)
+        settingsCategory = cat
+    elseif InterfaceOptions_AddCategory then
+        InterfaceOptions_AddCategory(p)
     end
 end
 
--- Draws a colour row (B.swatch): its label, and a swatch showing the colour that opens the colour
--- picker when clicked (the way CastCount does it). row: { label, tip, get = fn -> {r,g,b}, set = fn(r,g,b) }.
-local function swatchRow(init, frame, row)
-    pcall(frame.Init, frame, init)
-    if frame.Tooltip then frame.Tooltip:EnableMouse(false) end
-    if not frame.cbrHandles then
-        local ok, h = pcall(function() return Settings.CreateCallbackHandleContainer() end)
-        frame.cbrHandles = (ok and h) or setmetatable({}, { __index = function() return function() end end })
+-- The minimap button (LibDBIcon, so minimap button collectors can take it): click for the settings,
+-- right-click for Edit Mode. Its position and whether it shows are kept in WebbyFramesDB.minimap.
+function Opt.setupMinimap()
+    local LDB = LibStub and LibStub("LibDataBroker-1.1", true)
+    local DBI = LibStub and LibStub("LibDBIcon-1.0", true)
+    if not (LDB and DBI) then return end
+    if type(DB.minimap) ~= "table" then DB.minimap = { hide = false } end
+    local launcher = LDB:NewDataObject("WebbyFrames", {
+        type = "launcher",
+        text = "Webby Frames",
+        icon = "Interface\\Icons\\Spell_Nature_Web",
+        OnClick = function(_, button)
+            if button == "RightButton" then openEditMode() else Opt.toggle() end
+        end,
+        OnTooltipShow = function(tt)
+            tt:AddLine("Webby Frames")
+            tt:AddLine("|cffffd100Click|r to open the settings", 1, 1, 1)
+            tt:AddLine("|cffffd100Right-click|r to open Edit Mode", 1, 1, 1)
+            tt:AddLine("|cffffd100Drag|r to move this button", 1, 1, 1)
+        end,
+    })
+    DBI:Register("WebbyFrames", launcher, DB.minimap)
+    Opt.DBI = DBI
+end
+
+function Opt.setMinimapShown(on)
+    if type(DB.minimap) ~= "table" then DB.minimap = {} end
+    DB.minimap.hide = not on
+    if Opt.DBI then
+        if on then Opt.DBI:Show("WebbyFrames") else Opt.DBI:Hide("WebbyFrames") end
     end
-    if not frame.webbySwatch then
-        local b = CreateFrame("Button", nil, frame, "BackdropTemplate")
-        b:SetSize(22, 22)
-        b:SetFrameLevel(frame:GetFrameLevel() + 10)
-        b:SetPoint("LEFT", frame, "CENTER", -80, 0)
-        b:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-        b:SetBackdropColor(0, 0, 0, 1)
-        b:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
-        b.tex = b:CreateTexture(nil, "ARTWORK")
-        b.tex:SetPoint("TOPLEFT", 3, -3)
-        b.tex:SetPoint("BOTTOMRIGHT", -3, 3)
-        function b:Refresh()
-            local c = self.row and self.row.get() or { 1, 1, 1 }
-            self.tex:SetColorTexture(c[1] or 1, c[2] or 1, c[3] or 1, 1)
-        end
-        b:SetScript("OnClick", function(self)
-            local row = self.row
-            if not row then return end
-            local c = row.get() or { 1, 1, 1 }
-            Extras.openPicker({ c[1] or 1, c[2] or 1, c[3] or 1 }, function(r, g, bl)
-                row.set(r, g, bl)
-                self.tex:SetColorTexture(r, g, bl, 1)
-            end)
-        end)
-        b:SetScript("OnEnter", function(self)
-            if not (self.row and self.row.tip) then return end
-            GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT")
-            GameTooltip:SetText(self.row.label, 1, 1, 1)
-            GameTooltip:AddLine(self.row.tip, 1, 0.82, 0, true)
-            GameTooltip:Show()
-        end)
-        b:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        frame.webbySwatch = b
-    end
-    if frame.Text then frame.Text:SetText(row.label) end
-    frame.webbySwatch.row = row
-    frame.webbySwatch:Refresh()
 end
 
 local function buildSettings()
-    -- Forever's collapsible section header calls self:OnExpandedChanged() when clicked but doesn't have
-    -- one, so every click errored. Every header row is made from this template when the options are
-    -- first opened, so an empty one here covers them all (the section watcher above redraws the page).
-    pcall(function()
-        local M = _G.SettingsExpandableSectionMixin
-        if type(M) == "table" and type(M.OnExpandedChanged) ~= "function" then M.OnExpandedChanged = function() end end
-    end)
-    local root, rootLayout = Settings.RegisterVerticalLayoutCategory("Webby Frames")
-    settingsCategory = root
-
-    -- Small builders; every setting reads and writes through a proxy table. B.section starts a
-    -- collapsible section (Blizzard's expandable header); the controls added after it only show while
-    -- it is expanded. Without that API the section is a plain header and everything shows.
-    local function builders(category, layout, proxy, prefix)
+    -- Small builders; every setting reads and writes through a proxy table. Each adds a row to the
+    -- page; the rows are only made when the page is first shown. B.section starts a collapsible
+    -- section: the rows added after it only show while it is open.
+    local function builders(page, proxy)
         local B = {}
         local current
-        local function attach(init)
-            local sec = current
-            if sec and init and init.AddShownPredicate then
-                init:AddShownPredicate(function()
-                    local data = sec.data or (sec.GetData and sec:GetData())
-                    if type(data) ~= "table" then return true end
-                    return data.expanded and true or false
-                end)
-            end
-            return init
+        local L, CX, CW = Opt.LABEL_X, Opt.CONTROL_X, Opt.CONTROL_W
+        local function add(row)
+            row.section = current
+            row.preds = {}
+            row.height = row.height or Opt.ROW_H
+            page.rows[#page.rows + 1] = row
+            return row
+        end
+        local function get(key, default)
+            local v = proxy[key]
+            if v == nil then v = default end
+            return v
+        end
+        -- (switches and dropdowns can have options that depend on them: redraw the page after)
+        local function set(key, v, redraw)
+            proxy[key] = v
+            if redraw then Opt.changed() end
+        end
+        local function label(f, row, text, tip)
+            local fs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            fs:SetPoint("LEFT", L + 20 + 18 * (row.indent or 0), 0)
+            fs:SetPoint("RIGHT", f, "LEFT", CX - 10, 0)
+            fs:SetJustifyH("LEFT")
+            pcall(fs.SetWordWrap, fs, false)
+            fs:SetText(text)
+            row.texts = { fs }
+            f:EnableMouse(true)
+            Opt.tip(f, text, tip)
+            return fs
         end
         function B.header(text)
             current = nil
-            if CreateSettingsListSectionHeaderInitializer then
-                layout:AddInitializer(CreateSettingsListSectionHeaderInitializer(text))
-            end
+            local small = text:find("^|cff808080") ~= nil
+            return add({ height = small and 22 or 36, make = function(f)
+                local fs = f:CreateFontString(nil, "OVERLAY", small and "GameFontHighlightSmall" or "GameFontHighlightLarge")
+                fs:SetPoint("BOTTOMLEFT", L, small and 4 or 8)
+                fs:SetPoint("RIGHT", -L, 0)
+                fs:SetJustifyH("LEFT")
+                fs:SetText(text)
+            end })
         end
         function B.section(text, open)
-            if not CreateSettingsExpandableSectionInitializer then B.header(text); return end
-            local sec = CreateSettingsExpandableSectionInitializer(text)
-            -- Forever's section header doesn't say how tall it is (the list's base asks it to "Implement
-            -- GetExtent" and errors every time it lays the page out), so give it the header's height
-            if not pcall(sec.GetExtent, sec) then sec.GetExtent = function() return 25 end end
-            local data = sectionData(sec)
-            if type(data) == "table" then data.expanded = open and true or false end
-            sec.webbyWas = open and true or false
-            sections[#sections + 1] = sec      -- watched, see sectionWatch
-            isSection[sec] = true
-            layout:AddInitializer(sec)
+            local sec = { expanded = open and true or false }
+            current = nil
+            add({ height = 32, make = function(f, row)
+                local b = CreateFrame("Button", nil, f, "BackdropTemplate")
+                b:SetPoint("TOPLEFT", 6, -4)
+                b:SetPoint("BOTTOMRIGHT", -6, 2)
+                b:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8" })
+                b:SetBackdropColor(1, 1, 1, 0.07)
+                b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+                local icon = b:CreateTexture(nil, "ARTWORK")
+                icon:SetSize(16, 16)
+                icon:SetPoint("LEFT", 8, 0)
+                local fs = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                fs:SetPoint("LEFT", icon, "RIGHT", 8, 0)
+                fs:SetText(text)
+                b:SetScript("OnClick", function()
+                    sec.expanded = not sec.expanded
+                    pcall(PlaySound, SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or 856)
+                    Opt.layout()
+                end)
+                row.refresh = function()
+                    icon:SetTexture(sec.expanded and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up")
+                end
+            end })
             current = sec
         end
-        -- Switches and dropdowns can have options that depend on them (see B.under): when one changes,
-        -- the visible rows re-check whether they're enabled.
-        local function watch(key)
-            pcall(Settings.SetOnValueChangedCallback, prefix .. key, function()
-                C_Timer.After(0, refreshSettingStates)
-                C_Timer.After(0, repaintSettings)      -- (rows shown only while this is on: see B.showIf)
-            end)
+        function B.check(key, text, tip, default)
+            return add({ make = function(f, row)
+                label(f, row, text, tip)
+                local cb = Opt.newCheck(f)
+                cb:SetPoint("LEFT", CX, 0)
+                cb:SetScript("OnClick", function(self) set(key, self:GetChecked() and true or false, true) end)
+                Opt.tip(cb, text, tip)
+                row.controls = { cb }
+                row.refresh = function() cb:SetChecked(get(key, default) and true or false) end
+            end })
         end
-        function B.check(key, label, tip, default)
-            local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.Boolean, label, default)
-            watch(key)
-            return attach(Settings.CreateCheckbox(category, st, tip))
-        end
-        -- Two checkboxes on one row: a and b are { key, label, tip, default } (b may be nil). Each is a
-        -- real setting like B.check's; the row is our own (WebbyFrames.xml), drawn as two boxes with their
-        -- labels side by side. Where the template isn't there, they're two ordinary rows.
-        local pairOK = pcall(function() assert(C_XMLUtil.GetTemplateInfo("WebbyFramesCheckPairTemplate")) end)
+        -- Two checkboxes on one row: a and b are { key, label, tip, default } (b may be nil).
         function B.pair(a, b)
-            if not (pairOK and Settings.CreateElementInitializer) then
-                local i1 = B.check(a[1], a[2], a[3], a[4])
-                local i2 = b and B.check(b[1], b[2], b[3], b[4])
-                return i1, i2
-            end
-            local items = {}
-            for _, d in ipairs({ a, b }) do
-                local st = Settings.RegisterAddOnSetting(category, prefix .. d[1], d[1], proxy, Settings.VarType.Boolean, d[2], d[4])
-                watch(d[1])
-                items[#items + 1] = { setting = st, label = d[2], tip = d[3] }
-            end
-            local init = Settings.CreateElementInitializer("WebbyFramesCheckPairTemplate", { name = "" })
-            -- (always 26px, like a checkbox row: read from the template it could come out 0, which broke
-            -- the whole list's layout below it)
-            init.GetExtent = function() return 26 end
-            init.InitFrame = function(self, frame)
-                local ok, err = pcall(function()
-                    pairRow(self, frame, items)
+            return add({ make = function(f, row)
+                row.controls, row.texts = {}, {}
+                local boxes = {}
+                for i, d in ipairs({ a, b }) do
+                    local cb = Opt.newCheck(f)
+                    cb:SetPoint("LEFT", i == 1 and (L + 18 * (row.indent or 0)) or (CX - 10), 0)
+                    local fs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                    fs:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+                    fs:SetText(d[2])
+                    cb:SetScript("OnClick", function(self) set(d[1], self:GetChecked() and true or false, true) end)
+                    Opt.tip(cb, d[2], d[3])
+                    row.controls[#row.controls + 1] = cb
+                    row.texts[#row.texts + 1] = fs
+                    boxes[#boxes + 1] = { cb, d }
+                end
+                row.refresh = function()
+                    for _, x in ipairs(boxes) do x[1]:SetChecked(get(x[2][1], x[2][4]) and true or false) end
+                end
+            end })
+        end
+        -- A colour row: label and a swatch of the colour, which opens the colour picker when clicked.
+        -- getc() -> { r, g, b }; setc(r, g, b).
+        function B.swatch(text, getc, setc, tip)
+            return add({ make = function(f, row)
+                label(f, row, text, tip)
+                local b = CreateFrame("Button", nil, f, "BackdropTemplate")
+                b:SetSize(22, 22)
+                b:SetPoint("LEFT", CX + 2, 0)
+                Opt.dark(b, 0.6)
+                b:SetBackdropColor(0, 0, 0, 1)
+                local tex = b:CreateTexture(nil, "ARTWORK")
+                tex:SetPoint("TOPLEFT", 3, -3)
+                tex:SetPoint("BOTTOMRIGHT", -3, 3)
+                b:SetScript("OnClick", function()
+                    local c = getc() or { 1, 1, 1 }
+                    Extras.openPicker({ c[1] or 1, c[2] or 1, c[3] or 1 }, function(r, g, bl)
+                        setc(r, g, bl)
+                        tex:SetColorTexture(r, g, bl, 1)
+                    end)
                 end)
-                if not ok and not pairErrorShown then
-                    pairErrorShown = true
-                    print("|cffff9900Webby Frames:|r an options row couldn't be drawn: " .. tostring(err))
+                Opt.tip(b, text, tip)
+                row.controls = { b }
+                row.refresh = function()
+                    local c = getc() or { 1, 1, 1 }
+                    tex:SetColorTexture(c[1] or 1, c[2] or 1, c[3] or 1, 1)
                 end
-            end
-            layout:AddInitializer(init)
-            return attach(init)
+            end })
         end
-        -- A colour row: label and swatch (swatchRow). get() -> { r, g, b }; set(r, g, b). Where our
-        -- template isn't there, a plain "Pick colour" button.
-        local swatchOK = pcall(function() assert(C_XMLUtil.GetTemplateInfo("WebbyFramesSwatchTemplate")) end)
-        function B.swatch(label, get, set, tip)
-            if not (swatchOK and Settings.CreateElementInitializer) then
-                return B.button(label, "Pick colour", function()
-                    local c = get() or { 1, 1, 1 }
-                    Extras.openPicker({ c[1] or 1, c[2] or 1, c[3] or 1 }, set)
-                end, tip)
+        function B.slider(key, text, tip, default, lo, hi, step, fmt)
+            fmt = fmt or function(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end
+            local function snap(v)
+                v = math.floor((v - lo) / step + 0.5) * step + lo
+                return math.max(lo, math.min(hi, v))
             end
-            local row = { label = label, tip = tip, get = get, set = set }
-            local init = Settings.CreateElementInitializer("WebbyFramesSwatchTemplate", { name = label, tooltip = tip })
-            init.GetExtent = function() return 26 end
-            init.InitFrame = function(self, frame)
-                local ok, err = pcall(swatchRow, self, frame, row)
-                if not ok and not pairErrorShown then
-                    pairErrorShown = true
-                    print("|cffff9900Webby Frames:|r an options row couldn't be drawn: " .. tostring(err))
+            return add({ make = function(f, row)
+                label(f, row, text, tip)
+                local s = CreateFrame("Slider", nil, f, "BackdropTemplate")
+                s:SetOrientation("HORIZONTAL")
+                s:SetSize(150, 17)
+                s:SetPoint("LEFT", CX + 22, 0)
+                s:SetBackdrop({ bgFile = "Interface\\Buttons\\UI-SliderBar-Background", edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
+                    tile = true, tileSize = 8, edgeSize = 8, insets = { left = 3, right = 3, top = 6, bottom = 6 } })
+                s:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+                s:SetMinMaxValues(lo, hi)
+                s:SetValueStep(step)
+                pcall(s.SetObeyStepOnDrag, s, true)
+                local val = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                local function stepper(dir)
+                    local b = CreateFrame("Button", nil, f)
+                    b:SetSize(20, 20)
+                    local name = dir < 0 and "Prev" or "Next"
+                    b:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. name .. "Page-Up")
+                    b:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. name .. "Page-Down")
+                    b:SetDisabledTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. name .. "Page-Disabled")
+                    b:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
+                    b:SetScript("OnClick", function() s:SetValue(snap(s:GetValue() + dir * step)) end)
+                    return b
                 end
-            end
-            layout:AddInitializer(init)
-            return attach(init)
+                local prev, nxt = stepper(-1), stepper(1)
+                prev:SetPoint("RIGHT", s, "LEFT", -1, 0)
+                nxt:SetPoint("LEFT", s, "RIGHT", 1, 0)
+                val:SetPoint("LEFT", nxt, "RIGHT", 4, 0)
+                s:SetScript("OnValueChanged", function(_, v)
+                    v = snap(v)
+                    val:SetText(fmt(v))
+                    if not row.updating then set(key, v) end
+                end)
+                s:EnableMouseWheel(false)
+                Opt.tip(s, text, tip)
+                row.controls = { s, prev, nxt }
+                row.texts[#row.texts + 1] = val
+                row.refresh = function()
+                    local v = tonumber(get(key, default)) or default or lo
+                    s:SetValue(v)
+                    val:SetText(fmt(snap(v)))
+                end
+            end })
         end
-        function B.slider(key, label, tip, default, lo, hi, step, fmt)
-            local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.Number, label, default)
-            local o = Settings.CreateSliderOptions(lo, hi, step)
-            o:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, fmt or function(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end)
-            return attach(Settings.CreateSlider(category, st, o, tip))
-        end
-        -- Indents a control under the one it depends on and greys it out while isOn() is false.
+        -- Indents controls under the one they depend on and greys them out while isOn() is false.
         function B.under(parent, isOn, ...)
-            for _, init in ipairs({ ... }) do
-                if init and parent and init.SetParentInitializer then pcall(init.SetParentInitializer, init, parent, isOn) end
+            for _, r in ipairs({ ... }) do
+                if r and parent then
+                    r.indent = (parent.indent or 0) + 1
+                    r.enabledIf = isOn
+                    r.parentRow = parent
+                end
             end
         end
-        -- Shows controls only while isOn() is true (hidden rather than greyed; the page redraws when the
-        -- setting it depends on changes).
+        -- Shows controls only while isOn() is true (hidden rather than greyed).
         function B.showIf(isOn, ...)
-            for _, init in ipairs({ ... }) do
-                if init and init.AddShownPredicate then pcall(init.AddShownPredicate, init, isOn) end
+            for _, r in ipairs({ ... }) do
+                if r then r.preds[#r.preds + 1] = isOn end
             end
         end
-        function B.dropdown(key, label, tip, default, choices)
-            local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.String, label, default)
-            watch(key)
-            return attach(Settings.CreateDropdown(category, st, function()
-                local c = Settings.CreateControlTextContainer()
-                local list = type(choices) == "function" and choices() or choices
-                for _, ch in ipairs(list) do c:Add(ch[1], ch[2]) end
-                return c:GetData()
-            end, tip))
+        -- choices: { { value, label }, ... }, or a function returning that (read each time it opens).
+        function B.dropdown(key, text, tip, default, choices)
+            local function list() return (type(choices) == "function" and choices() or choices) or {} end
+            return add({ make = function(f, row)
+                label(f, row, text, tip)
+                local b = CreateFrame("Button", nil, f, "BackdropTemplate")
+                b:SetSize(CW, 24)
+                b:SetPoint("LEFT", CX, 0)
+                Opt.dark(b, 0.45)
+                b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+                local arrow = b:CreateTexture(nil, "ARTWORK")
+                arrow:SetSize(16, 16)
+                arrow:SetPoint("RIGHT", -4, 0)
+                arrow:SetTexture("Interface\\Buttons\\Arrow-Down-Up")
+                local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                fs:SetPoint("LEFT", 8, 0)
+                fs:SetPoint("RIGHT", arrow, "LEFT", -2, 0)
+                fs:SetJustifyH("LEFT")
+                pcall(fs.SetWordWrap, fs, false)
+                b:SetScript("OnClick", function(self)
+                    if Opt.menu and Opt.menu:IsShown() and Opt.menu.owner == self then Opt.closeMenu(); return end
+                    Opt.openMenu(self, list(), get(key, default), function(v) set(key, v, true) end)
+                end)
+                Opt.tip(b, text, tip)
+                row.controls = { b }
+                row.texts[#row.texts + 1] = fs
+                row.refresh = function()
+                    local cur = get(key, default)
+                    local shown = tostring(cur)
+                    for _, c in ipairs(list()) do
+                        if c[1] == cur then shown = c[2]; break end
+                    end
+                    fs:SetText(shown)
+                end
+            end })
         end
-        function B.button(label, text, onClick, tip)
-            if CreateSettingsButtonInitializer then
-                local init = CreateSettingsButtonInitializer(label, text, onClick, tip, true)
-                layout:AddInitializer(init)
-                return attach(init)
-            end
+        function B.button(text, buttonText, onClick, tip)
+            return add({ make = function(f, row)
+                label(f, row, text, tip)
+                local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+                b:SetSize(180, 24)
+                b:SetPoint("LEFT", CX, 0)
+                b:SetText(buttonText)
+                b:SetScript("OnClick", function()
+                    onClick()
+                    Opt.changed()
+                end)
+                Opt.tip(b, text, tip)
+                row.controls = { b }
+            end })
         end
         -- Buff and debuff layout details (in the Buffs and debuffs section).
         function B.auraDetails()
@@ -4474,19 +4770,22 @@ local function buildSettings()
             -- addon-wide switches, both on unless turned off; "show_<unit>" is that frame's Show
             __index = function(_, k)
                 if k == "enabled" or k == "combatNumbers" then return DB[k] ~= false end
+                if k == "minimapButton" then return not (type(DB.minimap) == "table" and DB.minimap.hide) end
                 local unit = k:match("^show_(.+)$")
                 if unit then return frameOn(unit) end
             end,
             __newindex = function(_, k, v)
                 if k == "enabled" or k == "combatNumbers" then DB[k] = v and true or false; return end
+                if k == "minimapButton" then Opt.setMinimapShown(v); return end
                 local unit = k:match("^show_(.+)$")
                 if unit then setSetting(unit, "frameShown", v and true or false) end
             end,
         })
-        local B = builders(root, rootLayout, general, "WEBBY_general_")
+        local B = builders(Opt.newPage("general", "General"), general)
         B.header("Webby Frames  |cff808080v" .. addonVersion() .. "  -  by Webby, Lexible & Dranged|r")
         B.pair({ "enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames.\n\n|cffffd100Needs a /reload.|r", true },
                { "combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on the player, target and focus frames.", true })
+        B.pair({ "minimapButton", "Minimap button", "A Webby Frames button on the minimap: click it for these options, right-click it for Edit Mode. Drag it round the minimap to move it.", true })
 
         B.header("Frames")
         -- which of the optional frames are used (player and target always are)
@@ -4516,14 +4815,12 @@ local function buildSettings()
     -- All frames: the options most people want the same everywhere, set on every frame at once. It shows
     -- the player frame's choice; changing it sets every frame (each frame's page can still differ after).
     do
-        local sub, subLayout = Settings.RegisterVerticalLayoutSubcategory(root, "All frames")
-        unitPages.all = sub
         local function setAll(_, k, v) for _, unit in ipairs(UNITS) do setSetting(unit, k, v) end end
         local proxy = setmetatable({}, {
             __index = function(_, k) return getSetting("player", k) end,
             __newindex = setAll,
         })
-        local B = builders(sub, subLayout, proxy, "WEBBY_all_")
+        local B = builders(Opt.newPage("all", "All frames"), proxy)
         B.header("|cff808080Changes here apply to every frame. Each frame's own page can then differ.|r")
 
         -- (the same sections, in the same order, as each frame's page)
@@ -4566,13 +4863,11 @@ local function buildSettings()
     end
 
     for _, unit in ipairs(UNITS) do
-        local sub, subLayout = Settings.RegisterVerticalLayoutSubcategory(root, UNIT_LABEL[unit])
-        unitPages[unit] = sub
         local proxy = setmetatable({}, {
             __index = function(_, k) return getSetting(unit, k) end,
             __newindex = function(_, k, v) setSetting(unit, k, v) end,
         })
-        local B = builders(sub, subLayout, proxy, "WEBBY_" .. unit .. "_")
+        local B = builders(Opt.newPage(unit, UNIT_LABEL[unit]), proxy)
 
         local px = function(v) return string.format("%d px", math.floor(v + 0.5)) end
         local whole = function(v) return string.format("%d", math.floor(v + 0.5)) end
@@ -4698,11 +4993,10 @@ local function buildSettings()
         B.button("Reset", "Reset this frame", function() resetFrame(unit) end,
             "Puts this frame back to its default options and position, for the current Edit Mode layout.")
     end
-    Settings.RegisterAddOnCategory(root)
 end
 
 -- Entry in the minimap addon compartment (needs the TOC fields below).
-function WebbyFrames_OnCompartmentClick() openSettings() end
+function WebbyFrames_OnCompartmentClick() Opt.toggle() end
 
 ---------------------------------------------------------------------------
 -- Startup
@@ -4777,8 +5071,10 @@ init:SetScript("OnEvent", function(_, event)
 
     DB = WebbyFramesDB
     if not pcall(buildSettings) then
-        print("|cffff9900Webby Frames:|r couldn't build the settings page; Edit Mode still works.")
+        print("|cffff9900Webby Frames:|r couldn't build the settings window; Edit Mode still works.")
     end
+    pcall(Opt.buildAddOnsPage)
+    pcall(Opt.setupMinimap)
     if DB.enabled == false then return end
 
     for _, unit in ipairs(UNITS) do
@@ -4798,7 +5094,9 @@ SLASH_WEBBYFRAMES1 = "/webby"
 SlashCmdList.WEBBYFRAMES = function(msg)
     local rawmsg = (msg or ""):lower()      -- (the whole line, for commands that take numbers)
     msg = rawmsg:match("^%s*(%S*)") or ""
-    if msg == "" or msg == "options" then
+    if msg == "" then
+        Opt.toggle()
+    elseif msg == "options" then
         openSettings()
     elseif msg == "edit" then
         openEditMode()
