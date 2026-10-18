@@ -126,16 +126,40 @@ end
 -- the portrait centre and 16px below it.
 local CORNER_POS = { -46.5, -15 }
 
--- The corner accent's art, by the "Corner accent" setting: Retail's (DragonflightUI's) or Forever's
--- older rounder gold one (no longer in the game; Media/corner-forever, made from a screenshot of it).
+-- The corner accent's art, by the "Corner accent" setting: Retail's (DragonflightUI's, as drawn) or
+-- Forever's older rounder gold one (no longer in the game; Media/corner-forever, made from a
+-- screenshot of it, its bottom arm mirrored from the top one so both taper alike). Its texture: the
+-- art in the top left 58 texels, right against the edges so both arms run thin to them, a hairline
+-- black rim (1 texel; the art has its own dark edge there) along its curve so the portrait doesn't
+-- show in the crack beside it, and
+-- a 1px black line along its bottom, between it and the frame border; 58 x 60 texels in all. The gold
+-- is 22px; the box's bottom right is where the gold's used to be.
 local FOREVER_CORNER_SIZE = 22
-local function setCornerArt(tex, style, scale)
+local FOREVER_ART, FOREVER_RIM, FOREVER_LINE = 58, 0, 2   -- texels (FOREVER_RIM: the art's offset for the rim)
+
+local function setCornerArt(tex, style, scale, nudge)
+    local at = CORNER_POS
+    -- plus any fine-tuning from /webby corner x y (right / up, in pixels)
+    if nudge then at = { at[1] + (tonumber(nudge[1]) or 0), at[2] + (tonumber(nudge[2]) or 0) } end
+    scale = scale or 1
+    local f = tex:GetParent()
+    while f and not f.baseUnit do f = f:GetParent() end        -- (the unit frame, past ov / the glow frames)
     if style == "forever" then
+        local texel = FOREVER_CORNER_SIZE / FOREVER_ART * scale
+        local half = FOREVER_CORNER_SIZE / 2 * scale
+        if f then
+            tex:ClearAllPoints()
+            -- (the bottom line half below where the gold used to end: all of it below sat over the frame
+            -- border, none of it left a gap)
+            tex:SetPoint("BOTTOMRIGHT", f, "CENTER", at[1] + half, at[2] - half - FOREVER_LINE * texel / 2)
+        end
         tex:SetTexture(MEDIA .. "corner-forever")
-        tex:SetTexCoord(0, 1, 0, 1)
-        tex:SetSize(FOREVER_CORNER_SIZE * (scale or 1), FOREVER_CORNER_SIZE * (scale or 1))
+        local w, h = FOREVER_RIM + FOREVER_ART, FOREVER_RIM + FOREVER_ART + FOREVER_LINE
+        tex:SetTexCoord(0, w / 64, 0, h / 64)
+        tex:SetSize(w * texel, h * texel)
         return
     end
+    if f then tex:ClearAllPoints(); tex:SetPoint("CENTER", f, "CENTER", at[1], at[2]) end
     setArt(tex, ART.corner, false, scale)
 end
 
@@ -1681,7 +1705,7 @@ local function updateIndicators(f)
         if f.corner and hasCorner(base) and f.layoutLeft then
             local cornerOn = not showC
             f.corner:SetShown(cornerOn)
-            if f.cornerBack then f.cornerBack:SetShown(cornerOn) end
+            if f.cornerBack then f.cornerBack:SetShown(cornerOn and getSetting(f.baseUnit, "cornerStyle") ~= "forever") end
         end
         if f.cornerGlow then f.cornerGlow:SetShown(f.corner and f.corner:IsShown() or false) end
         if f.status then
@@ -2891,14 +2915,23 @@ local function applyCorner(f)
     end
     -- its art (Retail's or Forever's), for the accent, its black backing and its glow pieces
     local style = getSetting(f.baseUnit, "cornerStyle")
-    if on and f.cornerStyle ~= style then
-        f.cornerStyle = style
-        setCornerArt(c, style)
-        if f.cornerBack then setCornerArt(f.cornerBack, style, 1.15); f.cornerBack:SetVertexColor(0, 0, 0, 1) end
-        for _, g in ipairs(f.cornerGlowTex or {}) do setCornerArt(g[1], style, g[2]) end
+    -- (fine-tuning per style, from /webby corner x y)
+    local nudge = getSetting(f.baseUnit, "cornerNudge_" .. tostring(style))
+    if type(nudge) ~= "table" then nudge = nil end
+    local key = tostring(style) .. (nudge and (" " .. tostring(nudge[1]) .. " " .. tostring(nudge[2])) or "")
+    if on and f.cornerStyle ~= key then
+        f.cornerStyle = key
+        setCornerArt(c, style, nil, nudge)
+        -- Retail's black backing: its silhouette, a little larger, behind it (Forever's has its rim and
+        -- line built into the texture instead)
+        if f.cornerBack then
+            setCornerArt(f.cornerBack, style, 1.15, nudge)
+            f.cornerBack:SetVertexColor(0, 0, 0, 1)
+        end
+        for _, g in ipairs(f.cornerGlowTex or {}) do setCornerArt(g[1], style, g[2], nudge) end
     end
     c:SetShown(on)
-    if f.cornerBack then f.cornerBack:SetShown(on) end
+    if f.cornerBack then f.cornerBack:SetShown(on and style ~= "forever") end
 end
 
 
@@ -4448,7 +4481,8 @@ end)
 
 SLASH_WEBBYFRAMES1 = "/webby"
 SlashCmdList.WEBBYFRAMES = function(msg)
-    msg = (msg or ""):lower():match("^%s*(%S*)") or ""
+    local rawmsg = (msg or ""):lower()      -- (the whole line, for commands that take numbers)
+    msg = rawmsg:match("^%s*(%S*)") or ""
     if msg == "" or msg == "options" then
         openSettings()
     elseif msg == "edit" then
@@ -4525,6 +4559,22 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         print("  your % of the next highest: " .. (ok and tostring(over) or ("can't be worked out (" .. tostring(err) .. ")")))
     elseif msg == "export" or msg == "import" then
         Profiles.show(msg)
+    elseif msg == "corner" then
+        -- fine-tune the player's corner accent: /webby corner x y (right / up, pixels; 0 0 or none resets)
+        local p = "|cff33ccffWebby Frames:|r "
+        local x, y = (rawmsg or ""):match("corner%s+(%-?[%d%.]+)%s+(%-?[%d%.]+)")
+        local style = getSetting("player", "cornerStyle")
+        local key = "cornerNudge_" .. tostring(style)
+        x, y = tonumber(x), tonumber(y)
+        if x and y and (x ~= 0 or y ~= 0) then
+            setSetting("player", key, { x, y })
+        else
+            setSetting("player", key, nil)
+            x, y = 0, 0
+        end
+        local f = frames.player
+        if f then f.cornerStyle = nil; pcall(applyCorner, f) end
+        print(p .. "corner accent (" .. tostring(style) .. ") nudged " .. x .. " right, " .. y .. " up. Try /webby corner 0.5 -0.5 and so on; /webby corner resets.")
     elseif msg == "cost" then
         -- what the spell cost prediction saw on your last cast
         local f = frames.player
@@ -4548,6 +4598,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         print("  /webby test - preview heals, shields and a combat number on your frame")
         print("  /webby threat - what the game reports for your target's threat")
         print("  /webby cost - what the spell cost bar saw on your last cast")
+        print("  /webby corner x y - fine-tune where the corner accent sits (right / up, in pixels)")
         print("  /webby export, /webby import - share a profile   /webby errors - anything that went wrong")
     else
         print("|cff33ccffWebby Frames:|r unknown command. Type |cff33ccff/webby help|r.")

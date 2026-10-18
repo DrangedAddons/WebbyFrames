@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.12
+- The Forever corner accent fits the frame: a hairline black edge along its curve and a 1px black line along its bottom are built into its art, so the portrait no longer shows in the cracks beside it, and its bottom arm tapers away like its top one.
+- `/webby corner x y` fine-tunes where the corner accent sits (right / up, in pixels, halves too); `/webby corner` alone resets it.
+
 ## 1.7.11
 - Damage prediction no longer hangs on after fast spells: a hit that lands just before the cast finishes now clears it too, and it waits at most 1.5 seconds for a spell in flight.
 
