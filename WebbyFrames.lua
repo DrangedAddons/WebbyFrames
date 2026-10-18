@@ -81,6 +81,7 @@ local DEFAULT_SETTINGS = {
     restTint = false,        -- player: the resting Zzz takes the frame colour
     costPredict = true,      -- player: while casting, the spell's cost shows on the power bar
     costShade = 55,          -- player: how much lighter (above 0) or darker (below 0) the cost shows
+    cornerStyle = "retail",  -- player: the corner accent's art, Retail's or Forever's own
     petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (green)
     petHappy = "corner",     -- hunter pet happiness: "corner" (over the corner accent), "badge" (in the level circle) or "off"
 }
@@ -124,6 +125,19 @@ end
 -- The corner accent (DragonflightUI's art): its centre relative to the frame's centre, 15.5px in from
 -- the portrait centre and 16px below it.
 local CORNER_POS = { -46.5, -15 }
+
+-- The corner accent's art, by the "Corner accent" setting: Retail's (DragonflightUI's) or Forever's
+-- older rounder gold one (no longer in the game; Media/corner-forever, made from a screenshot of it).
+local FOREVER_CORNER_SIZE = 22
+local function setCornerArt(tex, style, scale)
+    if style == "forever" then
+        tex:SetTexture(MEDIA .. "corner-forever")
+        tex:SetTexCoord(0, 1, 0, 1)
+        tex:SetSize(FOREVER_CORNER_SIZE * (scale or 1), FOREVER_CORNER_SIZE * (scale or 1))
+        return
+    end
+    setArt(tex, ART.corner, false, scale)
+end
 
 -- Points a bar's mask at a bundled mask file and attaches it to the bar's fill.
 local function setFileMask(bar, mask, file, w, h, mx, my, mirror)
@@ -1258,6 +1272,7 @@ local function createIndicators(f)
         f.cornerGlow = {
             SetShown = function(_, on) halo:SetShown(on); lit:SetShown(on) end,
         }
+        f.cornerGlowTex = { { halo, 1.35 }, { lit, 1 } }   -- (re-drawn by applyCorner for the corner style)
         sf:Hide(); cf:Hide()
         f.status = {
             Show = function() sf:Show(); cf:Show() end,
@@ -2690,6 +2705,14 @@ local function applyCorner(f)
             f.pmask:SetTexture(CIRCLE_FALLBACK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
         end
     end
+    -- its art (Retail's or Forever's), for the accent, its black backing and its glow pieces
+    local style = getSetting(f.baseUnit, "cornerStyle")
+    if on and f.cornerStyle ~= style then
+        f.cornerStyle = style
+        setCornerArt(c, style)
+        if f.cornerBack then setCornerArt(f.cornerBack, style, 1.15); f.cornerBack:SetVertexColor(0, 0, 0, 1) end
+        for _, g in ipairs(f.cornerGlowTex or {}) do setCornerArt(g[1], style, g[2]) end
+    end
     c:SetShown(on)
     if f.cornerBack then f.cornerBack:SetShown(on) end
 end
@@ -4018,6 +4041,8 @@ local function buildSettings()
             B.check("comboPoints", "Combo points", "Rogues and druids: your combo points in an arc round the target's portrait.", true)
         end
         if unit == "player" then
+            B.dropdown("cornerStyle", "Corner accent", "The gold corner at the portrait's bottom right: Retail's pointed one, or Forever's older rounder one.", "retail",
+                { { "retail", "Retail" }, { "forever", "Forever" } })
             B.check("restTint", "Colour the Zzz", "The resting Zzz by the portrait takes the frame colour (it stays as drawn while the frame is gold).", false)
             local costOn = B.check("costPredict", "Spell cost", "Shows spell costs on your mana (or other power) bar. While you cast, the part the spell will use is shaded; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true)
             B.under(costOn, function() return getSetting("player", "costPredict") end,
