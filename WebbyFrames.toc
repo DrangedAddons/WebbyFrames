@@ -2,7 +2,7 @@
 ## Title: Webby Frames
 ## Notes: Retail-style player, target, target of target, focus, focus target and pet frames for WoW Forever, with buffs and debuffs. Options: /webby or the minimap button; move them in Edit Mode.
 ## Author: Webby, Lexible and Dranged
-## Version: 1.11.0
+## Version: 1.12.0
 ## X-DrangedAddons-Games: _classic_beta_, _forever_
 ## IconTexture: Interface\Icons\Spell_Nature_Web
 ## OptionalDeps: EllesmereUI
@@ -16,3 +16,5 @@ Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 Libs\LibEditMode\embed.xml
 
 WebbyFrames.lua
+Party.lua
+ClickCasting.lua

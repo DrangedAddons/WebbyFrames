@@ -6,6 +6,13 @@
 -- and TargetFrame.xml. Position and options are editable in Edit Mode (bundled
 -- LibEditMode) and in Esc > Options > AddOns > Webby Frames, saved per layout.
 
+-- The addon's files share one table (ns, the second value the game passes every file): this file puts
+-- the helpers the modules use on it (see the end of the file); the modules (Party.lua,
+-- ClickCasting.lua) load after it, as the .toc lists them, and add their parts. ns.pages: functions
+-- the settings window calls to add a module's own page (builders, Opt).
+local _, ns = ...
+ns.pages = {}
+
 -- carry settings over from the old DFFramesForever name, once
 WebbyFramesDB = WebbyFramesDB or DFFramesForeverDB or {}
 
@@ -85,11 +92,12 @@ local DEFAULT_SETTINGS = {
     -- party: gap between members (room for a row of debuffs), role / leader icons, fading out of range
     partyGap = 24, rangeFade = true,
     -- party layout: "vertical" (stacked) or "horizontal" (side by side); order "group" (Blizzard's) or
-    -- "role" (tanks, healers, damage); include yourself; each member's pet and target as mini frames
-    partyLayout = "vertical", partySort = "group", partyPets = true, partyTargets = false,
+    -- "role" (tanks, healers, damage); each member's pet as a mini frame
+    partyLayout = "vertical", partySort = "group", partyPets = true,
     -- buffs and debuffs: "all" (every buff) or "retail" (the party's default: only your own buffs);
     -- dispelGlow: the party frame glows in the dispel colour when you can dispel something on it
-    auraStyle = "all", dispelGlow = false, auraMineBig = false,   -- (auraMineBig: your own debuffs first, bigger)    smoothBars = true, healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
+    auraStyle = "all", dispelGlow = false, auraMineBig = false,   -- (auraMineBig: your own debuffs first, bigger)
+    smoothBars = true, healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
     combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus), one General switch
     -- icons and extras
     comboPoints = true,
@@ -211,7 +219,8 @@ end
 local DB, lib
 local frames = {}            -- unit -> frame
 -- the party frames, slot 1 - 4 (slot 1 is frames.party); see "Party frames"
-local Party = { members = {}, SLOTS = 4 }
+local Party = { members = {}, SLOTS = 4 }   -- (filled in by Party.lua)
+ns.Party = Party
 -- the unit events a small frame (and a party slot, again whenever it's given another unit) listens to
 Party.UNIT_EVENTS = { "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
     "UNIT_NAME_UPDATE", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA",
@@ -371,6 +380,21 @@ local function newBar(f)
     bar.clip = bar:CreateMaskTexture()
     bar.clip:SetTexture("Interface\\Buttons\\WHITE8X8", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
     return bar, mask
+end
+
+-- Every tooltip of ours shows where the game puts tooltips by default (bottom right, or wherever Edit
+-- Mode moved it), owned by `owner`.
+local function defaultTip(owner)
+    if GameTooltip_SetDefaultAnchor then GameTooltip_SetDefaultAnchor(GameTooltip, owner)
+    else GameTooltip:SetOwner(owner, "ANCHOR_NONE"); GameTooltip:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -(CONTAINER_OFFSET_X or 0) - 13, CONTAINER_OFFSET_Y or 64) end
+end
+-- (a tooltip the game already filled, e.g. a buff's: moved to the default spot without clearing it)
+local function moveTipToDefault(owner)
+    if GameTooltip:GetOwner() ~= owner then return end
+    GameTooltip:ClearAllPoints()
+    local box = rawget(_G, "GameTooltipDefaultContainer")
+    if box then GameTooltip:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT")
+    else GameTooltip:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -(CONTAINER_OFFSET_X or 0) - 13, CONTAINER_OFFSET_Y or 64) end
 end
 
 ---------------------------------------------------------------------------
@@ -1573,7 +1597,7 @@ local function createIndicators(f)
     hit:EnableMouse(true)
     hit:Hide()
     local function tip(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        defaultTip(self)
         GameTooltip:SetText("PvP flagged", 1, 1, 1)
         if f.baseUnit == "player" then
             local ms
@@ -2198,6 +2222,16 @@ end
 
 -- Styles one aura button (the container calls this as it creates them); f is the unit frame.
 function AuraKit.styleButton(f, b)
+    -- the game fills the icon's tooltip; it's moved to the default spot (and back there should the
+    -- game re-place it while it updates)
+    b:HookScript("OnEnter", function(self) self.webbyHover = true; pcall(moveTipToDefault, self) end)
+    b:HookScript("OnLeave", function(self) self.webbyHover = nil end)
+    b:HookScript("OnUpdate", function(self)
+        if self.webbyHover and GameTooltip:GetOwner() == self then
+            local _, rel = GameTooltip:GetPoint(1)
+            if rel == self then pcall(moveTipToDefault, self) end
+        end
+    end)
     -- 1px edge: black behind every icon; on debuffs a second, white edge layer on top that the
     -- container tints by dispel type (see below)
     b.webbyBack = b:CreateTexture(nil, "BACKGROUND", nil, 0)
@@ -2304,6 +2338,7 @@ local function copyBorder(t, f)
     t:SetTexture(f.border:GetTexture())
     t:SetTexCoord(f.border:GetTexCoord())
 end
+AuraKit.GLOW_FLASH, AuraKit.GLOW_PULSE = 0.9, 1.0   -- seconds: the first blinks, then each pulse
 function AuraKit.dispelGlow(f)
     local want = f.border and getSetting(f.baseUnit, "dispelGlow")
     local c = f.dispelBox
@@ -2317,19 +2352,39 @@ function AuraKit.dispelGlow(f)
         if not (ok and box) then f.dispelBox = false; return end
         local function init(b)
             pcall(function()
-                local t = b:CreateTexture(nil, "OVERLAY", nil, 7)
-                t:SetAllPoints()
-                copyBorder(t, f)
-                t:SetBlendMode("ADD")
+                -- two added-light copies of the border, for a brighter glow
                 local styles = Enum.CustomAuraButtonDispelTypeTextureStyle
-                b:AddDispelTypeTexture(t, {
-                    style = styles and styles.PreserveAsset,
-                    showWhenHarmful = true,
-                    showWithoutDispelType = false,
-                    customDispelColorMap = AuraKit.dispelColors(),
-                })
+                b.webbyGlows = {}
+                for _ = 1, 2 do
+                    local t = b:CreateTexture(nil, "OVERLAY", nil, 7)
+                    t:SetAllPoints()
+                    copyBorder(t, f)
+                    t:SetBlendMode("ADD")
+                    b:AddDispelTypeTexture(t, {
+                        style = styles and styles.PreserveAsset,
+                        showWhenHarmful = true,
+                        showWithoutDispelType = false,
+                        customDispelColorMap = AuraKit.dispelColors(),
+                    })
+                    b.webbyGlows[#b.webbyGlows + 1] = t
+                end
                 b:EnableMouse(false)
-                b.webbyGlow = t
+                b.webbyGlow = b.webbyGlows[1]
+            end)
+            -- it flashes when the debuff lands (three quick blinks), then keeps pulsing while it's there
+            pcall(function()
+                b:HookScript("OnShow", function(self) self.glowT = 0 end)
+                b:HookScript("OnUpdate", function(self, dt)
+                    local t = (self.glowT or 0) + dt
+                    self.glowT = t
+                    local a
+                    if t < AuraKit.GLOW_FLASH then
+                        a = 0.2 + 0.8 * math.abs(math.sin(t * math.pi * 3 / AuraKit.GLOW_FLASH))
+                    else
+                        a = 0.3 + 0.7 * (0.5 + 0.5 * math.cos((t - AuraKit.GLOW_FLASH) * 2 * math.pi / AuraKit.GLOW_PULSE))
+                    end
+                    self:SetAlpha(a)
+                end)
             end)
             -- (made when a dispellable debuff first lands: the border's size now)
             pcall(function() b:SetSize(f.border:GetSize()) end)
@@ -2355,7 +2410,7 @@ function AuraKit.dispelGlow(f)
         pcall(function()
             local b = c:GetAuraGroupFrame("dispel", i)
             b:SetSize(w, h)
-            if b.webbyGlow then copyBorder(b.webbyGlow, f) end   -- (the art can change with the layout)
+            for _, t in ipairs(b.webbyGlows or {}) do copyBorder(t, f) end   -- (the art can change with the layout)
         end)
     end
     c:Show()
@@ -2410,7 +2465,7 @@ function AuraKit.placeMover(f, w, h)
             end
         end)
         m:SetScript("OnEnter", function(self)
-            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            defaultTip(self)
             GameTooltip:SetText("Buffs and debuffs", 1, 1, 1)
             GameTooltip:AddLine("Drag to move them. The first row starts here.", 1, 0.82, 0, true)
             GameTooltip:Show()
@@ -2659,7 +2714,7 @@ function Extras.editCombo(on)
             Extras.placeCombo(f)
         end)
         m:SetScript("OnEnter", function(self)
-            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            defaultTip(self)
             GameTooltip:SetText("Combo points", 1, 1, 1)
             GameTooltip:AddLine("Drag to move them. Reset the target frame to put them back.", 1, 0.82, 0)
             GameTooltip:Show()
@@ -2721,7 +2776,7 @@ end
 -- Hunter pet happiness: the mood face, shown like the first buff in the pet's aura row; the tooltip
 -- has the details.
 function Extras.happinessTooltip(self)
-    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    defaultTip(self)
     GameTooltip:SetText(_G["PET_HAPPINESS" .. self.h] or "Happiness", 1, 1, 1)
     -- (with the badge, the pet's level: the badge looks like a level circle but holds the face)
     pcall(function() if self.level then GameTooltip:AddLine((LEVEL or "Level") .. " " .. self.level, 1, 0.82, 0) end end)
@@ -3259,7 +3314,7 @@ local function editAltMana(on)
             placeAltMana(f)
         end)
         m:SetScript("OnEnter", function(self)
-            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            defaultTip(self)
             GameTooltip:SetText("Druid mana", 1, 1, 1)
             GameTooltip:AddLine("Drag to move it. Reset the player frame to put it back.", 1, 0.82, 0)
             GameTooltip:Show()
@@ -3377,7 +3432,7 @@ local function addHover(f)
     f:HookScript("OnEnter", function(self)
         self.hover = true
         pcall(function()
-            GameTooltip_SetDefaultAnchor(GameTooltip, self)
+            defaultTip(self)
             if GameTooltip:SetUnit(self.wfUnit) ~= false then GameTooltip:Show() end
         end)
     end)
@@ -3760,645 +3815,6 @@ local function createSmallFrame(unit, wf, index)
     if index then Party.members[index] = f end
     updateAll(f)
     return f
-end
-
----------------------------------------------------------------------------
--- Party frames
----------------------------------------------------------------------------
--- Four small frames (party1 - party4) sharing the "party" options. Slot 1 is frames.party and sits where
--- it was put; slots 2 - 4 stack under it, partyGap apart (room for a row of debuffs). On top of the small
--- frame's bars, name, portrait, auras and heals: a role icon, the leader's crown, the ready check, and
--- fading while out of range.
-
--- Showing and hiding by unit: the game's unit watch (shown while the unit exists). For every frame
--- (applyShown, Edit Mode).
-function Party.watch(f) RegisterUnitWatch(f) end
-function Party.unwatch(f) UnregisterUnitWatch(f) end
-
--- Slot 2 - 5: under the slot before it, or to its right (Layout: Side by side). Side by side leaves room
--- for buffs and debuffs to the right of each frame, and for the member's target frame (see Party.minis).
-function Party.place(f)
-    local prev = Party.members[f.partyIndex - 1]
-    if not prev then return end
-    local gap = tonumber(getSetting("party", "partyGap")) or 6
-    f:ClearAllPoints()
-    if getSetting("party", "partyLayout") == "horizontal" then
-        f:SetPoint("TOPLEFT", prev, "TOPRIGHT", gap + Party.sideRoom(), 0)
-    else
-        f:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -(gap + Party.belowRoom(prev)))
-    end
-end
-
--- Room taken beside a party frame (side-by-side layout) and under it (stacked): its buffs and debuffs
--- when they sit beside it, its target's mini frame, its pet's mini frame.
-function Party.sideRoom()
-    local w = 0
-    if getSetting("party", "auraPos") == "side" and (getSetting("party", "auraBuffs") or getSetting("party", "auraDebuffs")) then
-        local size, gap = getSetting("party", "auraSize") or 16, getSetting("party", "auraGap") or 2
-        w = w + (getSetting("party", "auraPerRow") or 6) * (size + gap)
-    end
-    if getSetting("party", "partyTargets") then w = w + Party.MINI_W + 4 end
-    return w
-end
--- (under a member: room for their pet's bar only while they have a pet out)
-function Party.belowRoom(prev)
-    if not getSetting("party", "partyPets") then return 0 end
-    local has = false
-    pcall(function() has = UnitExists(Party.petOf(prev.homeUnit or prev.wfUnit)) and true or false end)
-    -- (the pet's height, less what tucks under the frame and its art's own transparent bottom edge)
-    return has and math.floor(49 * Party.PET_SCALE - Party.PET_TUCK - 4 * Party.PET_SCALE + 0.5) or 0
-end
-
--- partyN -> partypetN
-function Party.petOf(unit)
-    return (tostring(unit):gsub("^party", "partypet"))
-end
-
--- Every slot back in place (a pet came or went): out of combat only, else once it ends.
-function Party.reflow()
-    if InCombatLockdown() then Party.pendingReflow = true; return end
-    Party.pendingReflow = nil
-    for i = 2, Party.SLOTS do
-        local f = Party.members[i]
-        if f then pcall(Party.place, f) end
-    end
-end
-
--- Pet and target mini frames: a slim health bar with the name, styled like the party frame (its health
--- fill or chosen texture, its font, an edge in the frame's colour: gold, class or custom), clickable to
--- target. One of each per party slot, made at login (secure buttons can't be made in combat), as part of
--- the member's frame (so they move, scale and fade with it); each shows while its unit exists (the game's
--- unit watch). The pet sits tucked under the member's bars, the target to the right (past the buffs and
--- debuffs when they're beside it). Bars are polled five times a second (targets get no unit events);
--- values only go to setters.
-Party.MINI_W, Party.MINI_H = 70, 12
-Party.MINI_GOLD = { 0.86, 0.69, 0.29 }      -- the party frame's gold edge, as drawn
-
-function Party.makeMini(f, kind)
-    local m = CreateFrame("Button", "WebbyFrames_" .. kind .. f.partyIndex, f, "SecureUnitButtonTemplate")
-    m:SetSize(Party.MINI_W, Party.MINI_H)
-    m:SetFrameLevel(f:GetFrameLevel() + 3)
-    m:RegisterForClicks("AnyUp")
-    m:SetAttribute("type1", "target")
-    m:SetAttribute("type2", "togglemenu")
-    m.kind = kind
-    -- frame-coloured edge, a black line inside it, then the bar
-    m.edge = m:CreateTexture(nil, "BACKGROUND", nil, 0)
-    m.edge:SetAllPoints(); m.edge:SetColorTexture(1, 1, 1, 1)
-    local back = m:CreateTexture(nil, "BACKGROUND", nil, 1)
-    back:SetPoint("TOPLEFT", 1, -1); back:SetPoint("BOTTOMRIGHT", -1, 1)
-    back:SetColorTexture(0, 0, 0, 0.9)
-    m.bar = CreateFrame("StatusBar", nil, m)
-    m.bar:SetPoint("TOPLEFT", 2, -2); m.bar:SetPoint("BOTTOMRIGHT", -2, 2)
-    m.bar:SetStatusBarTexture(PLAIN_FILL)
-    m.bar:SetMinMaxValues(0, 1)
-    m.name = m.bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    m.name:SetPoint("LEFT", 2, 0); m.name:SetPoint("RIGHT", -2, 0)
-    m.name:SetJustifyH("LEFT"); m.name:SetWordWrap(false)
-    pcall(function() local fp = m.name:GetFont(); m.name:SetFont(fp or STANDARD_TEXT_FONT, 8, "OUTLINE") end)
-    m:SetScript("OnEnter", function(self)
-        pcall(function()
-            GameTooltip_SetDefaultAnchor(GameTooltip, self)
-            if GameTooltip:SetUnit(self:GetAttribute("unit")) ~= false then GameTooltip:Show() end
-        end)
-    end)
-    m:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    m:Hide()
-    return m
-end
-
--- The pet: a small copy of the party frame itself (the same border art, round portrait, health and
--- power bars with their shaped ends, the name), at PET_SCALE of it, hung under the member's frame.
-Party.PET_SCALE = 0.6
-Party.PET_INDENT, Party.PET_TUCK = 24, 2  -- in from the member frame's portrait side; up under its bottom edge
-
-function Party.makePet(f)
-    local m = CreateFrame("Button", "WebbyFrames_partypet" .. f.partyIndex, f, "SecureUnitButtonTemplate")
-    m:SetSize(120, 49)
-    m:SetScale(Party.PET_SCALE)
-    m:SetFrameLevel(f:GetFrameLevel() + 3)
-    m:SetHitRectInsets(0, 6, 4, 4)
-    m:RegisterForClicks("AnyUp")
-    m:SetAttribute("type1", "target")
-    m:SetAttribute("type2", "togglemenu")
-    m.kind = "partypet"
-    m.portrait = m:CreateTexture(nil, "BACKGROUND", nil, 1)
-    m.portrait:SetSize(37, 37)
-    m.pmask = m:CreateMaskTexture()
-    if hasAtlas("CircleMask") then m.pmask:SetAtlas("CircleMask") else
-        m.pmask:SetTexture(CIRCLE_FALLBACK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    end
-    m.pmask:SetAllPoints(m.portrait)
-    m.portrait:AddMaskTexture(m.pmask)
-    local pbg = m:CreateTexture(nil, "BACKGROUND", nil, 0)
-    pbg:SetColorTexture(0.05, 0.05, 0.05, 1)
-    pbg:SetAllPoints(m.portrait)
-    pbg:AddMaskTexture(m.pmask)
-    m.border = m:CreateTexture(nil, "BACKGROUND", nil, 3)
-    m.border:SetTexelSnappingBias(0)
-    m.border:SetSnapToPixelGrid(false)
-    m.hp, m.hpMask = newBar(m)
-    m.mp, m.mpMask = newBar(m)
-    local ov = CreateFrame("Frame", nil, m)
-    ov:SetAllPoints()
-    ov:SetFrameLevel(m:GetFrameLevel() + 5)
-    m.name = ov:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    m.name:SetSize(68, 14)
-    m.name:SetJustifyH("LEFT"); m.name:SetWordWrap(false)
-    m:SetScript("OnEnter", function(self)
-        pcall(function()
-            GameTooltip_SetDefaultAnchor(GameTooltip, self)
-            if GameTooltip:SetUnit(self:GetAttribute("unit")) ~= false then GameTooltip:Show() end
-        end)
-    end)
-    m:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    m:Hide()
-    return m
-end
-
--- The pet's art for the side its member's portrait is on (as applySmallLayout lays out the frame).
-function Party.layoutPet(m, left)
-    if m.left == left then return end
-    m.left = left
-    m.portrait:ClearAllPoints()
-    m.portrait:SetPoint(left and "TOPLEFT" or "TOPRIGHT", m, left and "TOPLEFT" or "TOPRIGHT", left and 5 or -5, -5)
-    m.border:ClearAllPoints()
-    setArt(m.border, ART.smallBorder, not left)
-    m.border:SetPoint("CENTER", m, "CENTER", 0, 0)
-    m.hp:ClearAllPoints(); m.mp:ClearAllPoints()
-    m.hp:SetSize(70, 10.5)
-    m.hp:SetPoint("TOPLEFT", m, "TOPLEFT", left and 44 or 6, -16.5)
-    m.mp:SetSize(74, 7.5)
-    m.mp:SetPoint("TOPLEFT", m, "TOPLEFT", left and 40 or 6, -27.5)
-    m.hpTex, m.mpTex = nil, nil
-    m.name:ClearAllPoints()
-    if left then m.name:SetPoint("BOTTOMLEFT", m.hp, "TOPLEFT", 0, 1) else m.name:SetPoint("BOTTOMLEFT", m.hp, "TOPLEFT", 2, 1) end
-    m:SetHitRectInsets(left and 0 or 6, left and 6 or 0, 4, 4)
-end
-
-function Party.paintPet(m)
-    local u = m:GetAttribute("unit")
-    if not (u and UnitExists(u)) then return end
-    local f = m:GetParent()
-    Party.layoutPet(m, f.layoutLeft ~= false)
-    -- border in the member frame's colour (Frame colour), as drawn otherwise
-    local c = f.tintColor
-    pcall(m.border.SetDesaturated, m.border, c and true or false)
-    if c then m.border:SetVertexColor(c[1], c[2], c[3]) else m.border:SetVertexColor(1, 1, 1) end
-    -- health: the party's chosen texture, or the frame's own green fill
-    local hpTex = f.customTex or (BAR_FILE.small .. "Health")
-    if m.hpTex ~= hpTex then
-        m.hpTex = hpTex
-        m.hp:SetStatusBarTexture(hpTex)
-        setFileMask(m.hp, m.hpMask, "uipartyframeportraitonhealthmask", 128, 16.5, -29, 3, not m.left)
-        if f.customTex then m.hp:SetStatusBarColor(0.1, 0.8, 0.1) else m.hp:SetStatusBarColor(1, 1, 1) end
-    end
-    -- power: the frame's fill for the pet's power type
-    local token
-    pcall(function() token = select(2, UnitPowerType(u)) end)
-    local mpTex = f.powerTex or (BAR_FILE.small .. (POWER_FILE[token or ""] or "Mana"))
-    if m.mpTex ~= mpTex then
-        m.mpTex = mpTex
-        m.mp:SetStatusBarTexture(mpTex)
-        setFileMask(m.mp, m.mpMask, "uipartyframeportraitonmanamask", 128, 16.5, -27, 4, not m.left)
-    end
-    pcall(function()
-        m.hp:SetMinMaxValues(0, UnitHealthMax(u)); m.hp:SetValue(UnitHealth(u))
-        m.mp:SetMinMaxValues(0, UnitPowerMax(u)); m.mp:SetValue(UnitPower(u))
-        m.name:SetText(UnitName(u))
-    end)
-    -- the portrait now and then (it's a rendered model, not worth five times a second)
-    m.portraitTick = ((m.portraitTick or 0) + 1) % 10
-    if m.portraitTick == 1 then pcall(SetPortraitTexture, m.portrait, u) end
-    local font = resolveFont(getSetting("party", "font"))
-    if m.font ~= font then
-        m.font = font
-        pcall(function() local fp, fz, ff = m.name:GetFont(); m.name:SetFont(font or fp, fz, ff) end)
-    end
-end
-
--- One mini frame's bar, name and colour.
-function Party.paintMini(m)
-    if m.kind == "partypet" then return Party.paintPet(m) end
-    local u = m:GetAttribute("unit")
-    if not (u and UnitExists(u)) then return end
-    pcall(function()
-        m.bar:SetMinMaxValues(0, UnitHealthMax(u))
-        m.bar:SetValue(UnitHealth(u))
-        m.name:SetText(UnitName(u))
-    end)
-    -- the edge: the member frame's colour (Frame colour), gold as drawn
-    local f = m:GetParent()
-    local c = f.tintColor or Party.MINI_GOLD
-    m.edge:SetVertexColor(c[1], c[2], c[3], 1)
-    -- the fill: the party's chosen texture, or the frame's own art (green as drawn for a pet, tinted
-    -- for a target: class colour for players, reaction colour otherwise)
-    local r, g, b
-    if m.kind == "partytarget" then
-        r, g, b = 0.1, 0.8, 0.1
-        pcall(function()
-            if UnitIsPlayer(u) then
-                local cc = (RAID_CLASS_COLORS or {})[select(2, UnitClass(u))]
-                if cc then r, g, b = cc.r, cc.g, cc.b end
-            else
-                local re = UnitReaction(u, "player")
-                if re and re <= 3 then r, g, b = 0.85, 0.15, 0.1 elseif re == 4 then r, g, b = 0.9, 0.8, 0.1 end
-            end
-        end)
-    end
-    local tex = f.customTex or (BAR_FILE.small .. (r and "Health-Status" or "Health"))
-    if m.tex ~= tex then m.tex = tex; m.bar:SetStatusBarTexture(tex) end
-    if r then m.bar:SetStatusBarColor(r, g, b) elseif f.customTex then m.bar:SetStatusBarColor(0.1, 0.8, 0.1) else m.bar:SetStatusBarColor(1, 1, 1) end
-    -- the name in the party's font
-    local font = resolveFont(getSetting("party", "font"))
-    if m.font ~= font then
-        m.font = font
-        pcall(function() m.name:SetFont(font or select(1, m.name:GetFont()) or STANDARD_TEXT_FONT, 8, "OUTLINE") end)
-    end
-end
-
--- A slot's pet and target minis: their units (from the slot's unit), where they sit, on or off.
--- Units and showing only change out of combat; a change in combat waits (Party.arrange after it).
-function Party.minis(f)
-    if not f.partyIndex then return end
-    if InCombatLockdown() then Party.pendingArrange = true; return end
-    local unit = f.homeUnit or f.wfUnit
-    f.miniPet = f.miniPet or Party.makePet(f)
-    f.miniTarget = f.miniTarget or Party.makeMini(f, "partytarget")
-    local petUnit = Party.petOf(unit)
-    local targetUnit = unit .. "target"
-    local on = frameOn("party")
-    local list = {
-        { f.miniPet, petUnit, on and getSetting("party", "partyPets") },
-        { f.miniTarget, targetUnit, on and getSetting("party", "partyTargets") },
-    }
-    -- the pet tucked under the frame's bars (lined up with them, on whichever side the portrait isn't);
-    -- the target to the right, past buffs and debuffs beside the frame
-    f.miniPet:ClearAllPoints()
-    -- (offsets in the pet's own, smaller scale: its art's transparent top edge tucks under the frame)
-    local s = Party.PET_SCALE
-    if f.layoutLeft == false then
-        f.miniPet:SetPoint("TOPRIGHT", f, "BOTTOMRIGHT", -Party.PET_INDENT / s, Party.PET_TUCK / s)
-    else
-        f.miniPet:SetPoint("TOPLEFT", f, "BOTTOMLEFT", Party.PET_INDENT / s, Party.PET_TUCK / s)
-    end
-    f.miniPet.portraitTick = 0
-    local auraW = 0
-    if getSetting("party", "auraPos") == "side" and (getSetting("party", "auraBuffs") or getSetting("party", "auraDebuffs")) then
-        auraW = (getSetting("party", "auraPerRow") or 6) * ((getSetting("party", "auraSize") or 16) + (getSetting("party", "auraGap") or 2))
-    end
-    f.miniTarget:ClearAllPoints()
-    f.miniTarget:SetPoint("TOPLEFT", f, "TOPRIGHT", auraW, -10)
-    for _, e in ipairs(list) do
-        local m, u, want = e[1], e[2], e[3]
-        m:SetAttribute("unit", u)
-        if want then RegisterUnitWatch(m) else UnregisterUnitWatch(m); m:Hide() end
-        pcall(Party.paintMini, m)
-    end
-end
-
--- Click-casting on the party frames: each mouse button, alone or with Shift / Ctrl / Alt, can target,
--- open the menu, do nothing, or cast a spell from your spellbook on whoever you click. Kept per class
--- (DB.clickCast[class][binding], binding like "1", "shift-2"); unset, a plain left click targets and a
--- right click opens the menu. Set on the frames as secure click attributes, so only out of combat (a
--- change in combat waits for it to end).
-Party.CLICK_BUTTONS = { { "1", "Left button" }, { "2", "Right button" }, { "3", "Middle button" }, { "4", "Button 4" }, { "5", "Button 5" } }
-Party.CLICK_MODS = { { "", "Click" }, { "shift-", "Shift + click" }, { "ctrl-", "Ctrl + click" }, { "alt-", "Alt + click" } }
-Party.CLICK_DEFAULT = { ["1"] = "target", ["2"] = "menu" }
-
-function Party.clickTable()
-    if not DB then return {} end
-    local class = select(2, UnitClass("player")) or "ALL"
-    DB.clickCast = DB.clickCast or {}
-    DB.clickCast[class] = DB.clickCast[class] or {}
-    return DB.clickCast[class]
-end
-
--- A binding's choice: "target", "menu", "none" or a spell name.
-function Party.clickGet(binding)
-    local v = Party.clickTable()[binding]
-    if v == nil then v = Party.CLICK_DEFAULT[binding] or "none" end
-    return v
-end
-
-function Party.clickSet(binding, v)
-    Party.clickTable()[binding] = v
-    Party.applyClicks()
-end
-
--- Healer choices: your class's spell for each, the first of these you know (cast by name, so always the
--- highest rank). Shown in the menus with the spell they stand for.
-Party.HEALER = {
-    PRIEST  = { heal = { "Flash Heal", "Greater Heal", "Heal", "Lesser Heal" }, hot = { "Renew" },
-                dispel = { "Dispel Magic", "Purify" }, dispel2 = { "Abolish Disease", "Cure Disease" } },
-    DRUID   = { heal = { "Regrowth", "Healing Touch" }, hot = { "Rejuvenation" },
-                dispel = { "Remove Corruption", "Remove Curse" }, dispel2 = { "Abolish Poison", "Cure Poison" } },
-    PALADIN = { heal = { "Flash of Light", "Holy Light" }, hot = {},
-                dispel = { "Cleanse", "Purify" }, dispel2 = {} },
-    SHAMAN  = { heal = { "Lesser Healing Wave", "Healing Wave" }, hot = { "Riptide" },
-                dispel = { "Cleanse Spirit", "Cure Toxins", "Cure Poison" }, dispel2 = { "Cure Disease" } },
-}
-Party.HEALER_LABEL = { heal = "Main heal", hot = "Heal over time", dispel = "Dispel", dispel2 = "Second dispel" }
-
--- The spell a healer choice stands for, if you know one (nil otherwise). known: the spellbook's names.
-function Party.healerSpell(choice, known)
-    local list = (Party.HEALER[select(2, UnitClass("player"))] or {})[choice]
-    if not list then return nil end
-    known = known or Party.knownSpells()
-    for _, name in ipairs(list) do if known[name] then return name end end
-end
-
--- The spells in your spellbook that can be cast (not passive), by name, for the binding menus: first
--- the healer choices your class has, then every spell.
-function Party.spellChoices()
-    local list = { { "target", "Target the unit" }, { "menu", "Open its menu" }, { "none", "Nothing" } }
-    local known, names = Party.knownSpells()
-    for _, key in ipairs({ "heal", "hot", "dispel", "dispel2" }) do
-        local spell = Party.healerSpell(key, known)
-        if spell then list[#list + 1] = { key, Party.HEALER_LABEL[key] .. " (" .. spell .. ")" } end
-    end
-    for _, name in ipairs(names) do list[#list + 1] = { name, name } end
-    return list
-end
-
--- Your spellbook's castable spells: a set by name, and the names in spellbook order.
-function Party.knownSpells()
-    local set, names = {}, {}
-    local function add(name)
-        if name and name ~= "" and not set[name] then set[name] = true; names[#names + 1] = name end
-    end
-    local ok = pcall(function()
-        local SB = C_SpellBook
-        local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
-        for line = 1, SB.GetNumSpellBookSkillLines() do
-            local info = SB.GetSpellBookSkillLineInfo(line)
-            if info and not info.shouldHide then
-                for i = info.itemIndexOffset + 1, info.itemIndexOffset + info.numSpellBookItems do
-                    local item = SB.GetSpellBookItemInfo(i, bank)
-                    if item and not item.isPassive and item.itemType == Enum.SpellBookItemType.Spell then add(item.name) end
-                end
-            end
-        end
-    end)
-    if not ok and GetNumSpellTabs then      -- older spellbook API
-        pcall(function()
-            for t = 1, GetNumSpellTabs() do
-                local _, _, offset, count = GetSpellTabInfo(t)
-                for i = offset + 1, offset + count do
-                    if not IsPassiveSpell(i, BOOKTYPE_SPELL or "spell") then add(GetSpellBookItemName(i, BOOKTYPE_SPELL or "spell")) end
-                end
-            end
-        end)
-    end
-    return set, names
-end
-
--- Puts the bindings on every party frame (out of combat). Healer choices turn into your best-known spell
--- for them here, so learning a new one (SPELLS_CHANGED) re-applies.
-function Party.applyClicks()
-    if InCombatLockdown() then Party.pendingClicks = true; return end
-    Party.pendingClicks = nil
-    local known = Party.knownSpells()
-    for slot = 1, Party.SLOTS do
-        local f = Party.members[slot]
-        if f then
-            for _, btn in ipairs(Party.CLICK_BUTTONS) do
-                for _, mod in ipairs(Party.CLICK_MODS) do
-                    local b, m = btn[1], mod[1]
-                    local v = Party.clickGet(m .. b)
-                    if Party.HEALER_LABEL[v] then v = Party.healerSpell(v, known) or "none" end
-                    if v == "target" then
-                        f:SetAttribute(m .. "type" .. b, "target"); f:SetAttribute(m .. "spell" .. b, nil)
-                    elseif v == "menu" then
-                        f:SetAttribute(m .. "type" .. b, "togglemenu"); f:SetAttribute(m .. "spell" .. b, nil)
-                    elseif v == "none" or v == nil then
-                        f:SetAttribute(m .. "type" .. b, nil); f:SetAttribute(m .. "spell" .. b, nil)
-                    else
-                        f:SetAttribute(m .. "type" .. b, "spell"); f:SetAttribute(m .. "spell" .. b, v)
-                    end
-                end
-            end
-        end
-    end
-end
-
--- Which unit each slot shows: party1 - 4, as Blizzard orders them or by role (tank, healer, damage).
--- A slot's unit can only change out of combat; a change while in one waits for it to end.
-local ROLE_RANK = { TANK = 1, HEALER = 2, DAMAGER = 3 }
-function Party.arrange()
-    if InCombatLockdown() then Party.pendingArrange = true; return end
-    Party.pendingArrange = nil
-    local list = {}
-    for i = 1, 4 do list[#list + 1] = "party" .. i end
-    if getSetting("party", "partySort") == "role" then
-        local rank = {}
-        for i, u in ipairs(list) do
-            local r = 9
-            pcall(function()
-                if UnitExists(u) then r = ROLE_RANK[UnitGroupRolesAssigned(u)] or 4 end
-            end)
-            rank[u] = r * 10 + i
-        end
-        table.sort(list, function(a, b) return rank[a] < rank[b] end)
-    end
-    for slot = 1, Party.SLOTS do
-        local f = Party.members[slot]
-        if f then
-            Party.setUnit(f, list[slot] or ("party" .. slot))
-            pcall(Party.minis, f)
-        end
-    end
-end
-
--- Gives a party slot another unit: its secure unit, its unit events, how it shows and hides, and a
--- repaint. (In Edit Mode it keeps showing you as the stand-in until Edit Mode closes.)
-function Party.setUnit(f, unit)
-    if f.homeUnit == unit then return end
-    f.homeUnit = unit
-    f:SetAttribute("unit", unit)
-    for _, e in ipairs(Party.UNIT_EVENTS) do
-        pcall(f.UnregisterEvent, f, e)
-        pcall(f.RegisterUnitEvent, f, e, unit)
-    end
-    if not AuraKit.editing then
-        f.wfUnit = unit
-        if not f.wfOff then Party.watch(f) end
-    end
-    f.lastGUID = nil
-    pcall(updateAll, f)
-    if Party.minis then pcall(Party.minis, f) end
-end
-
-local ROLE_ATLAS = { TANK = "roleicon-tiny-tank", HEALER = "roleicon-tiny-healer", DAMAGER = "roleicon-tiny-dps" }
-local READY_TEX = { ready = "READY_CHECK_READY_TEXTURE", notready = "READY_CHECK_NOT_READY_TEXTURE", waiting = "READY_CHECK_WAITING_TEXTURE" }
-
--- The role, leader and ready check icons on a party frame's portrait, made on first use.
-function Party.icons(f)
-    if f.partyIcons then return f.partyIcons end
-    local p, ov = f.portrait, f.ov
-    local icons = {}
-    icons.role = ov:CreateTexture(nil, "OVERLAY", nil, 6)
-    icons.role:SetSize(14, 14)
-    icons.role:SetPoint("BOTTOMLEFT", p, "BOTTOMLEFT", -3, -3)
-    icons.leader = ov:CreateTexture(nil, "OVERLAY", nil, 6)
-    icons.leader:SetSize(13, 13)
-    icons.leader:SetPoint("BOTTOM", p, "TOP", -10, -5)
-    icons.leader:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
-    icons.ready = ov:CreateTexture(nil, "OVERLAY", nil, 7)
-    icons.ready:SetSize(22, 22)
-    icons.ready:SetPoint("CENTER", p, "CENTER")
-    -- aggro: a red copy of the frame's border art, glowing (added light)
-    icons.aggro = ov:CreateTexture(nil, "OVERLAY", nil, 5)
-    icons.aggro:SetPoint("TOPLEFT", f.border, "TOPLEFT")
-    icons.aggro:SetPoint("BOTTOMRIGHT", f.border, "BOTTOMRIGHT")
-    icons.aggro:SetBlendMode("ADD")
-    for _, t in pairs(icons) do t:Hide() end
-    f.partyIcons = icons
-    return icons
-end
-
--- What's in the middle of a member's portrait, most pressing first: the ready check, then a summon
--- (pending, accepted, declined), an incoming resurrection, or being in another phase.
-local SUMMON_ATLAS = { [1] = "Raid-Icon-SummonPending", [2] = "Raid-Icon-SummonAccepted", [3] = "Raid-Icon-SummonDeclined" }
-function Party.centerIcon(u)
-    if Party.readyCheck or Party.readyLinger then
-        local status
-        pcall(function() status = GetReadyCheckStatus(u) end)
-        local tex = status and READY_TEX[status] and _G[READY_TEX[status]]
-        if tex then return "file", tex end
-    end
-    local summon
-    pcall(function()
-        if C_IncomingSummon and C_IncomingSummon.HasIncomingSummon(u) then summon = C_IncomingSummon.IncomingSummonStatus(u) end
-    end)
-    if summon and SUMMON_ATLAS[summon] then return "atlas", SUMMON_ATLAS[summon] end
-    local rez = false
-    pcall(function() rez = UnitHasIncomingResurrection(u) and true or false end)
-    if rez then return "file", "Interface\\RaidFrame\\Raid-Icon-Rez" end
-    local phased = false
-    pcall(function()
-        if UnitPhaseReason then phased = UnitPhaseReason(u) ~= nil
-        elseif UnitInPhase then phased = not UnitInPhase(u) end
-    end)
-    if phased then return "file", "Interface\\TargetingFrame\\UI-PhasingIcon" end
-end
-
-
--- Role, leader and ready check for one party frame (only while it shows a real party member).
-function Party.updateIcons(f)
-    local icons = Party.icons(f)
-    local u = f.wfUnit
-    local real = not AuraKit.editing and UnitExists(u)      -- (not the Edit Mode stand-ins)
-    -- role
-    local role
-    if real then pcall(function() role = UnitGroupRolesAssigned(u) end) end
-    local atlas = role and ROLE_ATLAS[role]
-    if atlas and pcall(icons.role.SetAtlas, icons.role, atlas) then icons.role:Show() else icons.role:Hide() end
-    -- leader
-    local lead = false
-    if real then pcall(function() lead = UnitIsGroupLeader(u) and true or false end) end
-    icons.leader:SetShown(lead)
-    -- the middle of the portrait: ready check (it stays a few seconds after the check ends, as
-    -- Blizzard's does), summon, resurrection, another phase
-    local kind, what
-    if real then kind, what = Party.centerIcon(u) end
-    if kind == "atlas" and pcall(icons.ready.SetAtlas, icons.ready, what) then icons.ready:Show()
-    elseif kind == "file" then icons.ready:SetTexture(what); icons.ready:SetTexCoord(0, 1, 0, 1); icons.ready:Show()
-    else icons.ready:Hide() end
-    -- threat glow, as the target frame's threat options say (a glow, in its colours): when the member
-    -- is about to pull (1), has aggro (2) or holds it securely (3)
-    local status
-    local mode = getSetting("target", "threatShow")
-    if real and (mode == "both" or mode == "glow") then
-        pcall(function() local s = UnitThreatSituation(u); if s and s >= 1 then status = s end end)
-    end
-    if status then
-        icons.aggro:SetTexture(f.border:GetTexture())
-        icons.aggro:SetTexCoord(f.border:GetTexCoord())
-        -- (the gradient needs a %: about to pull is most of the way, having it is all the way)
-        local r, g, b = threatColor("target", status, status == 1 and 80 or 100)
-        icons.aggro:SetVertexColor(r, g, b, 1)
-    end
-    icons.aggro:SetShown(status ~= nil)
-end
-
--- Party slots 2 - 4 after the party's options were reset or copied (slot 1 is done as frames.party).
-function Party.applyRest()
-    for i = 2, Party.SLOTS do
-        local f = Party.members[i]
-        if f then
-            f.layoutLeft = nil
-            pcall(applyUnit, f)
-            pcall(updateAll, f)
-        end
-    end
-end
-
-function Party.updateAllIcons()
-    for i = 1, Party.SLOTS do
-        local f = Party.members[i]
-        if f then pcall(Party.updateIcons, f) end
-    end
-end
-
--- Out of range: the frame fades. UnitInRange's answer can be hidden from addons in instances, so it goes
--- straight to SetAlphaFromBoolean, which takes a hidden answer too.
-local RANGE_OUT = 0.45
-function Party.updateRange(f)
-    local u = f.wfUnit
-    if u == "player" or not getSetting("party", "rangeFade") or not UnitExists(u) then f:SetAlpha(1); return end
-    local inRange, checked
-    pcall(function() inRange, checked = UnitInRange(u) end)
-    -- (not checked: the game can't tell, e.g. in another zone; then it stays fully shown)
-    local known = true
-    pcall(function() if checked == false then known = false end end)
-    if not known or inRange == nil then f:SetAlpha(1); return end
-    if f.SetAlphaFromBoolean and pcall(f.SetAlphaFromBoolean, f, inRange, 1, RANGE_OUT) then return end
-    local ok, near = pcall(function() return inRange and true or false end)
-    f:SetAlpha((ok and not near) and RANGE_OUT or 1)
-end
-
-function Party.init()
-    local ev = CreateFrame("Frame")
-    for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PARTY_LEADER_CHANGED", "PLAYER_ROLES_ASSIGNED", "PLAYER_ENTERING_WORLD",
-                         "READY_CHECK", "READY_CHECK_CONFIRM", "READY_CHECK_FINISHED", "PLAYER_REGEN_ENABLED",
-                         "INCOMING_RESURRECT_CHANGED", "INCOMING_SUMMON_CHANGED", "UNIT_PHASE", "UNIT_THREAT_SITUATION_UPDATE",
-                         "UNIT_FLAGS", "UNIT_CONNECTION", "UNIT_PET", "SPELLS_CHANGED" }) do
-        pcall(ev.RegisterEvent, ev, e)
-    end
-    ev:SetScript("OnEvent", function(_, event)
-        -- who goes in which slot (role order, you): again when the group or its roles change, or after
-        -- combat if a change had to wait
-        if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ROLES_ASSIGNED" or event == "PLAYER_ENTERING_WORLD"
-            or (event == "PLAYER_REGEN_ENABLED" and Party.pendingArrange) then
-            pcall(Party.arrange)
-        end
-        if (event == "PLAYER_REGEN_ENABLED" and Party.pendingClicks) or event == "SPELLS_CHANGED" then pcall(Party.applyClicks) end
-        -- a pet came or went (or the group changed): pet room under each member
-        if event == "UNIT_PET" or event == "GROUP_ROSTER_UPDATE" or (event == "PLAYER_REGEN_ENABLED" and Party.pendingReflow) then
-            pcall(Party.reflow)
-        end
-        if event == "READY_CHECK" then
-            Party.readyCheck, Party.readyLinger = true, nil
-        elseif event == "READY_CHECK_FINISHED" then
-            Party.readyCheck, Party.readyLinger = nil, true
-            C_Timer.After(6, function() Party.readyLinger = nil; Party.updateAllIcons() end)
-        end
-        Party.updateAllIcons()
-    end)
-    -- range, five times a second, for the party frames on show
-    C_Timer.NewTicker(0.2, function()
-        for i = 1, Party.SLOTS do
-            local f = Party.members[i]
-            if f and f:IsShown() then pcall(Party.updateRange, f) end
-            -- and the pet / target minis on show
-            if f and f.miniPet and f.miniPet:IsShown() then pcall(Party.paintMini, f.miniPet) end
-            if f and f.miniTarget and f.miniTarget:IsShown() then pcall(Party.paintMini, f.miniTarget) end
-        end
-    end)
-    pcall(Party.arrange)
-    pcall(Party.applyClicks)
-    Party.updateAllIcons()
 end
 
 ---------------------------------------------------------------------------
@@ -4893,7 +4309,7 @@ end
 function Opt.tip(frame, title, tip)
     if not tip then return end
     frame:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT")
+        defaultTip(self)
         GameTooltip:SetText(title or "", 1, 1, 1)
         GameTooltip:AddLine(tip, 1, 0.82, 0, true)
         GameTooltip:Show()
@@ -5306,6 +4722,7 @@ function Opt.setupMinimap()
             if button == "RightButton" then openEditMode() else Opt.toggle() end
         end,
         OnTooltipShow = function(tt)
+            if tt == GameTooltip then pcall(moveTipToDefault, tt:GetOwner()) end
             tt:AddLine("Webby Frames")
             tt:AddLine("|cffffd100Click|r to open the settings", 1, 1, 1)
             tt:AddLine("|cffffd100Right-click|r to open Edit Mode", 1, 1, 1)
@@ -5752,13 +5169,12 @@ local function buildSettings()
         if unit == "party" then
             B.slider("partyGap", "Spacing", "The gap between party members. With buffs and debuffs below the frames, leave room for them (about 20 px a row).", defaultFor("party", "partyGap"), 0, 60, 1,
                 function(v) return string.format("%d px", math.floor(v + 0.5)) end)
-            B.dropdown("partyLayout", "Layout", "Stacked: one under the other. Side by side: in a row, leaving room for each member's buffs, debuffs and target beside them.", "vertical",
+            B.dropdown("partyLayout", "Layout", "Stacked: one under the other. Side by side: in a row, leaving room for each member's buffs and debuffs beside them.", "vertical",
                 { { "vertical", "Stacked" }, { "horizontal", "Side by side" } })
             B.dropdown("partySort", "Order", "As in your group, or by role: tanks, then healers, then damage. (A change in combat waits for it to end.)", "group",
                 { { "group", "As in your group" }, { "role", "By role" } })
-            B.pair({ "partyPets", "Pets", "Each member's pet in a small bar under their frame.", true },
-                   { "partyTargets", "Their targets", "What each member is targeting, in a small bar to the right of their frame.", false })
-            B.pair({ "rangeFade", "Fade when out of range", "Members too far away for your spells fade out.", true })
+            B.pair({ "partyPets", "Pets", "Each member's pet, as a small party frame under theirs.", true },
+                   { "rangeFade", "Fade when out of range", "Members too far away for your spells fade out.", true })
         end
         if unit ~= "pet" then   -- (a pet has no class: it always shows its picture)
             B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
@@ -5885,30 +5301,10 @@ local function buildSettings()
             "Puts this frame back to its default options and position, for the current Edit Mode layout.")
     end
 
-    -- Click casting (the party frames): a section per mouse button, a row per modifier, each a menu of
-    -- Target / Menu / Nothing / your spells. Saved per class.
-    do
-        local clicks = setmetatable({}, {
-            __index = function(_, k) return Party.clickGet(k) end,
-            __newindex = function(_, k, v) Party.clickSet(k, v) end,
-        })
-        local B = builders(Opt.newPage("click", "Click casting"), clicks)
-        B.header("|cff808080On the party frames: what each click does to the member you click. Saved for this class; changes made in combat apply when it ends.|r")
-        if Party.HEALER[select(2, UnitClass("player"))] then
-            B.button("Healer", "Set up for healing", function()
-                local t = Party.clickTable()
-                t["shift-1"], t["shift-2"], t["ctrl-1"], t["ctrl-2"], t["3"] = "heal", "hot", "dispel", "dispel2", "heal"
-                Party.applyClicks()
-            end, "Shift + left click: your main heal. Shift + right click: your heal over time. Ctrl + left click: dispel, Ctrl + right click: your other dispel. Middle click: main heal. Left and right click still target and open the menu. Each uses your best rank as you learn it.")
-        end
-        for i, btn in ipairs(Party.CLICK_BUTTONS) do
-            B.section(btn[2], i <= 2)
-            for _, mod in ipairs(Party.CLICK_MODS) do
-                local binding = mod[1] .. btn[1]
-                B.dropdown(binding, mod[2], "Target the unit, open its menu, do nothing, or cast one of your spells on it. Main heal, Heal over time and Dispel always use your best rank.",
-                    Party.CLICK_DEFAULT[binding] or "none", Party.spellChoices)
-            end
-        end
+    -- the modules' own pages (Click casting), after the frame pages
+    for _, build in ipairs(ns.pages) do
+        local ok, err = pcall(build, builders, Opt)
+        if not ok then print("|cffff9900Webby Frames:|r couldn't build a settings page: " .. tostring(err)) end
     end
 end
 
@@ -6162,3 +5558,9 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         print("|cff33ccffWebby Frames:|r unknown command. Type |cff33ccff/webby help|r.")
     end
 end
+
+-- What the modules (Party.lua, ClickCasting.lua) use from this file.
+ns.getSetting, ns.frameOn, ns.applyUnit, ns.updateAll, ns.threatColor = getSetting, frameOn, applyUnit, updateAll, threatColor
+ns.AuraKit, ns.ART, ns.BAR_FILE, ns.POWER_FILE, ns.CIRCLE_FALLBACK = AuraKit, ART, BAR_FILE, POWER_FILE, CIRCLE_FALLBACK
+ns.hasAtlas, ns.newBar, ns.setArt, ns.setFileMask, ns.resolveFont = hasAtlas, newBar, setArt, setFileMask, resolveFont
+ns.defaultTip = defaultTip

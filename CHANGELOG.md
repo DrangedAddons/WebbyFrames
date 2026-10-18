@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.12.0
+- Every Webby Frames tooltip (frames, buffs and debuffs, pets, icons, settings, minimap button) now shows in the game's default tooltip spot.
+- Dispel glow: brighter, flashes three times when a debuff you can dispel lands, then pulses until it's gone.
+- The party frames and click casting are now their own modules (Party.lua and ClickCasting.lua), loaded with the addon as before. Nothing to install separately.
+- Party: the "Their targets" option is gone, along with the small target bars beside each member.
+- Fixed: since 1.10.1, incoming heals, absorbs, the damage trail and damage prediction were off unless you had switched them on yourself (their defaults had slipped into a comment).
+
 ## 1.11.0
 Party frames, part two
 - Layout: stacked or side by side (side by side leaves room for each member's buffs, debuffs and target).
