@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.0
+Threat, reworked (target and focus)
+- Threat is worked out the way Foofi's ThreatDisplay does it. Number shows: Percentage (your raw threat against the mob's current target: about 110% is a melee pull, 130% a ranged pull), Differential (your threat minus the highest in your group: +0 when you're top, -500 when someone has 500 more), or Both (120% | +500).
+- Threat colours for the number and the glow: Status (yellow safe, red about to pull, blue tanking, purple losing aggro), Colourblind-friendly, Gradient (green to red), your class colour, or Blizzard's.
+- Where the number sits: a round badge like the level circle beside the raid marker (new default), just the number in that spot with no ring or backing, or the box above the name.
+- `/webby threat` prints what the game reports for your target's threat (yours, your pet's and your group's) and the differential.
+
 ## 1.6.2
 - Fixed the Lua error ("attempt to call a nil value") every time an options section was opened or closed on Forever: the section headers now handle their own clicks.
 

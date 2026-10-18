@@ -48,7 +48,9 @@ local UNIT_DEFAULTS = {
 }
 
 local DEFAULT_SETTINGS = {
-    scale = 1, showName = true, healthFade = false, textMode = "always", textFormat = "value", barTexture = "default", font = "default", threatShow = "both",
+    scale = 1, showName = true, healthFade = false, textMode = "always", textFormat = "value", barTexture = "default", font = "default", threatShow = "both", threatStyle = "badge",
+    threatNumber = "percent",   -- "percent" (raw %, 120%), "diff" (+500 vs the top of your group) or "both"
+    threatColors = "status",    -- "status", "colorblind", "gradient", "class" or "blizzard"
     -- health bar colour: "smart" (class colour for players, reaction colour for NPCs), "class", "reaction" or "plain"
     colorMode = "smart",
     -- fade to red: "auto" (class-aware) or "custom" (up to three stops: health % and colour, 0% = off)
@@ -197,6 +199,8 @@ local function getSetting(unit, key)
     if v == nil and key == "auraTimer" and u and u.auraTimers == false then return "swipe" end
     -- the threat switch became a choice of glow, number, both or off
     if v == nil and key == "threatShow" and u and u.showThreat == false then return "off" end
+    -- test builds had other threat number choices; they all read as the percentage now
+    if key == "threatNumber" and v ~= nil and v ~= "percent" and v ~= "diff" and v ~= "both" then v = "percent" end
     if v == nil then v = defaultFor(unit, key) end
     return v
 end
@@ -1195,6 +1199,27 @@ local function createIndicators(f)
         f.threatText:SetPoint("CENTER", box, "CENTER", 0, 0)
         f.threatText:SetJustifyH("CENTER")
         f.threatText:Hide()
+        -- or a round badge like the level circle (same ring art, dark inside, in the frame colour), at the
+        -- top of the portrait beside the raid marker
+        local badge = CreateFrame("Frame", nil, ov)
+        badge:SetSize(42, 42)        -- room for "100%" inside the ring
+        badge:SetFrameLevel(ov:GetFrameLevel() + 2)
+        badge.inside = badge:CreateTexture(nil, "BACKGROUND")
+        badge.inside:SetTexture(CIRCLE_FALLBACK)
+        badge.inside:SetPoint("TOPLEFT", 4, -4); badge.inside:SetPoint("BOTTOMRIGHT", -4, 4)
+        badge.inside:SetVertexColor(0.06, 0.06, 0.06, 0.95)
+        badge.ring = badge:CreateTexture(nil, "ARTWORK")
+        badge.ring:SetAllPoints()
+        if hasAtlas("UI-HUD-UnitFrame-SmallCircle") then badge.ring:SetAtlas("UI-HUD-UnitFrame-SmallCircle")
+        else badge.ring:SetTexture(CIRCLE_FALLBACK); badge.ring:SetVertexColor(0.85, 0.7, 0.35) end
+        badge.text = badge:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        badge.text:SetPoint("CENTER", badge, "CENTER", 0, 0)
+        pcall(function()
+            local fp = badge.text:GetFont()
+            badge.text:SetFont(fp or STANDARD_TEXT_FONT, 9, "OUTLINE")
+        end)
+        badge:Hide()
+        f.threatBadge = badge
     end
 end
 
@@ -1249,6 +1274,12 @@ local function placeIndicators(f)
         if f.threatBox then
             f.threatBox:ClearAllPoints()
             f.threatBox:SetPoint("BOTTOMRIGHT", f.hp, "TOPRIGHT", 0, 15)
+        end
+        -- the threat badge: on the portrait ring's top, on the bars' side of the raid marker (which sits at
+        -- the top centre), so the two sit side by side
+        if f.threatBadge then
+            f.threatBadge:ClearAllPoints()
+            f.threatBadge:SetPoint("CENTER", p, "TOP", left and 28 or -28, -2)
         end
     end
 end
@@ -1332,36 +1363,129 @@ local function updateIndicators(f)
     end
 end
 
+-- Threat, worked out the way Foofi's ThreatDisplay does it:
+-- - the percentage is your RAW threat against the mob's current target (melee pulls at about 110%, ranged
+--   at about 130%; it stops changing once you have aggro), or the scaled one (100% = a pull from where
+--   you stand) when there's no raw figure
+-- - the differential is your threat minus the highest in your group (+0 when you're top, -500 when
+--   someone has 500 more)
+-- - colours by threat status: 0 safe, 1 about to pull, 2 tanking (insecurely), 3 tanking (securely)
+local THREAT_SCHEMES = {
+    status     = { [0] = { 1, 1, 0 }, [1] = { 1, 0, 0 }, [2] = { 0, 0.5, 1 }, [3] = { 0.7, 0, 0.7 } },
+    colorblind = { [0] = { 0.9, 0.9, 0.9 }, [1] = { 1, 0.5, 0 }, [2] = { 0, 0.7, 1 }, [3] = { 1, 1, 0 } },
+}
+
+local function threatColor(base, status, scaled)
+    local scheme = getSetting(base, "threatColors")
+    local r, g, b
+    pcall(function()
+        if scheme == "gradient" then
+            -- green -> yellow -> red on the scaled percent (100 = a pull)
+            local p = math.max(0, math.min(1, (scaled or 0) / 100))
+            if p < 0.5 then r, g, b = p * 2, 1, 0 else r, g, b = 1, 1 - ((p - 0.5) * 2), 0 end
+        elseif scheme == "class" then
+            local c = RAID_CLASS_COLORS[select(2, UnitClass("player"))]
+            if c then r, g, b = c.r, c.g, c.b end
+        elseif scheme == "blizzard" then
+            r, g, b = GetThreatStatusColor(status)
+        else
+            local s = THREAT_SCHEMES[scheme] or THREAT_SCHEMES.status
+            local c = s[status] or s[0]
+            r, g, b = c[1], c[2], c[3]
+        end
+    end)
+    if not r then r, g, b = 1, 1, 0 end
+    return r, g, b
+end
+
+-- Your threat minus the highest threat in your group on `mob` (you included, so +0 when you're top).
+-- Solo there's no one to compare with: 0. nil when the amounts can't be read.
+local function threatDifferential(mob)
+    local units = { "player" }
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do units[#units + 1] = "raid" .. i end
+    elseif IsInGroup() then
+        for i = 1, GetNumGroupMembers() - 1 do units[#units + 1] = "party" .. i end
+    end
+    local mine, top = 0, 0
+    for _, gu in ipairs(units) do
+        if UnitExists(gu) then
+            local _, _, _, _, v = UnitDetailedThreatSituation(gu, mob)
+            v = v or 0
+            if v > top then top = v end
+            if UnitIsUnit(gu, "player") then mine = v end
+        end
+    end
+    return mine - top
+end
+
 local function updateThreat(f)
     if not f.threatText then return end
-    -- what to show: "both" (glow and %), "glow", "number" or "off"
+    -- what to show: "both" (glow and number), "glow", "number" or "off"
     local mode = getSetting(f.baseUnit, "threatShow")
     local wantGlow, wantNumber = (mode == "both" or mode == "glow"), (mode == "both" or mode == "number")
-    local status, pct
+    -- "badge" and "text" both sit by the raid marker; "text" is the bare number, no ring or backing
+    local style = getSetting(f.baseUnit, "threatStyle")
+    local useBadge = style == "badge" or style == "text"
+    -- the number: "percent" (120%), "diff" (+500) or "both" (120% | +500)
+    local kind = getSetting(f.baseUnit, "threatNumber")
+    local status, scaled, pct, diff
     pcall(function()
         if not (wantGlow or wantNumber) then return end
         local u = f.wfUnit
         if not UnitExists(u) or not UnitCanAttack("player", u) then return end
-        status = UnitThreatSituation("player", u)
-        local _, _, scaled = UnitDetailedThreatSituation("player", u)
-        pct = scaled
+        local _, st, sc, raw = UnitDetailedThreatSituation("player", u)
+        status, scaled = st, sc
+        pct = raw or sc
+        if kind == "diff" or kind == "both" then pcall(function() diff = threatDifferential(u) end) end
     end)
-    -- The percent may be a secret number: it only ever goes to SetFormattedText. The glow shows from
-    -- status 1 up (about to pull, tanking insecurely, tanking); a status that can't be compared shows none.
+    -- Values may be protected: they only go to SetFormattedText, and comparisons are inside pcall. The glow
+    -- shows from status 1 up (about to pull, tanking); a status that can't be compared shows none.
     local shown, glowOn, has = false, false, false
-    pcall(function() has = (status ~= nil) end)
+    pcall(function() has = (status ~= nil and pct ~= nil) end)
     if has then
-        local r, g, b = 0.7, 0.7, 0.7
-        pcall(function() if GetThreatStatusColor then r, g, b = GetThreatStatusColor(status) end end)
+        local r, g, b = threatColor(f.baseUnit, status, scaled)
         if wantNumber then
-            pcall(function() if pct ~= nil then shown = pcall(f.threatText.SetFormattedText, f.threatText, "%d%%", pct) end end)
-            if shown then f.threatText:SetTextColor(r, g, b) end
+            -- in the badge (by the raid marker) or the box (above the name row)
+            local fs = (useBadge and f.threatBadge) and f.threatBadge.text or f.threatText
+            local diffText
+            if diff then pcall(function() diffText = (diff >= 0 and "+%d" or "%d"):format(diff) end) end
+            if kind == "diff" and diffText then
+                shown = pcall(fs.SetText, fs, diffText)
+            elseif kind == "both" and diffText then
+                shown = pcall(fs.SetFormattedText, fs, "%d%% | %s", pct, diffText)
+            end
+            if not shown then shown = pcall(fs.SetFormattedText, fs, "%d%%", pct) end
+            if shown then fs:SetTextColor(r, g, b) end
         end
         if wantGlow then pcall(function() glowOn = status >= 1 end) end
         if glowOn then f.threatGlow:SetVertexColor(r, g, b) end
     end
-    f.threatText:SetShown(shown)
-    if f.threatBox then f.threatBox:SetShown(shown) end
+    local inBadge = useBadge and f.threatBadge ~= nil
+    f.threatText:SetShown(shown and not inBadge)
+    if f.threatBox then f.threatBox:SetShown(shown and not inBadge) end
+    if f.threatBadge then
+        f.threatBadge:SetShown(shown and inBadge)
+        local bare = (style == "text")
+        f.threatBadge.ring:SetShown(not bare)
+        f.threatBadge.inside:SetShown(not bare)
+        -- beside the raid marker on the bars' side; the bare number sits further out, clear of the portrait
+        if f.portrait then
+            local out = bare and 36 or 28
+            f.threatBadge:ClearAllPoints()
+            f.threatBadge:SetPoint("CENTER", f.portrait, "TOP", f.layoutLeft and out or -out, -2)
+        end
+        pcall(function()
+            local fp = f.threatBadge.text:GetFont()
+            f.threatBadge.text:SetFont(fp or STANDARD_TEXT_FONT, bare and 11 or 9, "OUTLINE")
+        end)
+        if shown and inBadge and not bare then
+            -- the ring in the frame colour, like the level circle
+            local c = f.tintColor
+            pcall(f.threatBadge.ring.SetDesaturated, f.threatBadge.ring, c and true or false)
+            if c then f.threatBadge.ring:SetVertexColor(c[1], c[2], c[3]) else f.threatBadge.ring:SetVertexColor(1, 1, 1) end
+        end
+    end
     f.threatGlow:SetShown(glowOn)
     -- (the number sits in its own box above the name row now, so the name keeps its full width)
     if f.nameBaseW then f.name:SetWidth(f.nameBaseW) end
@@ -3178,7 +3302,7 @@ end
 ---------------------------------------------------------------------------
 -- Actions used by the settings pages and slash commands
 ---------------------------------------------------------------------------
-local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow",
+local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatNumber", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "smoothBars", "healPrediction", "absorbs",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
@@ -3792,8 +3916,16 @@ local function buildSettings()
             B.under(cast, isOn("castShow"),
                 B.check("castText", "Spell name", nil, true),
                 B.check("castIcon", "Spell icon", "At the bar's left end.", true))
-            B.dropdown("threatShow", "Threat", "Your threat on hostile units: the frame glows yellow, orange or red by your threat status, and / or your threat % shows by the name in the same colour.", "both",
+            local threat = B.dropdown("threatShow", "Threat", "Your threat on hostile units: the frame glows in your threat status colour, and / or your threat shows as a number in the same colour.", "both",
                 { { "both", "Glow and number" }, { "glow", "Glow only" }, { "number", "Number only" }, { "off", "Off" } })
+            B.under(threat, function() local m = getSetting(unit, "threatShow"); return m == "both" or m == "number" end,
+                B.dropdown("threatStyle", "Number in", "Badge: a small round badge like the level circle, on the portrait beside the raid marker. Text: just the number in the same spot, no ring or backing. Box: a little box above the end of the name row.", "badge",
+                    { { "badge", "Badge by the raid marker" }, { "text", "Just the number" }, { "box", "Box above the name" } }),
+                B.dropdown("threatNumber", "Number shows", "Percentage: your raw threat against the mob's current target (about 110% is a melee pull, 130% a ranged pull; it stops changing once you have aggro).\n\nDifferential: your threat minus the highest in your group (+0 when you're top, -500 when someone has 500 more).\n\nBoth: 120% | +500.", "percent",
+                    { { "percent", "Percentage (120%)" }, { "diff", "Differential (+500)" }, { "both", "Both (120% | +500)" } }))
+            B.under(threat, function() return getSetting(unit, "threatShow") ~= "off" end,
+                B.dropdown("threatColors", "Threat colours", "Status: yellow safe, red about to pull, blue tanking, purple losing aggro. Colourblind: grey, orange, cyan, yellow. Gradient: green to red as you near a pull. Class: your class colour. Blizzard: the game's own threat colours.", "status",
+                    { { "status", "Status" }, { "colorblind", "Colourblind-friendly" }, { "gradient", "Gradient (green to red)" }, { "class", "Your class colour" }, { "blizzard", "Blizzard's" } }))
         end
 
         B.section("Reset and copy", false)
@@ -3962,6 +4094,28 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         pcall(showHit, f, "WOUND", "CRITICAL", 1234)      -- and a combat number on the portrait
         C_Timer.After(10, function() f.previewing = nil; pcall(updateAll, f) end)
         print("|cff33ccffWebby Frames:|r previewing heals (green), a shield, a heal-absorb (red) and a combat number on your frame for 10 seconds.")
+    elseif msg == "threat" then
+        -- what the game reports for your target's threat: yours, then everyone else's in your group
+        local mob = "target"
+        if not UnitExists(mob) then print("|cff33ccffWebby Frames:|r target a mob first."); return end
+        local function line(who)
+            local ok, err = pcall(function()
+                local tanking, status, scaled, raw, value = UnitDetailedThreatSituation(who, mob)
+                if value == nil and status == nil then return end
+                print(string.format("  %s (%s): tanking %s, status %s, pull meter %s, raw %s, threat %s",
+                    tostring(UnitName(who)), who, tostring(tanking), tostring(status), tostring(scaled), tostring(raw), tostring(value)))
+            end)
+            if not ok then print("  " .. who .. ": can't be read (" .. tostring(err) .. ")") end
+        end
+        print("|cff33ccffWebby Frames:|r threat on " .. tostring(UnitName(mob)) .. ":")
+        line("player")
+        local units = { "pet" }
+        if IsInRaid() then for i = 1, 40 do units[#units + 1] = "raid" .. i; units[#units + 1] = "raidpet" .. i end
+        else for i = 1, 4 do units[#units + 1] = "party" .. i; units[#units + 1] = "partypet" .. i end end
+        for _, gu in ipairs(units) do if UnitExists(gu) and not UnitIsUnit(gu, "player") then line(gu) end end
+        local diff
+        local ok, err = pcall(function() diff = threatDifferential(mob) end)
+        print("  differential (you minus the top of your group): " .. (ok and tostring(diff) or ("can't be worked out (" .. tostring(err) .. ")")))
     elseif msg == "export" or msg == "import" then
         Profiles.show(msg)
     elseif msg == "errors" then
