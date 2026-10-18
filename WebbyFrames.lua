@@ -73,6 +73,7 @@ local DEFAULT_SETTINGS = {
     -- frame art colour: "default" (as drawn), "dark", "silver", "class" or "custom" (frameColor = { r, g, b })
     frameTint = "default",
     -- health bar extras
+    frameShown = true,       -- target of target, focus, focus target, pet: the frame is used at all
     smoothBars = true, healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
     combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus), one General switch
     -- icons and extras
@@ -2993,8 +2994,31 @@ local function placeFrame(f, unit)
     end
 end
 
+-- Whether a frame is used at all ("Show" on the General page and the frame's page). The player and
+-- target frames always are. A frame that's off has its unit watch removed and stays hidden (only ever
+-- changed out of combat: settings changes wait for it).
+local ALWAYS_SHOWN = { player = true, target = true }
+local function frameOn(unit)
+    return ALWAYS_SHOWN[unit] or getSetting(unit, "frameShown") ~= false
+end
+
+local function applyShown(f)
+    local unit = f.baseUnit
+    if ALWAYS_SHOWN[unit] then return end
+    local on = frameOn(unit)
+    if on == (f.wfOff ~= true) then return end
+    f.wfOff = not on
+    if on then
+        RegisterUnitWatch(f)
+    else
+        UnregisterUnitWatch(f)
+        f:Hide()
+    end
+end
+
 local function applyUnit(f)
     local unit = f.baseUnit
+    applyShown(f)
     local changed = applyLayout(f)
     if f.small and applySmallLayout(f) then changed = true end
     placeFrame(f, unit)
@@ -3464,7 +3488,7 @@ end
 local function sampleFrames()
     local list = {}
     for _, unit in ipairs({ "target", "targettarget", "focus", "focustarget", "pet" }) do
-        if frames[unit] then list[#list + 1] = frames[unit] end
+        if frames[unit] and frameOn(unit) then list[#list + 1] = frames[unit] end   -- (frames turned off stay hidden)
     end
     return list
 end
@@ -4181,9 +4205,17 @@ local function buildSettings()
     -- General ------------------------------------------------------------------
     do
         local general = setmetatable({}, {
-            -- addon-wide switches, both on unless turned off
-            __index = function(_, k) if k == "enabled" or k == "combatNumbers" then return DB[k] ~= false end end,
-            __newindex = function(_, k, v) if k == "enabled" or k == "combatNumbers" then DB[k] = v and true or false end end,
+            -- addon-wide switches, both on unless turned off; "show_<unit>" is that frame's Show
+            __index = function(_, k)
+                if k == "enabled" or k == "combatNumbers" then return DB[k] ~= false end
+                local unit = k:match("^show_(.+)$")
+                if unit then return frameOn(unit) end
+            end,
+            __newindex = function(_, k, v)
+                if k == "enabled" or k == "combatNumbers" then DB[k] = v and true or false; return end
+                local unit = k:match("^show_(.+)$")
+                if unit then setSetting(unit, "frameShown", v and true or false) end
+            end,
         })
         local B = builders(root, rootLayout, general, "WEBBY_general_")
         B.header("Webby Frames  |cff808080v" .. addonVersion() .. "|r")
@@ -4191,6 +4223,10 @@ local function buildSettings()
         B.check("combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on the player, target and focus frames.", true)
 
         B.header("Frames")
+        -- which of the optional frames are used (player and target always are)
+        for _, unit in ipairs({ "targettarget", "focus", "focustarget", "pet" }) do
+            B.check("show_" .. unit, UNIT_LABEL[unit], "Show the " .. UNIT_LABEL[unit]:lower() .. " frame. Turned off, it stays hidden, in Edit Mode too. (Changes made in combat apply when it ends.)", true)
+        end
         B.button("Position", "Open Edit Mode", openEditMode, "Drag the frames where you want them. They snap to each other and to the middle of the screen, and a frame dropped next to another moves with it.")
         B.button("Start over", "Reset all frames", function()
             for _, unit in ipairs(UNITS) do resetFrame(unit) end
@@ -4275,6 +4311,9 @@ local function buildSettings()
 
         -- the frame itself and the icons on its portrait
         B.section("Frame", true)
+        if not ALWAYS_SHOWN[unit] then
+            B.check("frameShown", "Show this frame", "Turned off, the frame stays hidden, in Edit Mode too. Also on the General page.", true)
+        end
         B.slider("scale", "Scale", "How big the frame is.", defaultFor(unit, "scale"), 0.5, 2, 0.05)
         B.check("showName", "Name", "The unit's name above its health bar.", true)
         if unit ~= "pet" then   -- (a pet has no class: it always shows its picture)

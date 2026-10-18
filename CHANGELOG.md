@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.7.14
+- Show or hide frames: target of target, focus, focus target and pet can each be turned off (General page, or "Show this frame" on the frame's own page). A frame that's off stays hidden, in Edit Mode too. The player and target frames are always on.
+
 ## 1.7.13
 - The Retail corner accent's black backing no longer spills onto the green frame border: it only shows on the inner side, toward the portrait.
 
