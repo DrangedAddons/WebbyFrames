@@ -1774,6 +1774,8 @@ local function updateThreat(f)
         if not (wantGlow or wantNumber) then return end
         local u = f.wfUnit
         if not UnitExists(u) or not UnitCanAttack("player", u) then return end
+        -- PvP: players (and their pets and totems) have no threat to show
+        if UnitIsPlayer(u) or UnitPlayerControlled(u) then return end
         local tanking, st, sc, raw = UnitDetailedThreatSituation("player", u)
         status, scaled = st, sc
         pct = raw or sc

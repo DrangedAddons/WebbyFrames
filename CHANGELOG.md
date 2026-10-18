@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.7.8
+- No threat on players: enemy players, their pets and totems never show the threat glow or %, so it stays out of the way in PvP.
+
 ## 1.7.7
 - Damage trail (every frame and All frames, on by default): when health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.
 - Damage prediction (target and focus, on by default): while you cast at an enemy, the damage your spell will do (from its tooltip) shows lighter at the end of its health. `/webby cost` shows what it read.
