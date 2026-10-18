@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.9.1
+- Credits read "Webby, Lexible and Dranged" everywhere: the addon list, the options window, the AddOns options page and the README.
+
 ## 1.9.0
 - The options are now a window of their own (`/webby`): the same pages, sections and options as before, but it no longer takes over the screen the way Esc > Options does, so it can stay open while you play, target things or use Edit Mode. Drag it by its edge; it remembers where you put it, and Esc closes it.
 - Esc > Options > AddOns > Webby Frames now describes the addon and has buttons that open the options window and Edit Mode.
