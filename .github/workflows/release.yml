@@ -1,6 +1,9 @@
-# Every push to main is a release: the version goes up, the .toc and CHANGELOG get the new number, that
-# is committed back to main and tagged, and the zip is published as a GitHub Release (which the Discord
-# announcement picks up).
+# Releases only when asked: commits pushed to main just land there. A release happens when
+# - a push to main has [release] in one of its commit messages (an empty commit will do), or
+# - it's started by hand (Actions > Release > Run workflow), or
+# - a v* tag is pushed.
+# Then the version goes up, the .toc and CHANGELOG get the new number, that is committed back to main and
+# tagged, and the zip is published as a GitHub Release (which the Discord announcement picks up).
 #
 # Versions are major.minor.patch:
 # - small changes bump the patch: 1.5 -> 1.5.1 -> 1.5.2
@@ -17,6 +20,7 @@ on:
     branches: [main]
     tags: ['v*']
     paths-ignore: ['.github/tools/**']
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -27,6 +31,11 @@ concurrency:
 
 jobs:
   release:
+    # (a plain push to main without [release] does nothing)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/') ||
+      contains(join(github.event.commits.*.message, ' '), '[release]')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
