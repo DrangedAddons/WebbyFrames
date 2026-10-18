@@ -3498,6 +3498,9 @@ local function buildSettings()
         function B.section(text, open)
             if not CreateSettingsExpandableSectionInitializer then B.header(text); return end
             local sec = CreateSettingsExpandableSectionInitializer(text)
+            -- Forever's section header doesn't say how tall it is (the list's base asks it to "Implement
+            -- GetExtent" and errors every time it lays the page out), so give it the header's height
+            if not pcall(sec.GetExtent, sec) then sec.GetExtent = function() return 25 end end
             local data = sectionData(sec)
             if type(data) == "table" then data.expanded = open and true or false end
             sec.webbyWas = open and true or false

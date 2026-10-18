@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.1
+- Fixed the Lua errors ("Implement GetExtent") the options pages threw on Forever whenever they were opened or a section was opened or closed.
+
 ## 1.6.0
 New options
 - Text: name colour (gold, white, class colour or reaction colour), name size and outline; bar number size, outline and position (centre, left or right). On every frame page and the All frames page.
