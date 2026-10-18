@@ -396,6 +396,18 @@ local function moveTipToDefault(owner)
     if box then GameTooltip:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT")
     else GameTooltip:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -(CONTAINER_OFFSET_X or 0) - 13, CONTAINER_OFFSET_Y or 64) end
 end
+-- Our buff and debuff icons (b.webbyAura): the game shows and refreshes their tooltips itself, next to
+-- the icon; each time, it's moved to the default spot.
+pcall(function()
+    local function check(tt)
+        local o = tt:GetOwner()
+        if not (o and o.webbyAura) then return end
+        local _, rel = tt:GetPoint(1)
+        if rel == o then moveTipToDefault(o) end
+    end
+    GameTooltip:HookScript("OnShow", function(tt) pcall(check, tt) end)
+    GameTooltip:HookScript("OnUpdate", function(tt) pcall(check, tt) end)
+end)
 
 ---------------------------------------------------------------------------
 -- Colours
@@ -2222,16 +2234,9 @@ end
 
 -- Styles one aura button (the container calls this as it creates them); f is the unit frame.
 function AuraKit.styleButton(f, b)
-    -- the game fills the icon's tooltip; it's moved to the default spot (and back there should the
-    -- game re-place it while it updates)
-    b:HookScript("OnEnter", function(self) self.webbyHover = true; pcall(moveTipToDefault, self) end)
-    b:HookScript("OnLeave", function(self) self.webbyHover = nil end)
-    b:HookScript("OnUpdate", function(self)
-        if self.webbyHover and GameTooltip:GetOwner() == self then
-            local _, rel = GameTooltip:GetPoint(1)
-            if rel == self then pcall(moveTipToDefault, self) end
-        end
-    end)
+    -- (the game fills the icon's tooltip; the GameTooltip hook by moveTipToDefault moves it to the
+    -- default spot. The game's aura buttons don't take script hooks.)
+    b.webbyAura = true
     -- 1px edge: black behind every icon; on debuffs a second, white edge layer on top that the
     -- container tints by dispel type (see below)
     b.webbyBack = b:CreateTexture(nil, "BACKGROUND", nil, 0)
@@ -2339,6 +2344,41 @@ local function copyBorder(t, f)
     t:SetTexCoord(f.border:GetTexCoord())
 end
 AuraKit.GLOW_FLASH, AuraKit.GLOW_PULSE = 0.9, 1.0   -- seconds: the first blinks, then each pulse
+
+-- The glow flashes when the debuff lands (three quick blinks), then keeps pulsing while it's there.
+-- Driven from a frame of ours (the game's aura buttons don't take script hooks): every glow box's
+-- alpha, timed from when its button showed.
+AuraKit.glowBoxes = {}
+function AuraKit.startGlowPulse()
+    if AuraKit.glowDriver then return end
+    local d = CreateFrame("Frame")
+    d:SetScript("OnUpdate", function(_, dt)
+        for _, box in ipairs(AuraKit.glowBoxes) do
+            local on = false
+            if box:IsVisible() then
+                pcall(function()
+                    local b = box:GetAuraGroupFrame("dispel", 1)
+                    on = b and b:IsShown() and true or false
+                end)
+            end
+            if on then
+                local t = (box.glowT or -dt) + dt
+                box.glowT = t
+                local a
+                if t < AuraKit.GLOW_FLASH then
+                    a = 0.15 + 0.85 * math.abs(math.cos(t * math.pi * 3 / AuraKit.GLOW_FLASH))
+                else
+                    a = 0.3 + 0.7 * (0.5 + 0.5 * math.cos((t - AuraKit.GLOW_FLASH) * 2 * math.pi / AuraKit.GLOW_PULSE))
+                end
+                box:SetAlpha(a)
+            else
+                box.glowT = nil
+            end
+        end
+    end)
+    AuraKit.glowDriver = d
+end
+
 function AuraKit.dispelGlow(f)
     local want = f.border and getSetting(f.baseUnit, "dispelGlow")
     local c = f.dispelBox
@@ -2371,21 +2411,6 @@ function AuraKit.dispelGlow(f)
                 b:EnableMouse(false)
                 b.webbyGlow = b.webbyGlows[1]
             end)
-            -- it flashes when the debuff lands (three quick blinks), then keeps pulsing while it's there
-            pcall(function()
-                b:HookScript("OnShow", function(self) self.glowT = 0 end)
-                b:HookScript("OnUpdate", function(self, dt)
-                    local t = (self.glowT or 0) + dt
-                    self.glowT = t
-                    local a
-                    if t < AuraKit.GLOW_FLASH then
-                        a = 0.2 + 0.8 * math.abs(math.sin(t * math.pi * 3 / AuraKit.GLOW_FLASH))
-                    else
-                        a = 0.3 + 0.7 * (0.5 + 0.5 * math.cos((t - AuraKit.GLOW_FLASH) * 2 * math.pi / AuraKit.GLOW_PULSE))
-                    end
-                    self:SetAlpha(a)
-                end)
-            end)
             -- (made when a dispellable debuff first lands: the border's size now)
             pcall(function() b:SetSize(f.border:GetSize()) end)
         end
@@ -2396,6 +2421,8 @@ function AuraKit.dispelGlow(f)
         box:SetFrameLevel((f.ov or f):GetFrameLevel() + 3)
         f.dispelBox = box
         c = box
+        AuraKit.glowBoxes[#AuraKit.glowBoxes + 1] = box
+        AuraKit.startGlowPulse()
     end
     pcall(function() if c:GetUnit() ~= f.wfUnit then c:SetUnit(f.wfUnit) end end)
     -- over the frame's border art, the glow the same size as it

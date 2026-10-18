@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.12.1
+- Fixed: buffs and debuffs not showing in 1.12.0, and the dispel glow not flashing or pulsing (the game's aura icons refuse script hooks; the flash, pulse and tooltip moving now run elsewhere).
+
 ## 1.12.0
 - Every Webby Frames tooltip (frames, buffs and debuffs, pets, icons, settings, minimap button) now shows in the game's default tooltip spot.
 - Dispel glow: brighter, flashes three times when a debuff you can dispel lands, then pulses until it's gone.
