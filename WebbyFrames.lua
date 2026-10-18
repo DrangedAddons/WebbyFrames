@@ -2922,11 +2922,14 @@ local function applyCorner(f)
     if on and f.cornerStyle ~= key then
         f.cornerStyle = key
         setCornerArt(c, style, nil, nudge)
-        -- Retail's black backing: its silhouette, a little larger, behind it (Forever's has its rim and
-        -- line built into the texture instead)
+        -- Retail's black backing: its silhouette, a touch larger, behind it, pinned to its bottom right
+        -- so it only shows on the inner side (centred, it ran out over the green frame border too).
+        -- Forever's has its rim and line built into the texture instead.
         if f.cornerBack then
-            setCornerArt(f.cornerBack, style, 1.15, nudge)
+            setCornerArt(f.cornerBack, style, 1.07, nudge)
             f.cornerBack:SetVertexColor(0, 0, 0, 1)
+            f.cornerBack:ClearAllPoints()
+            f.cornerBack:SetPoint("BOTTOMRIGHT", c, "BOTTOMRIGHT")
         end
         for _, g in ipairs(f.cornerGlowTex or {}) do setCornerArt(g[1], style, g[2], nudge) end
     end
