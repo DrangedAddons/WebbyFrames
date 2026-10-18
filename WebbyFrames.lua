@@ -2477,11 +2477,62 @@ end
 -- Combo points (rogues, druids), on the target: five pips in an arc round the right of its portrait.
 -- A protected point count can't be compared, so each pip is a tiny bar covering one point (min i-1,
 -- max i): the game fills it once the count reaches i.
+-- Where the combo arc sits: round the portrait, moved by comboX / comboY (dragged in Edit Mode).
+function Extras.placeCombo(f)
+    local box = f.comboBox
+    if not box then return end
+    local x, y = getSetting("target", "comboX"), getSetting("target", "comboY")
+    if type(x) ~= "number" or type(y) ~= "number" then x, y = 0, 0 end
+    box:ClearAllPoints()
+    box:SetPoint("CENTER", f.portrait, "CENTER", x, y)
+    box:SetSize(f.portrait:GetSize())
+end
+
+-- In Edit Mode (rogues, druids): the arc shows, outlined, and can be dragged; dropped, its spot is saved.
+function Extras.editCombo(on)
+    local f = frames.target
+    if not f then return end
+    local _, class = UnitClass("player")
+    local can = (class == "ROGUE" or class == "DRUID") and getSetting("target", "comboPoints")
+    f.comboEditing = (on and can) and true or nil
+    pcall(Extras.combo, f)
+    local box = f.comboBox
+    if not box then return end
+    if not box.mover then
+        local m = CreateFrame("Frame", nil, box)
+        m:SetAllPoints()
+        m:SetFrameLevel(box:GetFrameLevel() + 5)
+        local t = m:CreateTexture(nil, "OVERLAY")
+        t:SetAllPoints(); t:SetColorTexture(0.25, 0.6, 1, 0.3)
+        m:EnableMouse(true)
+        m:RegisterForDrag("LeftButton")
+        m:SetScript("OnDragStart", function() box:SetMovable(true); box:StartMoving() end)
+        m:SetScript("OnDragStop", function()
+            box:StopMovingOrSizing()
+            local bx, by = box:GetCenter()
+            local px, py = f.portrait:GetCenter()
+            local s = box:GetEffectiveScale() / f:GetEffectiveScale()
+            local u = unitData("target", true)
+            u.comboX, u.comboY = math.floor(bx * s - px + 0.5), math.floor(by * s - py + 0.5)
+            Extras.placeCombo(f)
+        end)
+        m:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText("Combo points", 1, 1, 1)
+            GameTooltip:AddLine("Drag to move them. Reset the target frame to put them back.", 1, 0.82, 0)
+            GameTooltip:Show()
+        end)
+        m:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        box.mover = m
+    end
+    box.mover:SetShown(f.comboEditing and true or false)
+end
+
 function Extras.combo(f)
     local _, class = UnitClass("player")
     local want = (class == "ROGUE" or class == "DRUID") and getSetting("target", "comboPoints")
-    -- druids: only in cat form (the form with energy)
-    if want and class == "DRUID" then
+    -- druids: only in cat form (the form with energy); in Edit Mode, always (to place them)
+    if want and class == "DRUID" and not f.comboEditing then
         local ptoken
         pcall(function() ptoken = select(2, UnitPowerType("player")) end)
         if ptoken ~= "ENERGY" then want = false end
@@ -2492,7 +2543,6 @@ function Extras.combo(f)
     end
     if not f.comboBox then
         local box = CreateFrame("Frame", nil, f.ov)
-        box:SetAllPoints(f.portrait)
         box:SetFrameLevel(f.ov:GetFrameLevel() + 2)
         box.pips = {}
         for i = 1, Extras.COMBO_MAX do
@@ -2517,12 +2567,13 @@ function Extras.combo(f)
         end
         f.comboBox = box
     end
+    Extras.placeCombo(f)
     -- the count goes straight to the pips; fall back to the older API if the first can't be read
     local function fill(v) for _, pip in ipairs(f.comboBox.pips) do pip:SetValue(v) end end
     if not pcall(function() fill(UnitPower("player", Enum.PowerType.ComboPoints)) end) then
         if not pcall(function() fill(GetComboPoints("player", "target")) end) then fill(0) end
     end
-    f.comboBox:SetShown(UnitExists("target") and true or false)
+    f.comboBox:SetShown((f.comboEditing or UnitExists("target")) and true or false)
 end
 
 -- Hunter pet happiness: the mood face, shown like the first buff in the pet's aura row; the tooltip
@@ -3572,11 +3623,13 @@ local function enterSample()
     end
     AuraKit.setEditing(true)       -- the buff / debuff boxes for frames set to "drag in Edit Mode"
     pcall(editAltMana, true)       -- the druid mana bar, to drag
+    pcall(Extras.editCombo, true)  -- and the combo points
 end
 
 local function exitSample()
     AuraKit.setEditing(false)
     pcall(editAltMana, false)
+    pcall(Extras.editCombo, false)
     if InCombatLockdown() then return end
     for _, f in ipairs(sampleFrames()) do
         f.wfUnit = f.baseUnit
@@ -4172,6 +4225,54 @@ local function pairRow(init, frame, items)
     end
 end
 
+-- Draws a colour row (B.swatch): its label, and a swatch showing the colour that opens the colour
+-- picker when clicked (the way CastCount does it). row: { label, tip, get = fn -> {r,g,b}, set = fn(r,g,b) }.
+local function swatchRow(init, frame, row)
+    pcall(frame.Init, frame, init)
+    if frame.Tooltip then frame.Tooltip:EnableMouse(false) end
+    if not frame.cbrHandles then
+        local ok, h = pcall(function() return Settings.CreateCallbackHandleContainer() end)
+        frame.cbrHandles = (ok and h) or setmetatable({}, { __index = function() return function() end end })
+    end
+    if not frame.webbySwatch then
+        local b = CreateFrame("Button", nil, frame, "BackdropTemplate")
+        b:SetSize(22, 22)
+        b:SetFrameLevel(frame:GetFrameLevel() + 10)
+        b:SetPoint("LEFT", frame, "CENTER", -80, 0)
+        b:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+        b:SetBackdropColor(0, 0, 0, 1)
+        b:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+        b.tex = b:CreateTexture(nil, "ARTWORK")
+        b.tex:SetPoint("TOPLEFT", 3, -3)
+        b.tex:SetPoint("BOTTOMRIGHT", -3, 3)
+        function b:Refresh()
+            local c = self.row and self.row.get() or { 1, 1, 1 }
+            self.tex:SetColorTexture(c[1] or 1, c[2] or 1, c[3] or 1, 1)
+        end
+        b:SetScript("OnClick", function(self)
+            local row = self.row
+            if not row then return end
+            local c = row.get() or { 1, 1, 1 }
+            Extras.openPicker({ c[1] or 1, c[2] or 1, c[3] or 1 }, function(r, g, bl)
+                row.set(r, g, bl)
+                self.tex:SetColorTexture(r, g, bl, 1)
+            end)
+        end)
+        b:SetScript("OnEnter", function(self)
+            if not (self.row and self.row.tip) then return end
+            GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT")
+            GameTooltip:SetText(self.row.label, 1, 1, 1)
+            GameTooltip:AddLine(self.row.tip, 1, 0.82, 0, true)
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        frame.webbySwatch = b
+    end
+    if frame.Text then frame.Text:SetText(row.label) end
+    frame.webbySwatch.row = row
+    frame.webbySwatch:Refresh()
+end
+
 local function buildSettings()
     -- Forever's collapsible section header calls self:OnExpandedChanged() when clicked but doesn't have
     -- one, so every click errored. Every header row is made from this template when the options are
@@ -4265,6 +4366,29 @@ local function buildSettings()
             layout:AddInitializer(init)
             return attach(init)
         end
+        -- A colour row: label and swatch (swatchRow). get() -> { r, g, b }; set(r, g, b). Where our
+        -- template isn't there, a plain "Pick colour" button.
+        local swatchOK = pcall(function() assert(C_XMLUtil.GetTemplateInfo("WebbyFramesSwatchTemplate")) end)
+        function B.swatch(label, get, set, tip)
+            if not (swatchOK and Settings.CreateElementInitializer) then
+                return B.button(label, "Pick colour", function()
+                    local c = get() or { 1, 1, 1 }
+                    Extras.openPicker({ c[1] or 1, c[2] or 1, c[3] or 1 }, set)
+                end, tip)
+            end
+            local row = { label = label, tip = tip, get = get, set = set }
+            local init = Settings.CreateElementInitializer("WebbyFramesSwatchTemplate", { name = label, tooltip = tip })
+            init.GetExtent = function() return 26 end
+            init.InitFrame = function(self, frame)
+                local ok, err = pcall(swatchRow, self, frame, row)
+                if not ok and not pairErrorShown then
+                    pairErrorShown = true
+                    print("|cffff9900Webby Frames:|r an options row couldn't be drawn: " .. tostring(err))
+                end
+            end
+            layout:AddInitializer(init)
+            return attach(init)
+        end
         function B.slider(key, label, tip, default, lo, hi, step, fmt)
             local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.Number, label, default)
             local o = Settings.CreateSliderOptions(lo, hi, step)
@@ -4332,12 +4456,13 @@ local function buildSettings()
             -- (Blizzard's button rows error when made to depend on another setting, so the colour buttons
             -- are only shown / hidden, not indented)
             for i = 1, 3 do
-                local btn = B.button(names[i] .. " stop colour", "Pick colour", function()
-                    local c = getSetting(read, "fade" .. i .. "Color")
-                    local old = type(c) == "table" and { c[1] or 1, c[2] or 1, c[3] or 1 } or { 1, 1, 1 }
-                    Extras.openPicker(old, function(r, g, b) set(read, "fade" .. i .. "Color", { r, g, b }) end)
-                end, "The bar's colour at the " .. names[i]:lower() .. " stop.")
-                B.showIf(custom, btn)
+                local key = "fade" .. i .. "Color"
+                local sw = B.swatch(names[i] .. " stop colour", function()
+                    local c = getSetting(read, key)
+                    return type(c) == "table" and c or { 1, 1, 1 }
+                end, function(r, g, b) set(read, key, { r, g, b }) end,
+                    "The bar's colour at the " .. names[i]:lower() .. " stop. Click to change it.")
+                B.showIf(custom, sw)
             end
         end
         return B
@@ -4359,7 +4484,7 @@ local function buildSettings()
             end,
         })
         local B = builders(root, rootLayout, general, "WEBBY_general_")
-        B.header("Webby Frames  |cff808080v" .. addonVersion() .. "|r")
+        B.header("Webby Frames  |cff808080v" .. addonVersion() .. "  -  by Lexi and Chris|r")
         B.pair({ "enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames.\n\n|cffffd100Needs a /reload.|r", true },
                { "combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on the player, target and focus frames.", true })
 
@@ -4406,7 +4531,8 @@ local function buildSettings()
         B.dropdown("frameTint", "Frame colour", "Colours the frame art on every frame. The player's resting glow takes the colour too.", "default",
             { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
         B.showIf(function() return getSetting("player", "frameTint") == "custom" end,
-            B.button("Custom colour", "Pick colour", function() Extras.pickColor("player", setAll) end, "Pick the colour for every frame's art."))
+            B.swatch("Custom colour", function() return Extras.tintColor("player") or { 1, 1, 1 } end,
+                function(r, g, b) setAll(nil, "frameColor", { r, g, b }) end, "The colour for every frame's art. Click to change it."))
         B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
             { { "picture", "Picture" }, { "class", "Class icon (players)" } })
 
@@ -4424,8 +4550,10 @@ local function buildSettings()
         local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs on every frame, when Health colour is set by reaction. Green lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
             { { "reaction", "Red" }, { "green", "Green" }, { "custom", "My own" } })
         B.showIf(function() return getSetting("target", "npcColor") == "custom" end,
-            B.button("Enemy NPC colour", "Pick colour", function() Extras.pickNpcColor("target", setAll) end,
-                "Pick the health colour for hostile NPCs on every frame."))
+            B.swatch("Custom NPC colour", function()
+                local c = getSetting("target", "npcColorRGB")
+                return type(c) == "table" and c or { 0.1, 0.8, 0.1 }
+            end, function(r, g, b) setAll(nil, "npcColorRGB", { r, g, b }) end, "The health colour for hostile NPCs on every frame. Click to change it."))
         B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
         B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
                { "absorbs", "Shields and heal absorbs", "Damage shields and healing absorbs on the health bars.", true })
@@ -4457,7 +4585,7 @@ local function buildSettings()
         if unit == "player" then   -- (your own name always shows)
             B.pair({ "restTint", "Zzz in frame colour", "The resting Zzz by the portrait takes the frame colour (it stays as drawn while the frame is gold).", false })
         elseif unit == "target" and (myClass == "ROGUE" or myClass == "DRUID") then
-            B.pair(nameItem, { "comboPoints", "Combo points", "Your combo points in an arc round the target's portrait" .. (myClass == "DRUID" and ", while you're in cat form." or "."), true })
+            B.pair(nameItem, { "comboPoints", "Combo points", "Your combo points in an arc round the target's portrait" .. (myClass == "DRUID" and ", while you're in cat form." or ".") .. " Drag them anywhere in Edit Mode.", true })
         elseif not ALWAYS_SHOWN[unit] then
             B.pair({ "frameShown", "Show this frame", "Turned off, the frame stays hidden, in Edit Mode too. Also on the General page.", true }, nameItem)
         else
@@ -4472,7 +4600,8 @@ local function buildSettings()
             .. (unit == "player" and " The resting glow takes the colour too." or ""), "default",
             { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
         B.showIf(function() return getSetting(unit, "frameTint") == "custom" end,
-            B.button("Custom colour", "Pick colour", function() Extras.pickColor(unit, setSetting) end, "Pick the colour for the frame art."))
+            B.swatch("Custom colour", function() return Extras.tintColor(unit) or { 1, 1, 1 } end,
+                function(r, g, b) setSetting(unit, "frameColor", { r, g, b }) end, "The colour for the frame art. Click to change it."))
         if unit == "player" then
             B.dropdown("cornerStyle", "Corner accent", "The gold corner at the portrait's bottom right: Retail's pointed one, or Forever's older rounder one.", "retail",
                 { { "retail", "Retail" }, { "forever", "Forever" } })
@@ -4516,8 +4645,10 @@ local function buildSettings()
                 B.under(colour, byReaction, npc)
                 B.showIf(byReaction, npc)
                 B.showIf(function() return byReaction() and getSetting(unit, "npcColor") == "custom" end,
-                    B.button("Enemy NPC colour", "Pick colour", function() Extras.pickNpcColor(unit, setSetting) end,
-                        "Pick the health colour for hostile NPCs."))
+                    B.swatch("Custom NPC colour", function()
+                        local c = getSetting(unit, "npcColorRGB")
+                        return type(c) == "table" and c or { 0.1, 0.8, 0.1 }
+                    end, function(r, g, b) setSetting(unit, "npcColorRGB", { r, g, b }) end, "The health colour for hostile NPCs. Click to change it."))
             end
         end
         B.fade(unit, setSetting, "As health drops, the health colour (whichever you picked above) shifts towards red, or through your own stops.")

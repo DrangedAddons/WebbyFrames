@@ -1,8 +1,8 @@
 ## Interface: 16001, 120100
 ## Title: Webby Frames
 ## Notes: Retail-style player, target, target of target, focus, focus target and pet frames for WoW Forever, with buffs and debuffs. Options: /webby (Esc > Options > AddOns); move them in Edit Mode.
-## Author: Webby
-## Version: 1.8.0
+## Author: Lexi & Chris
+## Version: 1.8.1
 ## X-DrangedAddons-Games: _classic_beta_, _forever_
 ## IconTexture: Interface\Icons\Spell_Nature_Web
 ## OptionalDeps: EllesmereUI

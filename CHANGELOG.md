@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8.1
+- Colour swatches: custom frame, enemy NPC and fade stop colours show as a swatch of the colour itself; click it to change the colour (as in CastCount).
+- Combo points can be dragged anywhere in Edit Mode, like the druid mana bar.
+- Credits: made by Lexi and Chris (addon list, General options page, README).
+- Fixes for the 1.8.0 options: the two-to-a-row checkboxes take clicks, and opening a section no longer hides the rest of the page.
+
 ## 1.8.0
 Tidier options
 - Checkboxes that belong together now sit side by side, two to a row.
