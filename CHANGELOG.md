@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.12.3
+- Dispel glow, done like the resting glow: when you or a party member has a debuff someone can dispel, the frame takes its colour (magic blue, curse purple, disease brown, poison green), border and portrait ring included, and pulses like the resting glow. On your own frame the resting / combat glow takes the colour too. On by default for you and the party.
+- /webby glow: what each frame's dispel glow sees.
+
 ## 1.12.2
 - Dispel glow much more visible: the frame's border, portrait ring included, turns the dispel colour (magic blue, curse purple, disease brown, poison green) with a glow on and just round it. It blinks hard four times when the debuff lands, then pulses deeply every 0.8 seconds, back and forth between the frame's own colour and the dispel colour.
 

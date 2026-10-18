@@ -51,7 +51,7 @@ local DEFAULT_POS = {
 
 -- per-frame defaults that differ from DEFAULT_SETTINGS (the small frame is too narrow for long numbers)
 local UNIT_DEFAULTS = {
-    player = { combatNumbers = true },
+    player = { combatNumbers = true, dispelGlow = true },
     target = { auraBuffs = true, auraDebuffs = true, combatNumbers = true },
     focus  = { auraBuffs = true, auraDebuffs = true, combatNumbers = true },
     targettarget = { textMode = "off", textFormat = "percent" },
@@ -1539,8 +1539,7 @@ local function createIndicators(f)
         local glow = sf:CreateTexture(nil, "OVERLAY")
         setArt(glow, ART.playerStatus)
         glow:SetPoint("CENTER", f, "CENTER", -1, 1.55)
-        glow:SetBlendMode("ADD")
-        -- The outline glow doesn't cover the corner accent, so it gets its own: a larger additive halo
+        glow:SetBlendMode("ADD")        -- The outline glow doesn't cover the corner accent, so it gets its own: a larger additive halo
         -- behind it, and an additive copy on top of it (the accent itself is opaque and drawn above
         -- the halo), in a frame above the accent. Shown only while the accent is (updateIndicators).
         local cf = CreateFrame("Frame", nil, f)
@@ -1577,13 +1576,10 @@ local function createIndicators(f)
         -- Blizzard's own pulse (PlayerFrame_OnUpdate): the alpha ramps straight up from 55/255 to full
         -- over half a second, then straight back down, for resting and combat alike. Runs while the
         -- glow is shown; its colour is ours (updateIndicators).
-        local counter, sign = 0, 1
-        sf:SetScript("OnUpdate", function(_, elapsed)
-            counter = counter + elapsed
-            if counter > 0.5 then sign = -sign end
-            counter = counter % 0.5
-            local alpha
-            if sign == 1 then alpha = (55 + counter * 400) / 255 else alpha = (255 - counter * 400) / 255 end
+        -- (from the clock, so it pulses in step with the dispel glow, AuraKit.pulseAlpha)
+        sf:SetScript("OnUpdate", function()
+            local p = GetTime() % 1
+            local alpha = p < 0.5 and (55 + p * 400) / 255 or (255 - (p - 0.5) * 400) / 255
             alpha = math.max(0, math.min(1, alpha))
             sf:SetAlpha(alpha); cf:SetAlpha(alpha)
         end)
@@ -1791,7 +1787,13 @@ local function updateIndicators(f)
         if f.status then
             local resting = false
             pcall(function() resting = IsResting() and true or false end)
-            if showC then
+            if f.dispelRGB then
+                -- a debuff someone can dispel: the glow takes its colour, over combat and resting
+                -- (set by AuraKit.paintGlow)
+                f.status:SetDesaturated(true)
+                f.status:SetVertexColor(f.dispelRGB[1], f.dispelRGB[2], f.dispelRGB[3])
+                f.status:Show()
+            elseif showC then
                 f.status:SetDesaturated(false)
                 f.status:SetVertexColor(1, 0, 0)
                 f.status:Show()
@@ -2332,76 +2334,146 @@ end
 
 local updateAuras     -- (below; the mover calls it)
 
--- Party, dispel glow (Retail's dispel highlight): when a member has a debuff you can dispel, their frame
--- glows in its dispel type's colour. A second container with one group of at most one "debuff you can
--- dispel" (HARMFUL|RAID); its button isn't an icon but a copy of the frame's border art, tinted by the
--- container per dispel type, so the container showing that button is the glow. It works in combat,
--- when the aura data itself is hidden from addons.
--- (any frame with "Dispel glow" on; the party's default. The glow is a copy of the frame's own border
--- art, so it follows the big frames' and the mirrored target art too.)
+-- Dispel glow: when the unit has a debuff someone can dispel, the frame takes that debuff's colour
+-- (magic blue, curse purple, disease brown, poison green) and pulses the way the player frame does
+-- while resting: its border (portrait ring included) recoloured, with a glow on it and just round it;
+-- on the player frame the resting / combat glow too, in that colour (updateIndicators). The debuff's
+-- type is read from the unit's debuffs ten times a second. When the game hides it from addons (aura
+-- data can be secret in combat), Blizzard's own dispel highlight stands in: an aura container whose one
+-- "debuff you can dispel" button is a copy of the border, tinted by the game, pulsing the same.
+-- (any frame with "Dispel glow" on: the party's and the player's default)
 local function copyBorder(t, f)
     t:SetTexture(f.border:GetTexture())
     t:SetTexCoord(f.border:GetTexCoord())
 end
-AuraKit.GLOW_FLASH, AuraKit.GLOW_PULSE = 1.2, 0.8   -- seconds: the first blinks, then each pulse
-AuraKit.GLOW_BLINKS = 4
 -- the glow's copies of the frame's border art: { px past the border, blend mode }. A plain one, greyed
--- and tinted, takes the border (portrait ring included) over in the dispel colour; the added-light
--- ones on it and just round it make it glow.
+-- and tinted, takes the border over in the dispel colour; the added-light ones on it and just round it
+-- make it glow.
 AuraKit.GLOW_LAYERS = { { 0, "BLEND" }, { 0, "ADD" }, { 3, "ADD" } }
 
--- The glow flashes when the debuff lands (three quick blinks), then keeps pulsing while it's there.
--- Driven from a frame of ours (the game's aura buttons don't take script hooks): every glow box's
--- alpha, timed from when its button showed.
-AuraKit.glowBoxes = {}
+-- dispel types, the one shown first when a unit has several
+AuraKit.DISPEL_ORDER = { "Magic", "Curse", "Disease", "Poison" }
+
+-- The type of a debuff on `u` someone can dispel ("Magic", "Curse", "Disease", "Poison"), false for
+-- none, nil when the game won't say.
+function AuraKit.dispelType(u)
+    local found = {}
+    local ok = pcall(function()
+        for i = 1, 40 do
+            local d = C_UnitAuras.GetAuraDataByIndex(u, i, "HARMFUL")
+            if not d then break end
+            local t = d.dispelName
+            if t and t ~= "" then found[t] = true end
+        end
+    end)
+    if not ok then return nil end
+    for _, t in ipairs(AuraKit.DISPEL_ORDER) do if found[t] then return t end end
+    return false
+end
+
+-- A dispel type's colour (r, g, b).
+function AuraKit.dispelRGB(typ)
+    local c = AuraKit.dispelColors()[typ]
+    if c then return c:GetRGB() end
+    return 0.8, 0, 0
+end
+
+-- The pulse, the resting glow's (Blizzard's PlayerFrame_OnUpdate): from 55/255 straight up to full over
+-- half a second, then straight back down. From the clock, so every glow pulses together.
+function AuraKit.pulseAlpha()
+    local p = GetTime() % 1
+    local a = p < 0.5 and (55 + p * 400) / 255 or (255 - (p - 0.5) * 400) / 255
+    return math.max(0, math.min(1, a))
+end
+
+-- Our glow over a frame: copies of its border art (all greyed, so the tint is the pure colour).
+function AuraKit.makeGlow(f)
+    local g = CreateFrame("Frame", nil, f.ov or f)
+    g:SetFrameLevel((f.ov or f):GetFrameLevel() + 3)
+    g.tex = {}
+    for _, layer in ipairs(AuraKit.GLOW_LAYERS) do
+        local grow, mode = layer[1], layer[2]
+        local t = g:CreateTexture(nil, "OVERLAY", nil, mode == "BLEND" and 6 or 7)
+        t:SetPoint("TOPLEFT", g, "TOPLEFT", -grow, grow)
+        t:SetPoint("BOTTOMRIGHT", g, "BOTTOMRIGHT", grow, -grow)
+        t:SetBlendMode(mode)
+        t:SetDesaturated(true)
+        g.tex[#g.tex + 1] = t
+    end
+    g:Hide()
+    f.dglow = g
+    return g
+end
+
+-- Shows or hides a frame's glow for its debuff (f.dispelType) and tints it.
+function AuraKit.paintGlow(f)
+    local typ = f.dispelType
+    f.dispelRGB = nil
+    if type(typ) == "string" then f.dispelRGB = { AuraKit.dispelRGB(typ) } end
+    local g = f.dglow
+    if g then
+        if f.dispelRGB then
+            for _, t in ipairs(g.tex) do t:SetVertexColor(f.dispelRGB[1], f.dispelRGB[2], f.dispelRGB[3]) end
+            g:Show()
+        else
+            g:Hide()
+        end
+    end
+    pcall(updateIndicators, f)       -- (the player frame's resting / combat glow takes the colour)
+end
+
+-- Ten times a second, every frame with the glow on: which debuff (if any); every frame of a pulse:
+-- the glows' alpha.
+AuraKit.glowFrames = {}
 function AuraKit.startGlowPulse()
     if AuraKit.glowDriver then return end
     local d = CreateFrame("Frame")
-    d:SetScript("OnUpdate", function(_, dt)
-        for _, box in ipairs(AuraKit.glowBoxes) do
-            local on = false
-            if box:IsVisible() then
-                pcall(function()
-                    local b = box:GetAuraGroupFrame("dispel", 1)
-                    on = b and b:IsShown() and true or false
-                end)
+    d:SetScript("OnUpdate", function()
+        local now, a = GetTime(), AuraKit.pulseAlpha()
+        for _, f in ipairs(AuraKit.glowFrames) do
+            local on = f.dglowWant and f:IsVisible()
+            if not on then
+                if f.dispelType ~= nil then f.dispelType = nil; AuraKit.paintGlow(f) end
+            elseif not f.dispelNext or now >= f.dispelNext then
+                f.dispelNext = now + 0.1
+                local typ = AuraKit.dispelType(f.wfUnit)
+                if typ ~= f.dispelType then f.dispelType = typ; AuraKit.paintGlow(f) end
             end
-            if on then
-                local t = (box.glowT or -dt) + dt
-                box.glowT = t
-                local a
-                if t < AuraKit.GLOW_FLASH then
-                    -- hard blinks: full on, fully off
-                    a = math.abs(math.cos(t * math.pi * AuraKit.GLOW_BLINKS / AuraKit.GLOW_FLASH)) > 0.5 and 1 or 0
-                else
-                    -- a deep pulse, nearly out to full
-                    a = 0.1 + 0.9 * (0.5 + 0.5 * math.cos((t - AuraKit.GLOW_FLASH) * 2 * math.pi / AuraKit.GLOW_PULSE))
-                end
-                box:SetAlpha(a)
-            else
-                box.glowT = nil
-            end
+            if f.dglow then f.dglow:SetAlpha(a) end
+            -- Blizzard's highlight only while the game won't tell us the debuff
+            if f.dispelBox then f.dispelBox:SetAlpha((on and f.dispelType == nil) and a or 0) end
         end
     end)
     AuraKit.glowDriver = d
 end
 
 function AuraKit.dispelGlow(f)
-    local want = f.border and getSetting(f.baseUnit, "dispelGlow")
+    local want = f.border and getSetting(f.baseUnit, "dispelGlow") and true or false
+    f.dglowWant = want
+    if not f.glowListed then
+        f.glowListed = true
+        AuraKit.glowFrames[#AuraKit.glowFrames + 1] = f
+        AuraKit.startGlowPulse()
+    end
     local c = f.dispelBox
     if not want then
         if c then c:Hide() end
+        if f.dglow then f.dglow:Hide() end
         return
     end
+    -- our glow, over the frame's border art (the art can change with the layout)
+    local g = f.dglow or AuraKit.makeGlow(f)
+    g:ClearAllPoints()
+    g:SetAllPoints(f.border)
+    for _, t in ipairs(g.tex) do copyBorder(t, f) end
+    -- Blizzard's, the stand-in
     if c == false then return end
     if c == nil then
         local ok, box = pcall(CreateFrame, "AuraContainer", nil, f.ov or f, "CustomAuraContainerTemplate")
         if not (ok and box) then f.dispelBox = false; return end
         local function init(b)
             pcall(function()
-                -- copies of the border: one recolouring it, added-light ones glowing on and round it
                 local styles = Enum.CustomAuraButtonDispelTypeTextureStyle
-                b.webbyGlows = {}
                 for _, layer in ipairs(AuraKit.GLOW_LAYERS) do
                     local grow, mode = layer[1], layer[2]
                     local t = b:CreateTexture(nil, "OVERLAY", nil, mode == "BLEND" and 6 or 7)
@@ -2409,17 +2481,15 @@ function AuraKit.dispelGlow(f)
                     t:SetPoint("BOTTOMRIGHT", grow, -grow)
                     copyBorder(t, f)
                     t:SetBlendMode(mode)
-                    if mode == "BLEND" then t:SetDesaturated(true) end   -- (grey, so the tint is the pure colour)
+                    t:SetDesaturated(true)
                     b:AddDispelTypeTexture(t, {
                         style = styles and styles.PreserveAsset,
                         showWhenHarmful = true,
                         showWithoutDispelType = false,
                         customDispelColorMap = AuraKit.dispelColors(),
                     })
-                    b.webbyGlows[#b.webbyGlows + 1] = t
                 end
                 b:EnableMouse(false)
-                b.webbyGlow = b.webbyGlows[1]
             end)
             -- (made when a dispellable debuff first lands: the border's size now)
             pcall(function() b:SetSize(f.border:GetSize()) end)
@@ -2429,27 +2499,16 @@ function AuraKit.dispelGlow(f)
             box:AddAuraGroup("dispel", "HARMFUL|RAID", { initializeFrame = init, maxFrameCount = 1 })
         end) then box:Hide(); f.dispelBox = false; return end
         box:SetFrameLevel((f.ov or f):GetFrameLevel() + 3)
+        box:SetAlpha(0)
         f.dispelBox = box
         c = box
-        AuraKit.glowBoxes[#AuraKit.glowBoxes + 1] = box
-        AuraKit.startGlowPulse()
     end
     pcall(function() if c:GetUnit() ~= f.wfUnit then c:SetUnit(f.wfUnit) end end)
-    -- over the frame's border art, the glow the same size as it
     local w, h = ART.smallBorder[2], ART.smallBorder[3]
     pcall(function() w, h = f.border:GetSize() end)
     c:ClearAllPoints()
     c:SetPoint("TOPLEFT", f.border, "TOPLEFT")
     pcall(c.SetSize, c, w, h)
-    local n = 0
-    pcall(function() n = c:GetAuraGroupFrameCount("dispel") end)
-    for i = 1, n do
-        pcall(function()
-            local b = c:GetAuraGroupFrame("dispel", i)
-            b:SetSize(w, h)
-            for _, t in ipairs(b.webbyGlows or {}) do copyBorder(t, f) end   -- (the art can change with the layout)
-        end)
-    end
     c:Show()
 end
 
@@ -5290,7 +5349,7 @@ local function buildSettings()
         -- Retail with the glow on, the rest as before)
         B.dropdown("auraStyle", "Style", "Retail: on a friend, only the buffs you put on them (your heals over time, shields); on an enemy, all their buffs.\nEverything: all their buffs.\n\nDebuffs always all show, the ones that matter first.", defaultFor(unit, "auraStyle"),
             { { "retail", "Retail" }, { "all", "Everything" } })
-        B.pair({ "dispelGlow", "Dispel glow", "The frame glows in the dispel colour (magic blue, curse purple, disease brown, poison green) when the unit has a debuff you can dispel.", defaultFor(unit, "dispelGlow") },
+        B.pair({ "dispelGlow", "Dispel glow", "When the unit has a debuff someone can dispel, the frame takes its colour (magic blue, curse purple, disease brown, poison green) and pulses, like the resting glow.", defaultFor(unit, "dispelGlow") },
                (not OWN_CLASS[unit]) and { "auraMineBig", "Bigger own debuffs", "Your own debuffs (your damage over time and so on) first and bigger, so you can keep track of them.", false } or nil)
         local buffs = B.check("auraBuffs", "Buffs", nil, defaultFor(unit, "auraBuffs"))
         B.under(buffs, isOn("auraBuffs"),
@@ -5547,6 +5606,16 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         local f = frames.player
         if f then f.cornerStyle = nil; pcall(applyCorner, f) end
         print(p .. "corner accent (" .. tostring(style) .. ") nudged " .. x .. " right, " .. y .. " up. Try /webby corner 0.5 -0.5 and so on; /webby corner resets.")
+    elseif msg == "glow" then
+        -- what each frame's dispel glow is doing
+        local p = "|cff33ccffWebby Frames:|r "
+        print(p .. "glow pulse " .. (AuraKit.glowDriver and "running" or "not started") .. ", " .. #AuraKit.glowFrames .. " frames with the glow")
+        for _, f in ipairs(AuraKit.glowFrames) do
+            local typ = AuraKit.dispelType(f.wfUnit)
+            print(p .. tostring(f.wfUnit) .. ": " .. (f.dglowWant and "on" or "off")
+                .. ", dispellable debuff " .. (typ == nil and "unknown (the game won't say: Blizzard's highlight stands in)" or tostring(typ))
+                .. ", our glow " .. ((f.dglow and f.dglow:IsShown()) and "showing" or "hidden"))
+        end
     elseif msg == "pets" then
         -- what each party slot's pet bar is doing
         local p = "|cff33ccffWebby Frames:|r "
