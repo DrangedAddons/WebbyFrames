@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.10.0
+- Frame colour "Class colour" on the target, focus, their targets and the party is now the class of whoever the frame shows (NPCs stay gold). The player and pet frames keep your own class colour.
+
+Party frames
+- Webby party frames: the four members in the same art as the small frames, stacked under each other, with health and power, name, portrait, debuffs, incoming heals and shields, raid markers, a role icon, the leader's crown and the ready check. Members out of range fade out.
+- Frame colour for the party: gold, or each member in their own class colour.
+- A Party page with the small frames' options plus spacing and range fade (the role icons and leader crown are always shown); move them as one in Edit Mode (they show you as a stand-in there). Turned on by default; turn them off on the General page to get Blizzard's back (after a /reload).
+
 ## 1.9.3
 - Options window: the frame pages fold away under All frames; click its + to show them (it remembers). Frames turned off on the General page drop out of the list.
 - Every section starts closed, so each page opens as a short list of headings.

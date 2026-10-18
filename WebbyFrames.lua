@@ -9,8 +9,11 @@
 -- carry settings over from the old DFFramesForever name, once
 WebbyFramesDB = WebbyFramesDB or DFFramesForeverDB or {}
 
-local UNITS = { "player", "target", "targettarget", "focus", "focustarget", "pet" }
-local UNIT_LABEL = { player = "Player", target = "Target", targettarget = "Target of Target", focus = "Focus", focustarget = "Focus Target", pet = "Pet" }
+-- "party" is the party frames: four small frames (party1 - party4) sharing one set of options. The
+-- first is frames.party, positioned like any other frame (Edit Mode, snapping, EllesmereUI); the others
+-- (Party.members) stack under it.
+local UNITS = { "player", "target", "targettarget", "focus", "focustarget", "pet", "party" }
+local UNIT_LABEL = { player = "Player", target = "Target", targettarget = "Target of Target", focus = "Focus", focustarget = "Focus Target", pet = "Pet", party = "Party" }
 -- Portrait side is fixed per frame: target and focus have it on the right (Retail's target art),
 -- the player and the small frames on the left.
 local function portraitOnLeft(unit) return unit ~= "target" and unit ~= "focus" end
@@ -34,6 +37,7 @@ local DEFAULT_POS = {
     focustarget = { point = "TOPLEFT", x = 394, y = -260 },
     -- Retail puts target of target at the bottom right of the target frame
     targettarget = { point = "TOPLEFT", x = 394, y = -130 },
+    party  = { point = "TOPLEFT", x = 20,  y = -260 },
 }
 
 -- per-frame defaults that differ from DEFAULT_SETTINGS (the small frame is too narrow for long numbers)
@@ -44,6 +48,8 @@ local UNIT_DEFAULTS = {
     targettarget = { textMode = "off", textFormat = "percent" },
     pet = { textMode = "off", textFormat = "percent" },
     focustarget = { textMode = "off", textFormat = "percent" },
+    -- party: health as a percentage, and their debuffs (small, one row under each member)
+    party = { textMode = "always", textFormat = "percent", auraDebuffs = true, auraSize = 16, auraPerRow = 6, auraMax = 6 },
 }
 
 local DEFAULT_SETTINGS = {
@@ -72,7 +78,9 @@ local DEFAULT_SETTINGS = {
     -- frame art colour: "default" (gold, as drawn), "class" or "custom" (frameColor = { r, g, b })
     frameTint = "default",
     -- health bar extras
-    frameShown = true,       -- target of target, focus, focus target, pet: the frame is used at all
+    frameShown = true,       -- target of target, focus, focus target, pet, party: the frame is used at all
+    -- party: gap between members (room for a row of debuffs), role / leader icons, fading out of range
+    partyGap = 24, rangeFade = true,
     smoothBars = true, healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
     combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus), one General switch
     -- icons and extras
@@ -194,6 +202,7 @@ end
 
 local DB, lib
 local frames = {}            -- unit -> frame
+local Party = { members = {} }   -- the party frames, slot 1 - 4 (slot 1 is frames.party); see "Party frames"
 local activeLayout = "Default"
 local pendingApply = false
 local Opt                    -- the settings window; filled in below, after the functions that refresh it
@@ -2261,6 +2270,7 @@ local updateAuras     -- (below; the mover calls it)
 function AuraKit.allFrames()
     local list = {}
     for _, unit in ipairs(UNITS) do if frames[unit] then list[#list + 1] = frames[unit] end end
+    for i = 2, 4 do if Party.members[i] then list[#list + 1] = Party.members[i] end end   -- (party slots 2 - 4)
     return list
 end
 
@@ -2678,11 +2688,18 @@ function Extras.happiness(f)
 end
 
 -- Frame colour: gold as drawn, your class colour, or a custom colour.
-function Extras.tintColor(unit)
+-- Class colour: on the player and pet frames, your class; on the others (target, focus, their targets,
+-- the party), the class of whoever the frame shows, gold for an NPC or no one. who: the unit shown.
+-- ("theirclass" is the party's name for the same thing.)
+local OWN_CLASS = { player = true, pet = true }
+function Extras.tintColor(unit, who)
     local mode = getSetting(unit, "frameTint")
-    if mode == "class" then
+    if mode == "class" or mode == "theirclass" then
         local class
-        pcall(function() class = select(2, UnitClass("player")) end)
+        pcall(function()
+            if OWN_CLASS[unit] then class = select(2, UnitClass("player"))
+            elseif who and UnitIsPlayer(who) then class = select(2, UnitClass(who)) end
+        end)
         local c = class and (RAID_CLASS_COLORS or {})[class]
         if c then return { c.r, c.g, c.b } end
         return nil
@@ -2694,7 +2711,7 @@ function Extras.tintColor(unit)
 end
 
 function Extras.tint(f)
-    local c = Extras.tintColor(f.baseUnit)
+    local c = Extras.tintColor(f.baseUnit, f.wfUnit)
     f.tintColor = c
     pcall(updateIndicators, f)       -- the resting glow follows the frame colour
     -- the resting Zzz too, when asked (made glow-fit like the resting glow, so a dark frame still
@@ -2767,6 +2784,9 @@ end
 
 function Extras.update(f)
     pcall(Extras.raid, f)
+    -- a frame in its unit's class colour changes colour with who it shows (your own frames don't)
+    local mode = getSetting(f.baseUnit, "frameTint")
+    if (mode == "class" or mode == "theirclass") and not OWN_CLASS[f.baseUnit] then pcall(Extras.tint, f) end
     if f.baseUnit == "pet" then pcall(Extras.happiness, f) end
     if f.baseUnit == "target" then pcall(Extras.combo, f) end
 end
@@ -3133,7 +3153,8 @@ local function applyUnit(f)
     if f.altMana then placeAltMana(f) end
     local changed = applyLayout(f)
     if f.small and applySmallLayout(f) then changed = true end
-    placeFrame(f, unit)
+    -- party slots 2 - 4 stack under the one before; the rest sit where they were put
+    if f.partyIndex and f.partyIndex > 1 then Party.place(f) else placeFrame(f, unit) end
     f:SetScale(getSetting(unit, "scale"))
     local showName = (unit == "player" or getSetting(unit, "showName")) and true or false   -- (your own name always)
     f.name:SetShown(showName)
@@ -3172,6 +3193,7 @@ local function applyAll()
     for _, unit in ipairs(UNITS) do
         if frames[unit] then applyUnit(frames[unit]) end
     end
+    for i = 2, 4 do if Party.members[i] then applyUnit(Party.members[i]) end end
 end
 
 local function touchOptions()
@@ -3180,13 +3202,15 @@ end
 
 local function setSetting(unit, key, value)
     unitData(unit, true)[key] = value
-    local f = frames[unit]
-    if f then
+    -- (the party's options are every party slot's)
+    local list = { frames[unit] }
+    if unit == "party" then for i = 2, 4 do list[#list + 1] = Party.members[i] end end
+    for _, f in ipairs(list) do
         if key == "textMode" then f.textMode = value end
         pcall(updateHealth, f)
         pcall(updatePower, f)
         if InCombatLockdown() then pendingApply = true else applyUnit(f) end
-        if lib then lib:RefreshFrameSettings(f) end
+        if lib and f == frames[unit] then lib:RefreshFrameSettings(f) end
     end
     -- the pet's bar can follow the player frame's colour
     if unit == "player" and frames.pet then pcall(updateHealth, frames.pet) end
@@ -3198,19 +3222,21 @@ end
 ---------------------------------------------------------------------------
 -- The clickable secure button both frame sizes are built on. The live unit lives in f.wfUnit, not
 -- f.unit: an addon-written .unit field stops pings from reading the unit's (secret) GUID.
-local function newUnitButton(unit, w, h)
+-- wf: the unit it shows, when that isn't the frame's own (the party frames: "party" shows party1 - 4).
+local function newUnitButton(unit, w, h, wf)
+    wf = wf or unit
     local f
-    local name = "WebbyFrames_" .. unit
+    local name = "WebbyFrames_" .. (wf ~= unit and wf or unit)
     if not pcall(function() f = CreateFrame("Button", name, UIParent, "SecureUnitButtonTemplate,PingableUnitFrameTemplate") end) or not f then
         f = CreateFrame("Button", name, UIParent, "SecureUnitButtonTemplate")
     end
-    f.wfUnit, f.baseUnit = unit, unit
+    f.wfUnit, f.baseUnit, f.homeUnit = wf, unit, wf
     f:SetSize(w, h)
     f:SetFrameStrata("LOW")
     f:SetClampedToScreen(true)
     f:SetMovable(true)
     f:RegisterForClicks("AnyUp")
-    f:SetAttribute("unit", unit)
+    f:SetAttribute("unit", wf)
     f:SetAttribute("type1", "target")
     f:SetAttribute("type2", "togglemenu")
     f:SetPoint(DEFAULT_POS[unit].point, UIParent, DEFAULT_POS[unit].point, DEFAULT_POS[unit].x, DEFAULT_POS[unit].y)
@@ -3492,8 +3518,11 @@ end
 ---------------------------------------------------------------------------
 local POLL_INTERVAL = 0.25
 
-local function createSmallFrame(unit)
-    local f = newUnitButton(unit, 120, 49)
+-- wf: the unit shown (party members: "party" frames showing party1 - party4); index: the party slot.
+local function createSmallFrame(unit, wf, index)
+    local f = newUnitButton(unit, 120, 49, wf)
+    f.partyIndex = index
+    local shown = f.wfUnit
     f.small = true
     f.layoutLeft = nil        -- applySmallLayout builds the art, bars and masks for the chosen side
     f.hpFiles = true
@@ -3584,22 +3613,148 @@ local function createSmallFrame(unit)
     for _, e in ipairs({ "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
                          "UNIT_NAME_UPDATE", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA",
                          "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", "UNIT_COMBAT" }) do
-        pcall(f.RegisterUnitEvent, f, e, unit)
+        pcall(f.RegisterUnitEvent, f, e, shown)
     end
     if unit == "pet" then
         pcall(f.RegisterUnitEvent, f, "UNIT_PET", "player")
     elseif unit == "focustarget" then
         pcall(f.RegisterUnitEvent, f, "UNIT_TARGET", "focus")
         f:RegisterEvent("PLAYER_FOCUS_CHANGED")
+    elseif unit == "party" then
+        f:RegisterEvent("GROUP_ROSTER_UPDATE")   -- (who is in each slot changes)
     else
         pcall(f.RegisterUnitEvent, f, "UNIT_TARGET", "target")   -- the target changed who it is targeting
     end
-    f:RegisterEvent("PLAYER_TARGET_CHANGED")
+    if unit ~= "party" then f:RegisterEvent("PLAYER_TARGET_CHANGED") end
     f:RegisterEvent("PLAYER_ENTERING_WORLD")
 
     RegisterUnitWatch(f)
-    frames[unit] = f
+    if not index or index == 1 then frames[unit] = f end
+    if index then Party.members[index] = f end
     updateAll(f)
+    return f
+end
+
+---------------------------------------------------------------------------
+-- Party frames
+---------------------------------------------------------------------------
+-- Four small frames (party1 - party4) sharing the "party" options. Slot 1 is frames.party and sits where
+-- it was put; slots 2 - 4 stack under it, partyGap apart (room for a row of debuffs). On top of the small
+-- frame's bars, name, portrait, auras and heals: a role icon, the leader's crown, the ready check, and
+-- fading while out of range.
+
+-- Slot 2 - 4: under the slot before it.
+function Party.place(f)
+    local prev = Party.members[f.partyIndex - 1]
+    if not prev then return end
+    local gap = tonumber(getSetting("party", "partyGap")) or 24
+    f:ClearAllPoints()
+    f:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -gap)
+end
+
+-- The role, leader and ready check icons on a party frame's portrait, made on first use.
+function Party.icons(f)
+    if f.partyIcons then return f.partyIcons end
+    local p, ov = f.portrait, f.ov
+    local icons = {}
+    icons.role = ov:CreateTexture(nil, "OVERLAY", nil, 6)
+    icons.role:SetSize(14, 14)
+    icons.role:SetPoint("BOTTOMLEFT", p, "BOTTOMLEFT", -3, -3)
+    icons.leader = ov:CreateTexture(nil, "OVERLAY", nil, 6)
+    icons.leader:SetSize(13, 13)
+    icons.leader:SetPoint("BOTTOM", p, "TOP", -10, -5)
+    icons.leader:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
+    icons.ready = ov:CreateTexture(nil, "OVERLAY", nil, 7)
+    icons.ready:SetSize(22, 22)
+    icons.ready:SetPoint("CENTER", p, "CENTER")
+    for _, t in pairs(icons) do t:Hide() end
+    f.partyIcons = icons
+    return icons
+end
+
+local ROLE_ATLAS = { TANK = "roleicon-tiny-tank", HEALER = "roleicon-tiny-healer", DAMAGER = "roleicon-tiny-dps" }
+local READY_TEX = { ready = "READY_CHECK_READY_TEXTURE", notready = "READY_CHECK_NOT_READY_TEXTURE", waiting = "READY_CHECK_WAITING_TEXTURE" }
+
+-- Role, leader and ready check for one party frame (only while it shows a real party member).
+function Party.updateIcons(f)
+    local icons = Party.icons(f)
+    local u = f.wfUnit
+    local real = u ~= "player" and UnitExists(u)
+    -- role
+    local role
+    if real then pcall(function() role = UnitGroupRolesAssigned(u) end) end
+    local atlas = role and ROLE_ATLAS[role]
+    if atlas and pcall(icons.role.SetAtlas, icons.role, atlas) then icons.role:Show() else icons.role:Hide() end
+    -- leader
+    local lead = false
+    if real then pcall(function() lead = UnitIsGroupLeader(u) and true or false end) end
+    icons.leader:SetShown(lead)
+    -- ready check (stays up a few seconds after it finishes, as Blizzard's does)
+    local status
+    if real and (Party.readyCheck or Party.readyLinger) then pcall(function() status = GetReadyCheckStatus(u) end) end
+    local tex = status and READY_TEX[status] and _G[READY_TEX[status]]
+    if tex then icons.ready:SetTexture(tex); icons.ready:Show() else icons.ready:Hide() end
+end
+
+-- Party slots 2 - 4 after the party's options were reset or copied (slot 1 is done as frames.party).
+function Party.applyRest()
+    for i = 2, 4 do
+        local f = Party.members[i]
+        if f then
+            f.layoutLeft = nil
+            pcall(applyUnit, f)
+            pcall(updateAll, f)
+        end
+    end
+end
+
+function Party.updateAllIcons()
+    for i = 1, 4 do
+        local f = Party.members[i]
+        if f then pcall(Party.updateIcons, f) end
+    end
+end
+
+-- Out of range: the frame fades. UnitInRange's answer can be hidden from addons in instances, so it goes
+-- straight to SetAlphaFromBoolean, which takes a hidden answer too.
+local RANGE_OUT = 0.45
+function Party.updateRange(f)
+    local u = f.wfUnit
+    if u == "player" or not getSetting("party", "rangeFade") or not UnitExists(u) then f:SetAlpha(1); return end
+    local inRange, checked
+    pcall(function() inRange, checked = UnitInRange(u) end)
+    -- (not checked: the game can't tell, e.g. in another zone; then it stays fully shown)
+    local known = true
+    pcall(function() if checked == false then known = false end end)
+    if not known or inRange == nil then f:SetAlpha(1); return end
+    if f.SetAlphaFromBoolean and pcall(f.SetAlphaFromBoolean, f, inRange, 1, RANGE_OUT) then return end
+    local ok, near = pcall(function() return inRange and true or false end)
+    f:SetAlpha((ok and not near) and RANGE_OUT or 1)
+end
+
+function Party.init()
+    local ev = CreateFrame("Frame")
+    for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PARTY_LEADER_CHANGED", "PLAYER_ROLES_ASSIGNED", "PLAYER_ENTERING_WORLD",
+                         "READY_CHECK", "READY_CHECK_CONFIRM", "READY_CHECK_FINISHED" }) do
+        pcall(ev.RegisterEvent, ev, e)
+    end
+    ev:SetScript("OnEvent", function(_, event)
+        if event == "READY_CHECK" then
+            Party.readyCheck, Party.readyLinger = true, nil
+        elseif event == "READY_CHECK_FINISHED" then
+            Party.readyCheck, Party.readyLinger = nil, true
+            C_Timer.After(6, function() Party.readyLinger = nil; Party.updateAllIcons() end)
+        end
+        Party.updateAllIcons()
+    end)
+    -- range, five times a second, for the party frames on show
+    C_Timer.NewTicker(0.2, function()
+        for i = 1, 4 do
+            local f = Party.members[i]
+            if f and f:IsShown() then pcall(Party.updateRange, f) end
+        end
+    end)
+    Party.updateAllIcons()
 end
 
 ---------------------------------------------------------------------------
@@ -3609,8 +3764,11 @@ end
 -- they show the player's data as a stand-in, to give you something to move.
 local function sampleFrames()
     local list = {}
-    for _, unit in ipairs({ "target", "targettarget", "focus", "focustarget", "pet" }) do
+    for _, unit in ipairs({ "target", "targettarget", "focus", "focustarget", "pet", "party" }) do
         if frames[unit] and frameOn(unit) then list[#list + 1] = frames[unit] end   -- (frames turned off stay hidden)
+    end
+    if frameOn("party") then
+        for i = 2, 4 do if Party.members[i] then list[#list + 1] = Party.members[i] end end
     end
     return list
 end
@@ -3634,7 +3792,7 @@ local function exitSample()
     pcall(Extras.editCombo, false)
     if InCombatLockdown() then return end
     for _, f in ipairs(sampleFrames()) do
-        f.wfUnit = f.baseUnit
+        f.wfUnit = f.homeUnit or f.baseUnit      -- (a party slot goes back to its partyN)
         RegisterUnitWatch(f)
         updateAll(f)
     end
@@ -3889,6 +4047,7 @@ function resetFrame(unit)
         pcall(updateAll, f)
         if lib then lib:RefreshFrameSettings(f) end
     end
+    if unit == "party" then Party.applyRest() end
     touchOptions()
 end
 
@@ -3905,6 +4064,7 @@ function copySettings(from, to)
         pcall(updateAll, f)
         if lib then lib:RefreshFrameSettings(f) end
     end
+    if to == "party" then Party.applyRest() end
     touchOptions()
 end
 
@@ -4846,6 +5006,7 @@ local function buildSettings()
         end
         B.pair(showItem("targettarget"), showItem("focus"))
         B.pair(showItem("focustarget"), showItem("pet"))
+        B.pair({ "show_party", "Party", "Show the party frames (and hide Blizzard's). Turned off, Blizzard's party frames come back after a /reload.", true })
         B.button("Position", "Open Edit Mode", openEditMode, "Drag the frames where you want them. They snap to each other and to the middle of the screen, and a frame dropped next to another moves with it.")
         B.button("Start over", "Reset all frames", function()
             for _, unit in ipairs(UNITS) do resetFrame(unit) end
@@ -4867,7 +5028,12 @@ local function buildSettings()
     -- All frames: the options most people want the same everywhere, set on every frame at once. It shows
     -- the player frame's choice; changing it sets every frame (each frame's page can still differ after).
     do
-        local function setAll(_, k, v) for _, unit in ipairs(UNITS) do setSetting(unit, k, v) end end
+        local function setAll(_, k, v)
+            for _, unit in ipairs(UNITS) do
+                -- (the party has its own frame colours: gold or each member's class colour)
+                if not (unit == "party" and (k == "frameTint" or k == "frameColor")) then setSetting(unit, k, v) end
+            end
+        end
         local proxy = setmetatable({}, {
             __index = function(_, k) return getSetting("player", k) end,
             __newindex = setAll,
@@ -4877,7 +5043,7 @@ local function buildSettings()
 
         -- (the same sections, in the same order, as each frame's page)
         B.section("Frame", false)
-        B.dropdown("frameTint", "Frame colour", "Colours the frame art on every frame. The player's resting glow takes the colour too.", "default",
+        B.dropdown("frameTint", "Frame colour", "Colours the frame art on every frame. Class colour: your class on the player and pet frames, the class of whoever the others show (NPCs stay gold). The player's resting glow takes the colour too.", "default",
             { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
         B.showIf(function() return getSetting("player", "frameTint") == "custom" end,
             B.swatch("Custom colour", function() return Extras.tintColor("player") or { 1, 1, 1 } end,
@@ -4939,14 +5105,26 @@ local function buildSettings()
             B.pair(nameItem)
         end
         B.slider("scale", "Scale", "How big the frame is.", defaultFor(unit, "scale"), 0.5, 2, 0.05)
+        if unit == "party" then
+            B.slider("partyGap", "Spacing", "The gap between party members (leave room for their debuffs).", 24, 0, 60, 1,
+                function(v) return string.format("%d px", math.floor(v + 0.5)) end)
+            B.pair({ "rangeFade", "Fade when out of range", "Members too far away for your spells fade out.", true })
+        end
         if unit ~= "pet" then   -- (a pet has no class: it always shows its picture)
             B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
                 { { "picture", "Picture" }, { "class", "Class icon (players)" } })
         end
-        B.dropdown("frameTint", "Frame colour", "Colours the frame art: its border, portrait ring, corner accent, level circle and cast bar border. Class colour is your class's colour."
-            .. (unit == "player" and " The resting glow takes the colour too." or ""), "default",
-            { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
-        B.showIf(function() return getSetting(unit, "frameTint") == "custom" end,
+        if unit == "party" then
+            -- (each member in their own class colour, or all gold)
+            B.dropdown("frameTint", "Frame colour", "Colours each member's frame art: its border and portrait ring. Their class colour: each member in their own class's colour.", "default",
+                { { "default", "Gold" }, { "theirclass", "Their class colour" } })
+        else
+            B.dropdown("frameTint", "Frame colour", "Colours the frame art: its border, portrait ring, corner accent, level circle and cast bar border. "
+                .. ((unit == "player" or unit == "pet") and "Class colour is your class's colour." or "Class colour is the class of whoever the frame shows (NPCs stay gold).")
+                .. (unit == "player" and " The resting glow takes the colour too." or ""), "default",
+                { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
+        end
+        B.showIf(function() return unit ~= "party" and getSetting(unit, "frameTint") == "custom" end,
             B.swatch("Custom colour", function() return Extras.tintColor(unit) or { 1, 1, 1 } end,
                 function(r, g, b) setSetting(unit, "frameColor", { r, g, b }) end, "The colour for the frame art. Click to change it."))
         if unit == "player" then
@@ -5109,7 +5287,12 @@ local function hideAllBlizzard()
         if fr then ghostHooks(fr); ghostBlizzard(fr) end
     end
     hideBlizzard(_G.TargetFrameToT); hideBlizzard(_G.FocusFrameToT); hideBlizzard(_G.PetFrame)
-    -- (party frames are left alone: Blizzard's, or whatever addon you use for them)
+    -- Blizzard's party frames, while ours are on: ghosted like target and focus (invisible, unclickable,
+    -- off the screen) rather than torn out, so Edit Mode and the rest of Blizzard's UI don't trip over
+    -- them. (Turned back on, they need a /reload.) The raid-style party frames are left alone.
+    if frameOn("party") and _G.PartyFrame then
+        ghostHooks(_G.PartyFrame); ghostBlizzard(_G.PartyFrame)
+    end
 end
 
 local init = CreateFrame("Frame")
@@ -5130,8 +5313,12 @@ init:SetScript("OnEvent", function(_, event)
     if DB.enabled == false then return end
 
     for _, unit in ipairs(UNITS) do
-        if unit == "targettarget" or unit == "focustarget" or unit == "pet" then createSmallFrame(unit) else createFrame(unit) end
+        if unit == "party" then
+            for i = 1, 4 do createSmallFrame("party", "party" .. i, i) end
+        elseif unit == "targettarget" or unit == "focustarget" or unit == "pet" then createSmallFrame(unit)
+        else createFrame(unit) end
     end
+    pcall(Party.init)
     Extras.init()
     hideAllBlizzard()
     C_Timer.After(2, hideAllBlizzard)
