@@ -4484,7 +4484,7 @@ local function buildSettings()
             end,
         })
         local B = builders(root, rootLayout, general, "WEBBY_general_")
-        B.header("Webby Frames  |cff808080v" .. addonVersion() .. "  -  by Lexi and Chris|r")
+        B.header("Webby Frames  |cff808080v" .. addonVersion() .. "  -  by Webby, Lexible & Dranged|r")
         B.pair({ "enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames.\n\n|cffffd100Needs a /reload.|r", true },
                { "combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on the player, target and focus frames.", true })
 

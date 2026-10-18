@@ -39,7 +39,7 @@ colours (and the skull for unknown levels). Combat numbers on the player, target
 the General page. Mobs tagged by someone else stay grey. Party frames are left to Blizzard or your party addon.
 
 ## Credits
-Made by **Lexi** and **Chris**.
+Made by **Webby**, **Lexible** and **Dranged**.
 
 Includes LibEditMode by p3lim (unmodified, see Libs/LibEditMode/LICENSE.txt) and the public-domain LibStub.
 The frame art, bar fills, masks, elite dragons and resting animation in `Media/` come from

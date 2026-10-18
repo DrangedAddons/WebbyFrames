@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.8.2
+- Credits read "Webby, Lexible & Dranged" everywhere: the addon list, the General options page and the README.
+
 ## 1.8.1
 - Colour swatches: custom frame, enemy NPC and fade stop colours show as a swatch of the colour itself; click it to change the colour (as in CastCount).
 - Combo points can be dragged anywhere in Edit Mode, like the druid mana bar.
