@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.2
+- Fixed the Lua error ("attempt to call a nil value") every time an options section was opened or closed on Forever: the section headers now handle their own clicks.
+
 ## 1.6.1
 - Fixed the Lua errors ("Implement GetExtent") the options pages threw on Forever whenever they were opened or a section was opened or closed.
 

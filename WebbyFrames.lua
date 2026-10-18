@@ -3426,6 +3426,20 @@ local function refreshSectionIcons()
         local box = SettingsPanel:GetSettingsList().ScrollBox
         box:ForEachFrame(function(frame, elementData)
             if not isSection[elementData] then return end
+            -- Forever's header click handler calls something its header doesn't have, so every click
+            -- errored. Our headers get their own click instead: flip the section, and the watcher below
+            -- redraws the page as it does for every change.
+            if type(frame.OnExpandedChanged) ~= "function" then frame.OnExpandedChanged = function() end end
+            if frame.Button and not frame.webbyClick then
+                frame.webbyClick = true
+                frame.Button:SetScript("OnClick", function()
+                    pcall(function()
+                        local d = sectionData(frame:GetElementData())
+                        if type(d) == "table" then d.expanded = not d.expanded end
+                    end)
+                    pcall(PlaySound, SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or 856)
+                end)
+            end
             local data = sectionData(elementData)
             local open = type(data) == "table" and data.expanded and true or false
             -- frames are recycled between rows, so set the icon every time rather than remembering it
@@ -3469,6 +3483,13 @@ sectionWatch:SetScript("OnUpdate", function(_, dt)
 end)
 
 local function buildSettings()
+    -- Forever's collapsible section header calls self:OnExpandedChanged() when clicked but doesn't have
+    -- one, so every click errored. Every header row is made from this template when the options are
+    -- first opened, so an empty one here covers them all (the section watcher above redraws the page).
+    pcall(function()
+        local M = _G.SettingsExpandableSectionMixin
+        if type(M) == "table" and type(M.OnExpandedChanged) ~= "function" then M.OnExpandedChanged = function() end end
+    end)
     local root, rootLayout = Settings.RegisterVerticalLayoutCategory("Webby Frames")
     settingsCategory = root
 
