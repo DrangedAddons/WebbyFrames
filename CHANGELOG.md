@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.1
+- The threat % keeps updating while you hold aggro: it's then your threat against the next highest in your group (pets included), so after a re-pull it climbs again instead of standing still. It's also re-read five times a second, since the game sends few threat updates while you tank.
+- Simpler threat number: always the percentage, shown as just the number beside the raid marker (default) or in the box above the name. The differential and the round badge are gone; a badge setting reads as just the number.
+
 ## 1.7.0
 Threat, reworked (target and focus)
 - Threat is worked out the way Foofi's ThreatDisplay does it. Number shows: Percentage (your raw threat against the mob's current target: about 110% is a melee pull, 130% a ranged pull), Differential (your threat minus the highest in your group: +0 when you're top, -500 when someone has 500 more), or Both (120% | +500).
