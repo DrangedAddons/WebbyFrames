@@ -73,7 +73,7 @@ local DEFAULT_SETTINGS = {
     -- frame art colour: "default" (as drawn), "dark", "silver", "class" or "custom" (frameColor = { r, g, b })
     frameTint = "default",
     -- health bar extras
-    smoothBars = true, healPrediction = true, absorbs = true,
+    smoothBars = true, healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
     combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus), one General switch
     -- icons and extras
     comboPoints = true,
@@ -863,6 +863,149 @@ local function updatePrediction(f)
     if not pcall(setBarValue, f, f.healAbsorbBar, healAbsorb) then f.healAbsorbBar:SetValue(0) end
 end
 
+-- Damage trail: when health drops, the part just lost stays on the bar in red for a moment, then slides
+-- away. A bar under the health fill (createDamageTrail) that keeps the old health and follows the new
+-- after a short wait, so it shows only where the fill has gone. Secret-safe: values only go to setters.
+-- (Healing needs nothing: the fill grows over it, and it catches up underneath.)
+local TRAIL_WAIT, TRAIL_MAXWAIT = 0.4, 1.0     -- seconds after the last hit; at most this long under steady damage
+
+local function createDamageTrail(f)
+    local t = CreateFrame("StatusBar", nil, f)
+    t:SetAllPoints(f.hp)
+    t:SetFrameLevel(f.hp:GetFrameLevel())
+    f.hp:SetFrameLevel(t:GetFrameLevel() + 1)       -- (the health fill draws over it)
+    t:SetStatusBarTexture(PLAIN_FILL)
+    t.color = { 1, 0.15, 0.1, 0.9 }
+    t:SetMinMaxValues(0, 1)
+    t:SetValue(0)
+    t:Hide()
+    t:SetScript("OnUpdate", function(self, elapsed)
+        if not self.pending then return end
+        self.wait = self.wait - elapsed
+        self.waited = self.waited + elapsed
+        if self.wait > 0 and self.waited < TRAIL_MAXWAIT then return end
+        self.pending = false
+        if not (SMOOTH and pcall(self.SetValue, self, self.target, SMOOTH)) then pcall(self.SetValue, self, self.target) end
+    end)
+    f.hpTrail = t
+end
+
+-- Damage prediction: while you cast at an enemy, the damage the spell will do (read from its tooltip:
+-- "450 to 520 Fire damage" -> the middle, 485) is shaded off the end of its health fill. A reverse
+-- bar from the fill's moving end with the health max and that amount, so nothing touches the
+-- unit's (possibly secret) health. Base damage only: crits, resists and armour aren't known.
+local scanTip
+local function tooltipLines(spell)
+    local lines = {}
+    local ok = pcall(function()
+        local data = C_TooltipInfo and C_TooltipInfo.GetSpellByID(spell)
+        for _, l in ipairs(data and data.lines or {}) do
+            if l.leftText then lines[#lines + 1] = l.leftText end
+        end
+    end)
+    if ok and #lines > 0 then return lines end
+    pcall(function()
+        if not scanTip then
+            scanTip = CreateFrame("GameTooltip", "WebbyFramesScanTip", nil, "GameTooltipTemplate")
+        end
+        scanTip:SetOwner(WorldFrame, "ANCHOR_NONE")
+        scanTip:SetSpellByID(spell)
+        for i = 1, scanTip:NumLines() do
+            local fs = _G["WebbyFramesScanTipTextLeft" .. i]
+            local text = fs and fs:GetText()
+            if text then lines[#lines + 1] = text end
+        end
+        scanTip:Hide()
+    end)
+    return lines
+end
+
+-- The first damage in the tooltip: "X to Y ... damage" (the middle) or "X ... damage". nil if none.
+local function spellDamage(spell)
+    local function num(s) return tonumber((s:gsub(",", ""))) end
+    for _, text in ipairs(tooltipLines(spell)) do
+        local ok, amount = pcall(function()
+            local lower = text:lower()
+            local at = lower:find("damage")
+            if not at then return nil end
+            local before = lower:sub(1, at)
+            local lo, hi
+            for a, b in before:gmatch("(%d[%d,]*) to (%d[%d,]*)") do lo, hi = a, b end
+            if lo then return (num(lo) + num(hi)) / 2 end
+            local last
+            for a in before:gmatch("(%d[%d,]*)") do last = a end
+            return last and num(last) or nil
+        end)
+        if ok and amount and amount > 0 then return math.floor(amount + 0.5), text end
+    end
+    return nil
+end
+
+local function updateDamagePrediction(f, spell)
+    if not (f and f.hp) then return end
+    local amount
+    if spell and getSetting(f.baseUnit, "damagePredict") then
+        local hostile = false
+        pcall(function() hostile = UnitCanAttack("player", f.wfUnit) and true or false end)
+        if hostile then
+            local line
+            amount, line = spellDamage(spell)
+            f.dmgInfo = "spell " .. tostring(spell) .. ": " .. (amount and (amount .. " from \"" .. tostring(line) .. "\"") or "no damage found in its tooltip")
+        end
+    end
+    local bar = f.dmgBar
+    if not amount then if bar then bar:Hide() end; return end
+    if not bar then
+        -- clipped to the health bar, over its fill
+        local clip = CreateFrame("Frame", nil, f.hp)
+        clip:SetAllPoints(f.hp)
+        clip:SetClipsChildren(true)
+        clip:SetFrameLevel(f.hp:GetFrameLevel() + 2)
+        bar = CreateFrame("StatusBar", nil, clip)
+        bar:SetReverseFill(true)
+        bar:SetStatusBarTexture(PLAIN_FILL)
+        bar.color = { 1, 1, 1, 0.5 }
+        f.dmgBar = bar
+    end
+    styleOverlay(f, bar)
+    pcall(function() bar:GetStatusBarTexture():SetBlendMode("ADD") end)
+    local fill = f.hp:GetStatusBarTexture()
+    bar:ClearAllPoints()
+    bar:SetPoint("TOPRIGHT", fill, "TOPRIGHT")
+    bar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+    bar:SetWidth(f.hp:GetWidth())
+    local max = value(UnitHealthMax, f.wfUnit)
+    if max then pcall(bar.SetMinMaxValues, bar, 0, max) end
+    pcall(bar.SetValue, bar, amount)
+    bar:Show()
+end
+
+local function updateDamageTrail(f, status)
+    local t = f.hpTrail
+    if not t then return end
+    if not getSetting(f.baseUnit, "damageTrail") then t:Hide(); return end
+    styleOverlay(f, t)
+    local u = f.wfUnit
+    local max = value(UnitHealthMax, u)
+    if max then pcall(t.SetMinMaxValues, t, 0, max) end
+    local now = value(UnitHealth, u)
+    -- someone else in the frame (new target), or dead / offline: straight to the new health, no trail
+    local who
+    pcall(function() who = UnitGUID(u) end)
+    local fresh = false
+    pcall(function() fresh = (who ~= t.who) end)
+    t.who = who
+    if fresh or status then
+        t.pending = false
+        pcall(t.SetValue, t, now or 0)
+    else
+        t.target = now
+        if not t.pending then t.pending, t.waited = true, 0 end
+        t.wait = TRAIL_WAIT
+    end
+    t:Show()
+end
+
 
 local function updateHealth(f)
     if f.previewing then return end            -- /webby test is showing made-up values
@@ -880,6 +1023,7 @@ local function updateHealth(f)
         setBarValue(f, f.hp, UnitHealth(u))
     end
     pcall(updatePrediction, f)
+    pcall(updateDamageTrail, f, status)
     if status then f.hpText:SetText(status) else setBarText(f.hpText, f, "hp") end
     if status ~= f.statusText then
         f.statusText = status
@@ -2927,6 +3071,7 @@ local function createFrame(unit)
     -- bars
     f.hp, f.hpMask = newBar(f)
     f.mp, f.mpMask = newBar(f)
+    createDamageTrail(f)
     -- the player's druid mana while in a form: a slim bar just under the frame art, below the mana
     -- bar, in the frames' line style (shown by updatePower)
     if isPlayer then
@@ -3044,6 +3189,11 @@ local function createFrame(unit)
             self.castSpell, self.castGUID = spellID, guid
             self.costStarts = (self.costStarts or 0) + 1   -- (for /webby cost)
             pcall(updateCostPrediction, self)
+            -- the damage it will do, on your target (and on focus when that's the same mob)
+            pcall(updateDamagePrediction, frames.target, spellID)
+            local same = false
+            pcall(function() same = UnitIsUnit("focus", "target") and true or false end)
+            pcall(updateDamagePrediction, frames.focus, same and spellID or nil)
         elseif event:find("^UNIT_SPELLCAST_") then
             -- went off (cast or instant, however it was pressed): flash what it spent
             if event == "UNIT_SPELLCAST_SUCCEEDED" then local _, _, spellID = ...; pcall(flashSpent, self, spellID) end
@@ -3054,6 +3204,8 @@ local function createFrame(unit)
             if mine then
                 self.castSpell, self.castGUID = nil, nil
                 pcall(updateCostPrediction, self)
+                pcall(updateDamagePrediction, frames.target, nil)
+                pcall(updateDamagePrediction, frames.focus, nil)
             end
         elseif event == "PLAYER_REGEN_DISABLED" then self.combatFlag = true; updateIndicators(self)
         elseif event == "PLAYER_REGEN_ENABLED" then self.combatFlag = false; updateIndicators(self)
@@ -3137,6 +3289,7 @@ local function createSmallFrame(unit)
     -- bars (sized, placed and masked by applySmallLayout)
     f.hp, f.hpMask = newBar(f)
     f.mp, f.mpMask = newBar(f)
+    createDamageTrail(f)
 
     -- text
     local ov = CreateFrame("Frame", nil, f)
@@ -3474,7 +3627,7 @@ end
 ---------------------------------------------------------------------------
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
-                    "castShow", "castText", "castIcon", "smoothBars", "healPrediction", "absorbs",
+                    "castShow", "castText", "castIcon", "smoothBars", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "nameSize", "nameColor", "nameColorRGB",
@@ -4004,6 +4157,7 @@ local function buildSettings()
         B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
         B.check("healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true)
         B.check("absorbs", "Absorbs", "Damage shields and healing absorbs on the health bars.", true)
+        B.check("damageTrail", "Damage trail", "When health drops, the part just lost stays in red for a moment, then slides away.", true)
 
         B.section("Buffs and debuffs", false)
         B.dropdown("auraTimer", "Time left", "How each icon shows the time it has left, on every frame.", "both",
@@ -4091,6 +4245,10 @@ local function buildSettings()
         B.fade(unit, setSetting, "As health drops, the health colour (whichever you picked above) shifts towards red, or through your own stops.")
         B.check("healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true)
         B.check("absorbs", "Absorbs", "Damage shields past the end of its health, and healing absorbs eating back into it in red.", true)
+        B.check("damageTrail", "Damage trail", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true)
+        if unit == "target" or unit == "focus" then
+            B.check("damagePredict", "Damage prediction", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true)
+        end
 
         B.section("Buffs and debuffs", false)
         local buffs = B.check("auraBuffs", "Buffs", nil, defaultFor(unit, "auraBuffs"))
@@ -4319,6 +4477,8 @@ SlashCmdList.WEBBYFRAMES = function(msg)
             .. ", GetSpellPowerCost " .. (GetSpellPowerCost and "yes" or "no"))
         print(p .. "last cast: " .. tostring(f.costInfo or "none yet (cast something with a cast time, then try again)"))
         print(p .. "bar: " .. (f.costBar:IsShown() and "showing" or "hidden") .. ", width " .. tostring(math.floor(f.costBar:GetWidth() or 0)))
+        local t = frames.target
+        print(p .. "damage prediction, last cast at an enemy: " .. tostring(t and t.dmgInfo or "none yet"))
     elseif msg == "errors" then
         -- the errors caught while updating the frames (each shown once)
         if #updateErrors == 0 then print("|cff33ccffWebby Frames:|r no errors caught.") end

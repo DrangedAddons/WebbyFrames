@@ -1,7 +1,8 @@
 # Changelog
 
 ## 1.7.7
-- Release workflow: only release when a commit says [release] (or run by hand); other pushes just land on main
+- Damage trail (every frame and All frames, on by default): when health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.
+- Damage prediction (target and focus, on by default): while you cast at an enemy, the damage your spell will do (from its tooltip) shows lighter at the end of its health. `/webby cost` shows what it read.
 
 ## 1.7.6
 - Corner accent (Player page): Retail's pointed corner, or Forever's older rounder one (no longer in the game, so it's bundled). The frame colour and the resting / combat glow follow either.
