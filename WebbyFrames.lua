@@ -224,11 +224,9 @@ end
 -- Options that are no longer options: always their default, whatever an older version saved (the
 -- name / number text, and smooth bars, which are always on).
 local FIXED = { nameSize = true, nameColor = true, textColor = true, textSize = true, textAnchor = true, smoothBars = true }
--- Choices that were taken out, read as what's left: frame colours dark, silver and the unit's class ->
--- gold; threat colours other than the gradient and Blizzard's -> the gradient.
+-- Frame colours that were taken out, read as gold: dark, silver, and the unit's class.
 local RETIRED = {
     frameTint = { dark = "default", silver = "default", unitclass = "default" },
-    threatColors = { status = "gradient", colorblind = "gradient", class = "gradient" },
 }
 
 local function getSetting(unit, key)
@@ -1779,35 +1777,20 @@ local function updateIndicators(f)
     end
 end
 
--- Threat, worked out the way Foofi's ThreatDisplay does it:
--- - the percentage is your RAW threat against the mob's current target (melee pulls at about 110%, ranged
---   at about 130%; it stops changing once you have aggro), or the scaled one (100% = a pull from where
---   you stand) when there's no raw figure
--- - the differential is your threat minus the highest in your group (+0 when you're top, -500 when
---   someone has 500 more)
--- - colours by threat status: 0 safe, 1 about to pull, 2 tanking (insecurely), 3 tanking (securely)
-local THREAT_SCHEMES = {
-    status     = { [0] = { 1, 1, 0 }, [1] = { 1, 0, 0 }, [2] = { 0, 0.5, 1 }, [3] = { 0.7, 0, 0.7 } },
-    colorblind = { [0] = { 0.9, 0.9, 0.9 }, [1] = { 1, 0.5, 0 }, [2] = { 0, 0.7, 1 }, [3] = { 1, 1, 0 } },
-}
-
+-- Threat percentage, the way Foofi's ThreatDisplay reads the raw number: yours against the mob's
+-- current target (melee pulls at about 110%, ranged at about 130%). While you hold aggro that raw
+-- number freezes, so updateThreat uses your threat against the next highest in the group instead.
+-- Colour is the gradient (green to red on the scaled percent) or Blizzard's own threat colours.
+-- An older saved choice (status, colourblind, class) reads as the gradient.
 local function threatColor(base, status, scaled)
     local scheme = getSetting(base, "threatColors")
     local r, g, b
     pcall(function()
-        if scheme == "gradient" then
-            -- green -> yellow -> red on the scaled percent (100 = a pull)
-            local p = math.max(0, math.min(1, (scaled or 0) / 100))
-            if p < 0.5 then r, g, b = p * 2, 1, 0 else r, g, b = 1, 1 - ((p - 0.5) * 2), 0 end
-        elseif scheme == "class" then
-            local c = RAID_CLASS_COLORS[select(2, UnitClass("player"))]
-            if c then r, g, b = c.r, c.g, c.b end
-        elseif scheme == "blizzard" then
+        if scheme == "blizzard" then
             r, g, b = GetThreatStatusColor(status)
         else
-            local s = THREAT_SCHEMES[scheme] or THREAT_SCHEMES.status
-            local c = s[status] or s[0]
-            r, g, b = c[1], c[2], c[3]
+            local p = math.max(0, math.min(1, (scaled or 0) / 100))
+            if p < 0.5 then r, g, b = p * 2, 1, 0 else r, g, b = 1, 1 - ((p - 0.5) * 2), 0 end
         end
     end)
     if not r then r, g, b = 1, 1, 0 end
