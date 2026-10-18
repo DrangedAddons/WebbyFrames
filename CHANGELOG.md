@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.7.7
+- Release workflow: only release when a commit says [release] (or run by hand); other pushes just land on main
+
 ## 1.7.6
 - Corner accent (Player page): Retail's pointed corner, or Forever's older rounder one (no longer in the game, so it's bundled). The frame colour and the resting / combat glow follow either.
 
