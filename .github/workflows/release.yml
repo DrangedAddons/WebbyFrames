@@ -19,7 +19,7 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths-ignore: ['.github/tools/**']
+    # (no paths filter: an empty commit asking for a release has no files, and a filter skipped it)
   workflow_dispatch:
 
 permissions:
