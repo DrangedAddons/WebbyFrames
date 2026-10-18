@@ -20,20 +20,19 @@ number), `/webby threat` (what the game reports for your target's threat), `/web
 `/webby errors`, `/webby help`.
 
 ## Options per frame
-- **Frame:** scale, name, portrait (picture or class icon), frame colour (gold, dark, silver, your class, the
-  unit's class or any colour; the player's resting glow follows it), combo points (target), druid mana in bear and cat form (player), pet happiness (pet)
+- **Frame:** show or hide (target of target, focus, focus target, pet), scale, name, portrait (picture or class
+  icon), frame colour (gold, your class colour or any colour; the player's resting glow follows it), corner
+  accent and spell costs (player), combo points (target; rogues, and druids in cat form), druid mana in bear
+  and cat form, movable in Edit Mode (player; druids), pet happiness (pet)
 - **Bars:** health and power textures, font (SharedMedia ones too), numbers always / on mouseover / never as
-  totals, percentages or both, smooth bars
-- **Text:** name colour (gold, white, class, reaction or any colour) and size; number colour (theirs or any
-  colour), size and position
-- **Health:** class or reaction colour, enemy NPC colour, fade as health drops (automatic or your own stops),
-  incoming heals, absorbs
+  totals, percentages or both
+- **Health bar:** class or reaction colour, enemy NPC colour, fade to red as health drops (automatic or your own
+  stops), incoming heals, shields and heal absorbs, recent damage, spell damage preview (target, focus)
 - **Buffs and debuffs:** buffs and debuffs sized separately, only your debuffs, below / above the frame or
   dragged anywhere in Edit Mode, row direction, gap, per row, how many, stack size, and time left as a sweep,
   numbers, both or nothing
 - **Cast bar and threat** (target, focus): a cast bar built into the frame art (spell name and icon), and
-  threat as a glow and / or a % (by the raid marker or in a box), in status, colourblind, gradient, class or
-  Blizzard's colours
+  threat as a glow and / or a % (by the raid marker or in a box), green to red or in Blizzard's colours
 
 Always on: the player's corner accent, raid markers, combat swords and resting Zzz, the PvP shield, enemy level
 colours (and the skull for unknown levels). Combat numbers on the player, target and focus have one switch on

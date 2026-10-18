@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.8.0
+Tidier options
+- Checkboxes that belong together now sit side by side, two to a row.
+- Options that depend on another one only appear while it's on (the fade-to-red colours and stops, the custom colour pickers, the cast bar's name and icon, the spell cost shading).
+- "Health" is now "Health bar", with clearer names: Health colour, Enemy NPC colour, Fade to red as health drops, Shields and heal absorbs, Show recent damage, Preview spell damage.
+- The name and number text options are gone (the defaults are kept), and smooth bars are always on. Your own name always shows on the player frame.
+- Frame colour: Gold, Class colour or Custom.
+- Threat colours: Green to red, or Blizzard's.
+
+Class options
+- Druid mana is only offered to druids, and the bar can be dragged anywhere in Edit Mode.
+- Combo points are only offered to rogues and druids, and for druids only show in cat form.
+
 ## 1.7.14
 - Show or hide frames: target of target, focus, focus target and pet can each be turned off (General page, or "Show this frame" on the frame's own page). A frame that's off stays hidden, in Edit Mode too. The player and target frames are always on.
 

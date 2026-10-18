@@ -21,9 +21,9 @@ local function hasCastAndThreat(unit) return unit == "target" or unit == "focus"
 local function hasCorner(unit) return unit == "player" end
 
 local COLOR_MODES = {
-    { "smart",    "Class (players), reaction (NPCs)" },
+    { "smart",    "Class for players, reaction for NPCs" },
     { "class",    "Class colour (players only)" },
-    { "reaction", "Reaction colour" },
+    { "reaction", "By reaction" },
     { "plain",    "Plain green" },
 }
 
@@ -50,7 +50,7 @@ local UNIT_DEFAULTS = {
 local DEFAULT_SETTINGS = {
     scale = 1, showName = true, healthFade = false, textMode = "always", textFormat = "value", barTexture = "default", font = "default", threatShow = "both",
     threatStyle = "text",       -- the threat %: "text" (just the number, by the raid marker) or "box" (above the name)
-    threatColors = "status",    -- "status", "colorblind", "gradient", "class" or "blizzard"
+    threatColors = "gradient",  -- "gradient" (green to red) or "blizzard"
     -- health bar colour: "smart" (class colour for players, reaction colour for NPCs), "class", "reaction" or "plain"
     colorMode = "smart",
     -- fade to red: "auto" (class-aware) or "custom" (up to three stops: health % and colour, 0% = off)
@@ -70,7 +70,7 @@ local DEFAULT_SETTINGS = {
     portraitStyle = "picture",   -- "picture" or "class" (class icon for players)
     -- cast bar (target and focus): Blizzard's own bar drives one built into our frame
     castShow = true, castText = true, castIcon = true,
-    -- frame art colour: "default" (as drawn), "dark", "silver", "class" or "custom" (frameColor = { r, g, b })
+    -- frame art colour: "default" (gold, as drawn), "class" or "custom" (frameColor = { r, g, b })
     frameTint = "default",
     -- health bar extras
     frameShown = true,       -- target of target, focus, focus target, pet: the frame is used at all
@@ -221,9 +221,21 @@ local function defaultFor(unit, key)
     return DEFAULT_SETTINGS[key]
 end
 
+-- Options that are no longer options: always their default, whatever an older version saved (the
+-- name / number text, and smooth bars, which are always on).
+local FIXED = { nameSize = true, nameColor = true, textColor = true, textSize = true, textAnchor = true, smoothBars = true }
+-- Choices that were taken out, read as what's left: frame colours dark, silver and the unit's class ->
+-- gold; threat colours other than the gradient and Blizzard's -> the gradient.
+local RETIRED = {
+    frameTint = { dark = "default", silver = "default", unitclass = "default" },
+    threatColors = { status = "gradient", colorblind = "gradient", class = "gradient" },
+}
+
 local function getSetting(unit, key)
+    if FIXED[key] then return DEFAULT_SETTINGS[key] end
     local u = unitData(unit)
     local v = u and u[key]
+    if v ~= nil and RETIRED[key] and RETIRED[key][v] then return RETIRED[key][v] end
     if v == nil and key == "textMode" and u and u.showText == false then return "off" end
     -- 0.56 and older saved three colour checkboxes; read them as the matching colour mode
     if v == nil and key == "colorMode" and u and (u.smartColor ~= nil or u.classColor ~= nil or u.reactionColor ~= nil) then
@@ -2468,6 +2480,12 @@ end
 function Extras.combo(f)
     local _, class = UnitClass("player")
     local want = (class == "ROGUE" or class == "DRUID") and getSetting("target", "comboPoints")
+    -- druids: only in cat form (the form with energy)
+    if want and class == "DRUID" then
+        local ptoken
+        pcall(function() ptoken = select(2, UnitPowerType("player")) end)
+        if ptoken ~= "ENERGY" then want = false end
+    end
     if not want then
         if f.comboBox then f.comboBox:Hide() end
         return
@@ -2727,6 +2745,7 @@ function Extras.init()
     pcall(ev.RegisterUnitEvent, ev, "UNIT_POWER_UPDATE", "player")
     pcall(ev.RegisterUnitEvent, ev, "UNIT_POWER_FREQUENT", "player")
     pcall(ev.RegisterUnitEvent, ev, "UNIT_MAXPOWER", "player")
+    pcall(ev.RegisterUnitEvent, ev, "UNIT_DISPLAYPOWER", "player")   -- (a druid shifting in or out of cat form)
     pcall(ev.RegisterUnitEvent, ev, "UNIT_HAPPINESS", "pet")
     pcall(ev.RegisterUnitEvent, ev, "UNIT_PET", "player")
     pcall(ev.RegisterEvent, ev, "PET_UI_UPDATE")
@@ -3016,14 +3035,64 @@ local function applyShown(f)
     end
 end
 
+-- The druid mana bar's spot: under the frame art by default, or wherever it was dragged in Edit Mode
+-- (druidManaX / Y: its top left from the player frame's top left).
+local ALT_MANA_AT = { 85, -74 }
+local function placeAltMana(f)
+    local am = f.altMana
+    if not am then return end
+    local x, y = getSetting("player", "druidManaX"), getSetting("player", "druidManaY")
+    if type(x) ~= "number" or type(y) ~= "number" then x, y = ALT_MANA_AT[1], ALT_MANA_AT[2] end
+    am:ClearAllPoints()
+    am:SetPoint("TOPLEFT", f, "TOPLEFT", x, y)
+end
+
+-- In Edit Mode (druids): the bar shows, outlined, and can be dragged; dropped, its spot is saved.
+local function editAltMana(on)
+    local f = frames.player
+    local am = f and f.altMana
+    if not am then return end
+    local druid = select(2, UnitClass("player")) == "DRUID" and getSetting("player", "druidMana")
+    if not am.mover then
+        local m = CreateFrame("Frame", nil, am)
+        m:SetPoint("TOPLEFT", -2, 2); m:SetPoint("BOTTOMRIGHT", 2, -2)
+        m:SetFrameLevel(am:GetFrameLevel() + 5)
+        local t = m:CreateTexture(nil, "OVERLAY")
+        t:SetAllPoints(); t:SetColorTexture(0.25, 0.6, 1, 0.35)
+        m:EnableMouse(true)
+        m:RegisterForDrag("LeftButton")
+        m:SetScript("OnDragStart", function() am:SetMovable(true); am:StartMoving() end)
+        m:SetScript("OnDragStop", function()
+            am:StopMovingOrSizing()
+            local s = am:GetEffectiveScale() / f:GetEffectiveScale()
+            local x = am:GetLeft() * s - f:GetLeft()
+            local y = am:GetTop() * s - f:GetTop()
+            local u = unitData("player", true)
+            u.druidManaX, u.druidManaY = math.floor(x + 0.5), math.floor(y + 0.5)
+            placeAltMana(f)
+        end)
+        m:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText("Druid mana", 1, 1, 1)
+            GameTooltip:AddLine("Drag to move it. Reset the player frame to put it back.", 1, 0.82, 0)
+            GameTooltip:Show()
+        end)
+        m:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        am.mover = m
+    end
+    am.mover:SetShown(on and druid and true or false)
+    if on and druid then am:Show() else pcall(updatePower, f) end
+end
+
 local function applyUnit(f)
     local unit = f.baseUnit
     applyShown(f)
+    if f.altMana then placeAltMana(f) end
     local changed = applyLayout(f)
     if f.small and applySmallLayout(f) then changed = true end
     placeFrame(f, unit)
     f:SetScale(getSetting(unit, "scale"))
-    local showName = getSetting(unit, "showName") and true or false
+    local showName = (unit == "player" or getSetting(unit, "showName")) and true or false   -- (your own name always)
     f.name:SetShown(showName)
     if f.plate then f.plate:SetShown(showName and not f.layoutLeft) end
     applyCorner(f)
@@ -3176,7 +3245,7 @@ local function createFrame(unit)
     -- bar, in the frames' line style (shown by updatePower)
     if isPlayer then
         local am = CreateFrame("Frame", nil, f)
-        am:SetPoint("TOPLEFT", f, "TOPLEFT", 85, -74)
+        am:SetPoint("TOPLEFT", f, "TOPLEFT", 85, -74)      -- (moved to its saved spot by placeAltMana)
         am:SetSize(124, 8)
         am:SetFrameLevel(f:GetFrameLevel() + 2)
         local line = am:CreateTexture(nil, "BACKGROUND", nil, 0)
@@ -3502,10 +3571,12 @@ local function enterSample()
         updateAll(f)
     end
     AuraKit.setEditing(true)       -- the buff / debuff boxes for frames set to "drag in Edit Mode"
+    pcall(editAltMana, true)       -- the druid mana bar, to drag
 end
 
 local function exitSample()
     AuraKit.setEditing(false)
+    pcall(editAltMana, false)
     if InCombatLockdown() then return end
     for _, f in ipairs(sampleFrames()) do
         f.wfUnit = f.baseUnit
@@ -4048,6 +4119,59 @@ sectionWatch:SetScript("OnUpdate", function(_, dt)
     refreshSectionIcons()
 end)
 
+-- Draws one two-checkbox options row (B.pair) on a row frame from our own template: two plain check
+-- boxes (made from textures, so nothing depends on a template this client may not have), each with its
+-- label and tooltip, reused whenever the list recycles the row. items: { setting, label, tip } x 1 - 2.
+local pairErrorShown = false
+local function pairRow(init, frame, items)
+    -- Blizzard's row set-up (its text and tooltip) and the callback handles it clears when the row is
+    -- put away: make sure those are there, or putting the row away errors
+    pcall(frame.Init, frame, init)
+    if frame.Tooltip then frame.Tooltip:EnableMouse(false) end   -- (each box has its own tooltip)
+    if not frame.cbrHandles then
+        local ok, h = pcall(function() return Settings.CreateCallbackHandleContainer() end)
+        frame.cbrHandles = (ok and h) or setmetatable({}, { __index = function() return function() end end })
+    end
+    if frame.Text then frame.Text:SetText("") end
+    if not frame.webbyBoxes then
+        frame.webbyBoxes = {}
+        for i = 1, 2 do
+            local cb = CreateFrame("CheckButton", nil, frame)
+            cb:SetSize(26, 26)
+            -- above the row's own tooltip area, which covers the row and took the clicks
+            cb:SetFrameLevel(frame:GetFrameLevel() + 10)
+            cb:SetPoint("LEFT", frame, i == 1 and "LEFT" or "CENTER", i == 1 and 32 or 8, 0)
+            cb:SetNormalTexture("Interface\\Buttons\\UI-CheckBox-Up")
+            cb:SetPushedTexture("Interface\\Buttons\\UI-CheckBox-Down")
+            cb:SetHighlightTexture("Interface\\Buttons\\UI-CheckBox-Highlight", "ADD")
+            cb:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
+            cb.label = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            cb.label:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+            cb:SetScript("OnClick", function(btn)
+                if btn.item then btn.item.setting:SetValue(btn:GetChecked() and true or false) end
+            end)
+            cb:SetScript("OnEnter", function(btn)
+                if not (btn.item and btn.item.tip) then return end
+                GameTooltip:SetOwner(btn, "ANCHOR_TOPLEFT")
+                GameTooltip:SetText(btn.item.label, 1, 1, 1)
+                GameTooltip:AddLine(btn.item.tip, 1, 0.82, 0, true)
+                GameTooltip:Show()
+            end)
+            cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            frame.webbyBoxes[i] = cb
+        end
+    end
+    for i, cb in ipairs(frame.webbyBoxes) do
+        local item = items[i]
+        cb.item = item
+        cb:SetShown(item ~= nil)
+        if item then
+            cb.label:SetText(item.label)
+            cb:SetChecked(item.setting:GetValue() and true or false)
+        end
+    end
+end
+
 local function buildSettings()
     -- Forever's collapsible section header calls self:OnExpandedChanged() when clicked but doesn't have
     -- one, so every click errored. Every header row is made from this template when the options are
@@ -4099,12 +4223,47 @@ local function buildSettings()
         -- Switches and dropdowns can have options that depend on them (see B.under): when one changes,
         -- the visible rows re-check whether they're enabled.
         local function watch(key)
-            pcall(Settings.SetOnValueChangedCallback, prefix .. key, function() C_Timer.After(0, refreshSettingStates) end)
+            pcall(Settings.SetOnValueChangedCallback, prefix .. key, function()
+                C_Timer.After(0, refreshSettingStates)
+                C_Timer.After(0, repaintSettings)      -- (rows shown only while this is on: see B.showIf)
+            end)
         end
         function B.check(key, label, tip, default)
             local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.Boolean, label, default)
             watch(key)
             return attach(Settings.CreateCheckbox(category, st, tip))
+        end
+        -- Two checkboxes on one row: a and b are { key, label, tip, default } (b may be nil). Each is a
+        -- real setting like B.check's; the row is our own (WebbyFrames.xml), drawn as two boxes with their
+        -- labels side by side. Where the template isn't there, they're two ordinary rows.
+        local pairOK = pcall(function() assert(C_XMLUtil.GetTemplateInfo("WebbyFramesCheckPairTemplate")) end)
+        function B.pair(a, b)
+            if not (pairOK and Settings.CreateElementInitializer) then
+                local i1 = B.check(a[1], a[2], a[3], a[4])
+                local i2 = b and B.check(b[1], b[2], b[3], b[4])
+                return i1, i2
+            end
+            local items = {}
+            for _, d in ipairs({ a, b }) do
+                local st = Settings.RegisterAddOnSetting(category, prefix .. d[1], d[1], proxy, Settings.VarType.Boolean, d[2], d[4])
+                watch(d[1])
+                items[#items + 1] = { setting = st, label = d[2], tip = d[3] }
+            end
+            local init = Settings.CreateElementInitializer("WebbyFramesCheckPairTemplate", { name = "" })
+            -- (always 26px, like a checkbox row: read from the template it could come out 0, which broke
+            -- the whole list's layout below it)
+            init.GetExtent = function() return 26 end
+            init.InitFrame = function(self, frame)
+                local ok, err = pcall(function()
+                    pairRow(self, frame, items)
+                end)
+                if not ok and not pairErrorShown then
+                    pairErrorShown = true
+                    print("|cffff9900Webby Frames:|r an options row couldn't be drawn: " .. tostring(err))
+                end
+            end
+            layout:AddInitializer(init)
+            return attach(init)
         end
         function B.slider(key, label, tip, default, lo, hi, step, fmt)
             local st = Settings.RegisterAddOnSetting(category, prefix .. key, key, proxy, Settings.VarType.Number, label, default)
@@ -4116,6 +4275,13 @@ local function buildSettings()
         function B.under(parent, isOn, ...)
             for _, init in ipairs({ ... }) do
                 if init and parent and init.SetParentInitializer then pcall(init.SetParentInitializer, init, parent, isOn) end
+            end
+        end
+        -- Shows controls only while isOn() is true (hidden rather than greyed; the page redraws when the
+        -- setting it depends on changes).
+        function B.showIf(isOn, ...)
+            for _, init in ipairs({ ... }) do
+                if init and init.AddShownPredicate then pcall(init.AddShownPredicate, init, isOn) end
             end
         end
         function B.dropdown(key, label, tip, default, choices)
@@ -4135,32 +4301,6 @@ local function buildSettings()
                 return attach(init)
             end
         end
-        -- The name and bar number text options (a section of their own).
-        -- read: whose settings to show; set(unit, key, value) for the colour pickers.
-        function B.text(read, set)
-            B.section("Text", false)
-            local sizeText = function(v) v = math.floor(v + 0.5); return v <= 0 and "Default" or string.format("%d", v) end
-            local function picker(colorKey, modeKey)
-                return function()
-                    local c = getSetting(read, colorKey)
-                    local old = type(c) == "table" and { c[1] or 1, c[2] or 1, c[3] or 1 } or { 1, 1, 1 }
-                    Extras.openPicker(old, function(r, g, b)
-                        set(read, colorKey, { r, g, b })
-                        set(read, modeKey, "custom")
-                    end)
-                end
-            end
-            B.dropdown("nameColor", "Name colour", "Default: the font's own gold. Class colour: players in their class colour (NPCs keep the gold). Reaction: green, yellow or red by how they see you. Custom: the colour you pick below.", "default",
-                { { "default", "Default (gold)" }, { "white", "White" }, { "class", "Class colour" }, { "reaction", "Reaction colour" }, { "custom", "Custom" } })
-            B.button("Name colour", "Pick colour", picker("nameColorRGB", "nameColor"), "Pick any colour for the name (sets Name colour to Custom).")
-            B.slider("nameSize", "Name size", "0 keeps the font's own size.", 0, 0, 20, 1, sizeText)
-            B.dropdown("textColor", "Number colour", "The colour of the health and power numbers: the font's own white, or the colour you pick below.", "default",
-                { { "default", "Default" }, { "custom", "Custom" } })
-            B.button("Number colour", "Pick colour", picker("textColorRGB", "textColor"), "Pick any colour for the numbers (sets Number colour to Custom).")
-            B.slider("textSize", "Number size", "The health and power numbers. 0 keeps the font's own size.", 0, 0, 20, 1, sizeText)
-            B.dropdown("textAnchor", "Number position", "Where the numbers sit on their bars.", "center",
-                { { "center", "Centre" }, { "left", "Left" }, { "right", "Right" } })
-        end
         -- Buff and debuff layout details (in the Buffs and debuffs section).
         function B.auraDetails()
             B.dropdown("auraGrowth", "Rows grow", "To the right: the first icon at the left end. To the left: the first icon at the right end, with the row filling leftwards.", "right",
@@ -4170,33 +4310,34 @@ local function buildSettings()
                 function(v) return string.format("%d%%", math.floor(v + 0.5)) end)
         end
         -- Fade to red with its style and custom stops. read: whose settings to show; set(unit, key, value).
+        -- Fade to red, with its colours and (only while those are your own) the three stops; each part
+        -- shows only while what it depends on is on. read: whose settings to show; set(unit, key, value).
         function B.fade(read, set, tip)
-            local fade = B.check("healthFade", "Fade to red", tip, false)
+            local fade = B.check("healthFade", "Fade to red as health drops", tip, false)
             local function fadeOn() return getSetting(read, "healthFade") and true or false end
-            local style = B.dropdown("fadeStyle", "Fade style", "Automatic: the colour turns to red around the colour wheel (shamans, mages and warlocks each have their own route), and is fully red from 25% health.\n\nCustom stops: up to three stops below, each a health % and a colour.", "auto",
-                { { "auto", "Automatic" }, { "custom", "Custom stops" } })
+            local style = B.dropdown("fadeStyle", "Fade colours", "Automatic: the colour turns to red round the colour wheel (shamans, mages and warlocks each have their own route), fully red from 25% health.\n\nMy own: up to three colour stops, each at a health % you choose.", "auto",
+                { { "auto", "Automatic" }, { "custom", "My own" } })
             B.under(fade, fadeOn, style)
+            B.showIf(fadeOn, style)
             local function custom() return fadeOn() and getSetting(read, "fadeStyle") == "custom" end
             local pctText = function(v) v = math.floor(v + 0.5); return v <= 0 and "Off" or string.format("%d%%", v) end
-            -- (only real settings go under the style: Blizzard's button rows error when made to depend on
-            -- another setting, so the colour buttons are plain rows that only act while Custom is on)
-            local inits = { B.check("fadeBlend", "Smooth blend", "On: the colours blend from one stop to the next. Off: the bar switches colour right at each stop.", true) }
+            local inits = { B.check("fadeBlend", "Blend between stops", "On: the colour blends from one stop to the next. Off: the bar changes colour right at each stop.", true) }
             local names = { "First", "Second", "Third" }
             for i = 1, 3 do
-                inits[#inits + 1] = B.slider("fade" .. i .. "Pct", names[i] .. " stop", "The health % at which the bar reaches this stop's colour. 0 turns the stop off.",
+                inits[#inits + 1] = B.slider("fade" .. i .. "Pct", names[i] .. " stop at", "The health % at which the bar reaches this stop's colour. 0 turns the stop off.",
                     DEFAULT_SETTINGS["fade" .. i .. "Pct"], 0, 100, 5, pctText)
             end
             B.under(style, custom, unpack(inits))
+            B.showIf(custom, unpack(inits))
+            -- (Blizzard's button rows error when made to depend on another setting, so the colour buttons
+            -- are only shown / hidden, not indented)
             for i = 1, 3 do
-                B.button(names[i] .. " stop colour", "Pick colour", function()
-                    if not custom() then
-                        print("|cff33ccffWebby Frames:|r set Fade style to Custom stops first.")
-                        return
-                    end
+                local btn = B.button(names[i] .. " stop colour", "Pick colour", function()
                     local c = getSetting(read, "fade" .. i .. "Color")
                     local old = type(c) == "table" and { c[1] or 1, c[2] or 1, c[3] or 1 } or { 1, 1, 1 }
                     Extras.openPicker(old, function(r, g, b) set(read, "fade" .. i .. "Color", { r, g, b }) end)
-                end, "The bar's colour at the " .. names[i]:lower() .. " stop. Works when Fade style is set to Custom stops.")
+                end, "The bar's colour at the " .. names[i]:lower() .. " stop.")
+                B.showIf(custom, btn)
             end
         end
         return B
@@ -4219,14 +4360,16 @@ local function buildSettings()
         })
         local B = builders(root, rootLayout, general, "WEBBY_general_")
         B.header("Webby Frames  |cff808080v" .. addonVersion() .. "|r")
-        B.check("enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames.\n\n|cffffd100Needs a /reload.|r", true)
-        B.check("combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on the player, target and focus frames.", true)
+        B.pair({ "enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames.\n\n|cffffd100Needs a /reload.|r", true },
+               { "combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on the player, target and focus frames.", true })
 
         B.header("Frames")
         -- which of the optional frames are used (player and target always are)
-        for _, unit in ipairs({ "targettarget", "focus", "focustarget", "pet" }) do
-            B.check("show_" .. unit, UNIT_LABEL[unit], "Show the " .. UNIT_LABEL[unit]:lower() .. " frame. Turned off, it stays hidden, in Edit Mode too. (Changes made in combat apply when it ends.)", true)
+        local function showItem(unit)
+            return { "show_" .. unit, UNIT_LABEL[unit], "Show the " .. UNIT_LABEL[unit]:lower() .. " frame. Turned off, it stays hidden, in Edit Mode too. (Changes made in combat apply when it ends.)", true }
         end
+        B.pair(showItem("targettarget"), showItem("focus"))
+        B.pair(showItem("focustarget"), showItem("pet"))
         B.button("Position", "Open Edit Mode", openEditMode, "Drag the frames where you want them. They snap to each other and to the middle of the screen, and a frame dropped next to another moves with it.")
         B.button("Start over", "Reset all frames", function()
             for _, unit in ipairs(UNITS) do resetFrame(unit) end
@@ -4261,9 +4404,9 @@ local function buildSettings()
         -- (the same sections, in the same order, as each frame's page)
         B.section("Frame", true)
         B.dropdown("frameTint", "Frame colour", "Colours the frame art on every frame. The player's resting glow takes the colour too.", "default",
-            { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "unitclass", "The unit's class colour" }, { "custom", "Custom" } })
-        B.button("Custom colour", "Pick colour", function() Extras.pickColor("player", setAll) end,
-            "Pick any colour for every frame's art (sets Frame colour to Custom).")
+            { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
+        B.showIf(function() return getSetting("player", "frameTint") == "custom" end,
+            B.button("Custom colour", "Pick colour", function() Extras.pickColor("player", setAll) end, "Pick the colour for every frame's art."))
         B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
             { { "picture", "Picture" }, { "class", "Class icon (players)" } })
 
@@ -4276,19 +4419,17 @@ local function buildSettings()
         B.under(numbers, function() return getSetting("player", "textMode") ~= "off" end,
             B.dropdown("textFormat", "Style", "Totals, percentages, or both.", "value",
                 { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
-        B.check("smoothBars", "Smooth bars", "Health and power slide to their new value instead of jumping.", true)
 
-        B.text("player", setAll)
-
-        B.section("Health", false)
-        B.dropdown("npcColor", "Enemy NPCs", "The health colour for hostile NPCs on every frame, when Colour is set to class and reaction, or reaction. Green lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
-            { { "reaction", "Red (reaction colour)" }, { "green", "Green" }, { "custom", "Custom" } })
-        B.button("Enemy NPC colour", "Pick colour", function() Extras.pickNpcColor("target", setAll) end,
-            "Pick any health colour for hostile NPCs on every frame (sets Enemy NPCs to Custom).")
+        B.section("Health bar", false)
+        local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs on every frame, when Health colour is set by reaction. Green lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
+            { { "reaction", "Red" }, { "green", "Green" }, { "custom", "My own" } })
+        B.showIf(function() return getSetting("target", "npcColor") == "custom" end,
+            B.button("Enemy NPC colour", "Pick colour", function() Extras.pickNpcColor("target", setAll) end,
+                "Pick the health colour for hostile NPCs on every frame."))
         B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
-        B.check("healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true)
-        B.check("absorbs", "Absorbs", "Damage shields and healing absorbs on the health bars.", true)
-        B.check("damageTrail", "Damage trail", "When health drops, the part just lost stays in red for a moment, then slides away.", true)
+        B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
+               { "absorbs", "Shields and heal absorbs", "Damage shields and healing absorbs on the health bars.", true })
+        B.pair({ "damageTrail", "Show recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true })
 
         B.section("Buffs and debuffs", false)
         B.dropdown("auraTimer", "Time left", "How each icon shows the time it has left, on every frame.", "both",
@@ -4311,36 +4452,39 @@ local function buildSettings()
 
         -- the frame itself and the icons on its portrait
         B.section("Frame", true)
-        if not ALWAYS_SHOWN[unit] then
-            B.check("frameShown", "Show this frame", "Turned off, the frame stays hidden, in Edit Mode too. Also on the General page.", true)
+        local myClass = select(2, UnitClass("player"))
+        local nameItem = { "showName", "Show name", "The unit's name above its health bar.", true }
+        if unit == "player" then   -- (your own name always shows)
+            B.pair({ "restTint", "Zzz in frame colour", "The resting Zzz by the portrait takes the frame colour (it stays as drawn while the frame is gold).", false })
+        elseif unit == "target" and (myClass == "ROGUE" or myClass == "DRUID") then
+            B.pair(nameItem, { "comboPoints", "Combo points", "Your combo points in an arc round the target's portrait" .. (myClass == "DRUID" and ", while you're in cat form." or "."), true })
+        elseif not ALWAYS_SHOWN[unit] then
+            B.pair({ "frameShown", "Show this frame", "Turned off, the frame stays hidden, in Edit Mode too. Also on the General page.", true }, nameItem)
+        else
+            B.pair(nameItem)
         end
         B.slider("scale", "Scale", "How big the frame is.", defaultFor(unit, "scale"), 0.5, 2, 0.05)
-        B.check("showName", "Name", "The unit's name above its health bar.", true)
         if unit ~= "pet" then   -- (a pet has no class: it always shows its picture)
             B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
                 { { "picture", "Picture" }, { "class", "Class icon (players)" } })
         end
-        B.dropdown("frameTint", "Frame colour", "Colours the frame art: its border, portrait ring, corner accent, level circle and cast bar border. The unit's class colour follows whoever the frame shows (NPCs stay gold)."
+        B.dropdown("frameTint", "Frame colour", "Colours the frame art: its border, portrait ring, corner accent, level circle and cast bar border. Class colour is your class's colour."
             .. (unit == "player" and " The resting glow takes the colour too." or ""), "default",
-            { { "default", "Gold (as drawn)" }, { "dark", "Dark" }, { "silver", "Silver" }, { "class", "Your class colour" }, { "unitclass", "The unit's class colour" }, { "custom", "Custom" } })
-        B.button("Custom colour", "Pick colour", function() Extras.pickColor(unit, setSetting) end,
-            "Pick any colour for the frame art (sets Frame colour to Custom).")
-        if unit == "target" then
-            B.check("comboPoints", "Combo points", "Rogues and druids: your combo points in an arc round the target's portrait.", true)
-        end
+            { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
+        B.showIf(function() return getSetting(unit, "frameTint") == "custom" end,
+            B.button("Custom colour", "Pick colour", function() Extras.pickColor(unit, setSetting) end, "Pick the colour for the frame art."))
         if unit == "player" then
             B.dropdown("cornerStyle", "Corner accent", "The gold corner at the portrait's bottom right: Retail's pointed one, or Forever's older rounder one.", "retail",
                 { { "retail", "Retail" }, { "forever", "Forever" } })
-            B.check("restTint", "Colour the Zzz", "The resting Zzz by the portrait takes the frame colour (it stays as drawn while the frame is gold).", false)
-            local costOn = B.check("costPredict", "Spell cost", "Shows spell costs on your mana (or other power) bar. While you cast, the part the spell will use is shaded; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true)
-            B.under(costOn, function() return getSetting("player", "costPredict") end,
-                B.slider("costShade", "Spell cost shade", "How the cost shows on the bar while you cast: lighter (right) or darker (left), and by how much. The flash when a spell goes off always stays light.", 55, -100, 100, 5,
+            B.pair({ "costPredict", "Show spell costs", "On your mana (or other power) bar: while you cast, the part the spell will use is shaded; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true },
+                   myClass == "DRUID" and { "druidMana", "Druid mana", "While you're in bear or cat form, your mana shows in a slim bar under the frame. Drag it anywhere in Edit Mode.", true } or nil)
+            B.showIf(function() return getSetting("player", "costPredict") and true or false end,
+                B.slider("costShade", "Spell cost shading", "How the cost shows on the bar while you cast: lighter (right) or darker (left), and by how much. The flash when a spell goes off always stays light.", 55, -100, 100, 5,
                     function(v)
                         v = math.floor(v + 0.5)
                         if v == 0 then return "Off" end
                         return string.format(v > 0 and "Lighter %d%%" or "Darker %d%%", math.abs(v))
                     end))
-            B.check("druidMana", "Druid mana", "Druids: while you're in bear or cat form, your mana shows in a slim bar just under the frame.", true)
         end
         if unit == "pet" then
             B.dropdown("petHappy", "Pet happiness", "Hunters: your pet's mood, with its diet, damage and loyalty in the tooltip.\n\nCorner: at the portrait's bottom right, where your frame has its corner point and combat swords.\nLevel badge: at the portrait's bottom left, where your frame has its level circle (the tooltip gives the pet's level).", "corner",
@@ -4357,32 +4501,30 @@ local function buildSettings()
         B.under(numbers, function() return getSetting(unit, "textMode") ~= "off" end,
             B.dropdown("textFormat", "Style", "Totals, percentages, or both.",
                 defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
-        B.check("smoothBars", "Smooth bars", "Health and power slide to their new value instead of jumping.", true)
 
-        B.text(unit, setSetting)
-
-        -- the health bar's colour and what's drawn past its end
-        B.section("Health", false)
+        -- the health bar's colour and what's drawn on and past it
+        B.section("Health bar", false)
         if unit == "pet" then   -- (the pet's own reaction colour flips around, so these two)
-            B.dropdown("petColor", "Colour", "How the pet's health bar is coloured: the same as your player frame's (your class colour, if that's what the player frame uses), or plain green.", "player",
+            B.dropdown("petColor", "Health colour", "The same as your player frame's (your class colour, if that's what the player frame uses), or plain green.", "player",
                 { { "player", "Match the player frame" }, { "plain", "Plain green" } })
         else
-            local colour = B.dropdown("colorMode", "Colour", "How the health bar is coloured.", "smart", COLOR_MODES)
+            local colour = B.dropdown("colorMode", "Health colour", "How the health bar is coloured.", "smart", COLOR_MODES)
             if unit ~= "player" then
-                local npcChoices = { { "reaction", "Red (reaction colour)" }, { "green", "Green" }, { "custom", "Custom" } }
-                B.under(colour, function() local m = getSetting(unit, "colorMode"); return m == "smart" or m == "reaction" end,
-                    B.dropdown("npcColor", "Enemy NPCs", "The health colour for hostile NPCs. Green (or a colour of your own) lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction", npcChoices))
-                B.button("Enemy NPC colour", "Pick colour", function() Extras.pickNpcColor(unit, setSetting) end,
-                    "Pick any health colour for hostile NPCs (sets Enemy NPCs to Custom).")
+                local function byReaction() local m = getSetting(unit, "colorMode"); return m == "smart" or m == "reaction" end
+                local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs. Green (or your own colour) lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
+                    { { "reaction", "Red" }, { "green", "Green" }, { "custom", "My own" } })
+                B.under(colour, byReaction, npc)
+                B.showIf(byReaction, npc)
+                B.showIf(function() return byReaction() and getSetting(unit, "npcColor") == "custom" end,
+                    B.button("Enemy NPC colour", "Pick colour", function() Extras.pickNpcColor(unit, setSetting) end,
+                        "Pick the health colour for hostile NPCs."))
             end
         end
         B.fade(unit, setSetting, "As health drops, the health colour (whichever you picked above) shifts towards red, or through your own stops.")
-        B.check("healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true)
-        B.check("absorbs", "Absorbs", "Damage shields past the end of its health, and healing absorbs eating back into it in red.", true)
-        B.check("damageTrail", "Damage trail", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true)
-        if unit == "target" or unit == "focus" then
-            B.check("damagePredict", "Damage prediction", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true)
-        end
+        B.pair({ "healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true },
+               { "absorbs", "Shields and heal absorbs", "Damage shields in pale blue past the end of its health, and healing absorbs eating back into it in red.", true })
+        B.pair({ "damageTrail", "Show recent damage", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true },
+               (unit == "target" or unit == "focus") and { "damagePredict", "Preview spell damage", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true } or nil)
 
         B.section("Buffs and debuffs", false)
         local buffs = B.check("auraBuffs", "Buffs", nil, defaultFor(unit, "auraBuffs"))
@@ -4403,18 +4545,18 @@ local function buildSettings()
 
         if hasCastAndThreat(unit) then
             B.section("Cast bar and threat", false)
-            local cast = B.check("castShow", "Cast bar", "What the unit is casting, under its mana bar: yellow for a cast, green for a channel, grey when you can't interrupt it, red when interrupted.", true)
-            B.under(cast, isOn("castShow"),
-                B.check("castText", "Spell name", nil, true),
-                B.check("castIcon", "Spell icon", "At the bar's left end.", true))
+            B.check("castShow", "Cast bar", "What the unit is casting, under its mana bar: yellow for a cast, green for a channel, grey when you can't interrupt it, red when interrupted.", true)
+            B.showIf(isOn("castShow"),
+                B.pair({ "castText", "Spell name", "The spell's name on the bar.", true },
+                       { "castIcon", "Spell icon", "At the bar's left end.", true }))
             local threat = B.dropdown("threatShow", "Threat", "Your threat on hostile mobs: a glow round the frame and / or your threat %, both in your threat colour.", "both",
                 { { "both", "Glow and number" }, { "glow", "Glow only" }, { "number", "Number only" }, { "off", "Off" } })
             B.under(threat, function() local m = getSetting(unit, "threatShow"); return m == "both" or m == "number" end,
                 B.dropdown("threatStyle", "Threat number", "Your threat %. About 110% pulls aggro in melee and 130% at range. While you have aggro, it's your threat compared with the next highest in your group.\n\nJust the number: beside the raid marker on the portrait.\nBox: a small box above the end of the name.", "text",
                     { { "text", "Just the number" }, { "box", "In a box above the name" } }))
             B.under(threat, function() return getSetting(unit, "threatShow") ~= "off" end,
-                B.dropdown("threatColors", "Threat colours", "Status: yellow when safe, red when you're about to pull, blue when you have aggro but someone is about to take it, purple when you hold it securely.\nColourblind-friendly: the same in grey, orange, cyan and yellow.\nGradient: green to red as you get closer to pulling.\nYour class colour: always your class colour.\nBlizzard's: the game's own threat colours.", "status",
-                    { { "status", "Status" }, { "colorblind", "Colourblind-friendly" }, { "gradient", "Gradient (green to red)" }, { "class", "Your class colour" }, { "blizzard", "Blizzard's" } }))
+                B.dropdown("threatColors", "Threat colours", "The colour of the glow and the number.\nGreen to red: green when you're safe, turning red as you get closer to pulling aggro.\nBlizzard's: the game's own threat colours.", "gradient",
+                    { { "gradient", "Green to red" }, { "blizzard", "Blizzard's" } }))
         end
 
         B.section("Reset and copy", false)
