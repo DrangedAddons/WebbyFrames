@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.2
+- Threat colours are Green to red or Blizzard's. An older saved choice (status, colourblind, class) draws as the gradient.
+- The frames do less work while they are shown: the cast bar, damage trail, heal and absorb overlays, threat and the options window. What you see is the same.
+
 ## 1.9.1
 - Credits read "Webby, Lexible and Dranged" everywhere: the addon list, the options window, the AddOns options page and the README.
 

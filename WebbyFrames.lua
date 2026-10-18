@@ -11,7 +11,6 @@ WebbyFramesDB = WebbyFramesDB or DFFramesForeverDB or {}
 
 local UNITS = { "player", "target", "targettarget", "focus", "focustarget", "pet" }
 local UNIT_LABEL = { player = "Player", target = "Target", targettarget = "Target of Target", focus = "Focus", focustarget = "Focus Target", pet = "Pet" }
--- (party frames are shelved for now: .github/shelved/party-skin.lua)
 -- Portrait side is fixed per frame: target and focus have it on the right (Retail's target art),
 -- the player and the small frames on the left.
 local function portraitOnLeft(unit) return unit ~= "target" and unit ~= "focus" end
@@ -63,9 +62,9 @@ local DEFAULT_SETTINGS = {
     auraBuffs = false, auraDebuffs = false, auraMine = false,
     auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below", auraTimer = "both",   -- auraDebuffSize follows auraSize until set
     auraGap = 2, auraGrowth = "right", auraStack = 50,      -- gap between icons, row direction, stack count size (% of icon)
-    -- text: name size / outline / colour, bar numbers size / outline / place (size 0 = the font's own)
-    nameSize = 0, nameColor = "default",           -- nameColor "custom": nameColorRGB = { r, g, b }
-    textColor = "default",                         -- the bar numbers; "custom": textColorRGB = { r, g, b }
+    -- locked (no longer options): the font's own size and colour, numbers centred on the bar
+    nameSize = 0, nameColor = "default",
+    textColor = "default",
     textSize = 0, textAnchor = "center",
     portraitStyle = "picture",   -- "picture" or "class" (class icon for players)
     -- cast bar (target and focus): Blizzard's own bar drives one built into our frame
@@ -197,11 +196,44 @@ local DB, lib
 local frames = {}            -- unit -> frame
 local activeLayout = "Default"
 local pendingApply = false
-local settingsCategory
+local Opt                    -- the settings window; filled in below, after the functions that refresh it
 
 ---------------------------------------------------------------------------
 -- Saved settings (per Edit Mode layout)
 ---------------------------------------------------------------------------
+-- Older saved keys, rewritten once per unit table. Live fallbacks (debuff icon size, power texture)
+-- stay in getSetting, because those are "use the other setting until this one is set".
+local migratedUnits = {}
+local function migrateUnit(u)
+    if migratedUnits[u] then return end
+    migratedUnits[u] = true
+    if u.textMode == nil and u.showText == false then u.textMode = "off" end
+    u.showText = nil
+    if u.colorMode == nil and (u.smartColor ~= nil or u.classColor ~= nil or u.reactionColor ~= nil) then
+        if u.smartColor ~= false or (u.classColor and u.reactionColor) then u.colorMode = "smart"
+        elseif u.classColor then u.colorMode = "class"
+        elseif u.reactionColor then u.colorMode = "reaction"
+        else u.colorMode = "plain" end
+    end
+    u.smartColor, u.classColor, u.reactionColor = nil, nil, nil
+    if type(u.healthFade) == "string" then u.healthFade = (u.healthFade ~= "off") end
+    if u.auraPos == "right" then u.auraPos = "custom" end
+    if u.petHappy == nil and u.petHappiness == false then u.petHappy = "off" end
+    u.petHappiness = nil
+    if u.auraTimer == nil and u.auraTimers == false then u.auraTimer = "swipe" end
+    u.auraTimers = nil
+    if u.threatShow == nil and u.showThreat == false then u.threatShow = "off" end
+    u.showThreat = nil
+    if u.threatStyle == "badge" then u.threatStyle = "text" end
+    if u.threatColors and u.threatColors ~= "blizzard" and u.threatColors ~= "gradient" then u.threatColors = "gradient" end
+    local tint = u.frameTint
+    if tint == "dark" or tint == "silver" or tint == "unitclass" then u.frameTint = "default" end
+    -- name / number text and smooth bars are no longer options
+    u.nameSize, u.nameColor, u.nameColorRGB = nil, nil, nil
+    u.textSize, u.textColor, u.textColorRGB, u.textAnchor = nil, nil, nil
+    u.smoothBars = nil
+end
+
 local function unitData(unit, create, layoutName)
     layoutName = layoutName or activeLayout
     DB.layouts = DB.layouts or {}
@@ -212,6 +244,7 @@ local function unitData(unit, create, layoutName)
     end
     local u = l[unit]
     if not u and create then u = {}; l[unit] = u end
+    if u then migrateUnit(u) end
     return u
 end
 
@@ -221,40 +254,12 @@ local function defaultFor(unit, key)
     return DEFAULT_SETTINGS[key]
 end
 
--- Options that are no longer options: always their default, whatever an older version saved (the
--- name / number text, and smooth bars, which are always on).
-local FIXED = { nameSize = true, nameColor = true, textColor = true, textSize = true, textAnchor = true, smoothBars = true }
--- Frame colours that were taken out, read as gold: dark, silver, and the unit's class.
-local RETIRED = {
-    frameTint = { dark = "default", silver = "default", unitclass = "default" },
-}
-
 local function getSetting(unit, key)
-    if FIXED[key] then return DEFAULT_SETTINGS[key] end
     local u = unitData(unit)
     local v = u and u[key]
-    if v ~= nil and RETIRED[key] and RETIRED[key][v] then return RETIRED[key][v] end
-    if v == nil and key == "textMode" and u and u.showText == false then return "off" end
-    -- 0.56 and older saved three colour checkboxes; read them as the matching colour mode
-    if v == nil and key == "colorMode" and u and (u.smartColor ~= nil or u.classColor ~= nil or u.reactionColor ~= nil) then
-        if u.smartColor ~= false or (u.classColor and u.reactionColor) then return "smart" end
-        if u.classColor then return "class" end
-        if u.reactionColor then return "reaction" end
-        return "plain"
-    end
-    -- 0.57 test builds had one icon size and a countdown-numbers checkbox
+    -- 0.57 test builds had one icon size; the power bar's texture follows the health bar's until it's set
     if v == nil and key == "auraDebuffSize" then return getSetting(unit, "auraSize") end
-    -- the power bar's texture follows the health bar's until it's set (there used to be one for both)
     if v == nil and key == "powerTexture" then return getSetting(unit, "barTexture") end
-    -- older builds: the low health fade had styles, aura position had "right of the frame"
-    if key == "healthFade" and type(v) == "string" then return v ~= "off" end
-    if key == "auraPos" and v == "right" then v = "custom" end
-    if v == nil and key == "petHappy" and u and u.petHappiness == false then return "off" end
-    if v == nil and key == "auraTimer" and u and u.auraTimers == false then return "swipe" end
-    -- the threat switch became a choice of glow, number, both or off
-    if v == nil and key == "threatShow" and u and u.showThreat == false then return "off" end
-    -- the round threat badge is gone: it reads as just the number, in the same spot
-    if key == "threatStyle" and v == "badge" then v = "text" end
     if v == nil then v = defaultFor(unit, key) end
     return v
 end
@@ -506,11 +511,10 @@ local function resolveFont(key)
     end
 end
 
--- Font and size for the name ("name...") and the bar numbers ("text..."): a size of 0 keeps each font
--- string's own; the numbers' colour (their own, or one you pick) and their place on their bar.
+-- The chosen font, at each string's own size. Name and number size, colour and anchor are locked:
+-- the font's own size and colour, numbers centred on their bar.
 local function applyFont(f)
-    local base = f.baseUnit
-    local path = resolveFont(getSetting(base, "font"))
+    local path = resolveFont(getSetting(f.baseUnit, "font"))
     f.fontDefaults = f.fontDefaults or {}
     for _, fs in ipairs({ f.name, f.hpText, f.mpText }) do
         if fs then
@@ -520,33 +524,19 @@ local function applyFont(f)
                 f.fontDefaults[fs] = { fp, fz, ff, r, g, b }
             end
             local d = f.fontDefaults[fs]
-            local pre = (fs == f.name) and "name" or "text"
-            local size = getSetting(base, pre .. "Size")
-            size = (type(size) == "number" and size > 0) and size or d[2]
-            if size and fs ~= f.name and fs == f.mpText and getSetting(base, "textSize") > 0 then
-                size = math.max(6, size - 1)          -- the power bar is thinner: its number a size down
-            end
-            local ol = d[3]
-            if fs ~= f.name then
-                -- the numbers' colour: their own, or the one picked
-                local c = getSetting(base, "textColor") == "custom" and getSetting(base, "textColorRGB")
-                if type(c) == "table" then fs:SetTextColor(c[1] or 1, c[2] or 1, c[3] or 1)
-                elseif d[4] then fs:SetTextColor(d[4], d[5], d[6]) end
-            end
+            local size, ol = d[2], d[3]
+            if fs ~= f.name and d[4] then fs:SetTextColor(d[4], d[5], d[6]) end
             local ok = false
             if path and size then ok = fs:SetFont(path, size, ol) end
             if not ok and d[1] then fs:SetFont(d[1], size or d[2], ol) end
         end
     end
-    -- the numbers: in the middle of their bar, or at its left or right end
-    local where = getSetting(base, "textAnchor")
     for _, pair in ipairs({ { f.hpText, f.hp }, { f.mpText, f.mp } }) do
         local fs, bar = pair[1], pair[2]
         if fs and bar then
             fs:ClearAllPoints()
-            if where == "left" then fs:SetPoint("LEFT", bar, "LEFT", 4, 0); fs:SetJustifyH("LEFT")
-            elseif where == "right" then fs:SetPoint("RIGHT", bar, "RIGHT", -4, 0); fs:SetJustifyH("RIGHT")
-            else fs:SetPoint("CENTER", bar, "CENTER", 0, 0); fs:SetJustifyH("CENTER") end
+            fs:SetPoint("CENTER", bar, "CENTER", 0, 0)
+            fs:SetJustifyH("CENTER")
         end
     end
 end
@@ -559,6 +549,7 @@ end
 local FADE_RED    = { 0.89, 0.19, 0.19 }
 local FADE_RED_AT = 0.25
 local fadeCurves = {}
+local fadeMemo = {}          -- unit -> last custom-fade inputs and the curve they built
 
 -- The blue and purple classes sit close together on the colour wheel, so going round it a mage would pass
 -- through shaman blue. They get their own routes to red instead, kept apart by lightness as well as hue:
@@ -644,47 +635,61 @@ end
 -- keeps its colour; with fadeBlend the colours blend from one stop to the next, without it the bar
 -- switches colour right at each stop. Below the last stop it stays that stop's colour.
 local function getCustomFadeCurve(unit, r, g, b)
+    local p1, c1 = getSetting(unit, "fade1Pct"), getSetting(unit, "fade1Color")
+    local p2, c2 = getSetting(unit, "fade2Pct"), getSetting(unit, "fade2Color")
+    local p3, c3 = getSetting(unit, "fade3Pct"), getSetting(unit, "fade3Color")
+    local blend = getSetting(unit, "fadeBlend") and true or false
+    local prev = fadeMemo[unit]
+    if prev and prev[1] == blend and prev[2] == r and prev[3] == g and prev[4] == b
+        and prev[5] == p1 and prev[6] == c1 and prev[7] == p2 and prev[8] == c2
+        and prev[9] == p3 and prev[10] == c3 then
+        return prev[11]
+    end
     local stops = {}
-    for i = 1, 3 do
-        local pct, col = getSetting(unit, "fade" .. i .. "Pct"), getSetting(unit, "fade" .. i .. "Color")
+    local function add(pct, col)
         if type(pct) == "number" and pct > 0 and type(col) == "table" then
             stops[#stops + 1] = { math.min(pct, 100) / 100, col[1] or 1, col[2] or 1, col[3] or 1 }
         end
     end
-    if #stops == 0 then return nil end
-    table.sort(stops, function(a, z) return a[1] > z[1] end)
-    local blend = getSetting(unit, "fadeBlend") and true or false
-    local parts = { blend and "b" or "s", string.format("%.2f:%.2f:%.2f", r, g, b) }
-    for _, s in ipairs(stops) do parts[#parts + 1] = string.format("%.2f:%.2f:%.2f:%.2f", s[1], s[2], s[3], s[4]) end
-    local key = "custom|" .. table.concat(parts, "|")
-    local c = fadeCurves[key]
-    if c ~= nil then return c or nil end
-    fadeCurves[key] = false
-    pcall(function()
-        if not (C_CurveUtil and C_CurveUtil.CreateColorCurve and CreateColor) then return end
-        -- the points, from full health down: { health fraction, r, g, b }
-        local pts = { { 1, r, g, b } }
-        for i, s in ipairs(stops) do
-            if not blend then
-                -- hold the colour above until just over the stop, then switch
-                local prev = (i == 1) and { 0, r, g, b } or stops[i - 1]
-                pts[#pts + 1] = { s[1] + 0.001, prev[2], prev[3], prev[4] }
-            end
-            pts[#pts + 1] = s
+    add(p1, c1); add(p2, c2); add(p3, c3)
+    local curve
+    if #stops > 0 then
+        table.sort(stops, function(a, z) return a[1] > z[1] end)
+        local parts = { blend and "b" or "s", string.format("%.2f:%.2f:%.2f", r, g, b) }
+        for _, s in ipairs(stops) do parts[#parts + 1] = string.format("%.2f:%.2f:%.2f:%.2f", s[1], s[2], s[3], s[4]) end
+        local key = "custom|" .. table.concat(parts, "|")
+        local c = fadeCurves[key]
+        if c == nil then
+            fadeCurves[key] = false
+            pcall(function()
+                if not (C_CurveUtil and C_CurveUtil.CreateColorCurve and CreateColor) then return end
+                -- the points, from full health down: { health fraction, r, g, b }
+                local pts = { { 1, r, g, b } }
+                for i, s in ipairs(stops) do
+                    if not blend then
+                        -- hold the colour above until just over the stop, then switch
+                        local held = (i == 1) and { 0, r, g, b } or stops[i - 1]
+                        pts[#pts + 1] = { s[1] + 0.001, held[2], held[3], held[4] }
+                    end
+                    pts[#pts + 1] = s
+                end
+                local last = stops[#stops]
+                pts[#pts + 1] = { 0, last[2], last[3], last[4] }
+                table.sort(pts, function(a, z) return a[1] < z[1] end)
+                local made = C_CurveUtil.CreateColorCurve()
+                pcall(function() made:SetType(Enum.LuaCurveType.Linear) end)
+                local lastX
+                for _, p in ipairs(pts) do
+                    local x = math.max(0, math.min(1, p[1]))
+                    if x ~= lastX then made:AddPoint(x, CreateColor(p[2], p[3], p[4], 1)); lastX = x end
+                end
+                fadeCurves[key] = made
+            end)
         end
-        local last = stops[#stops]
-        pts[#pts + 1] = { 0, last[2], last[3], last[4] }
-        table.sort(pts, function(a, z) return a[1] < z[1] end)
-        local curve = C_CurveUtil.CreateColorCurve()
-        pcall(function() curve:SetType(Enum.LuaCurveType.Linear) end)
-        local lastX
-        for _, p in ipairs(pts) do
-            local x = math.max(0, math.min(1, p[1]))
-            if x ~= lastX then curve:AddPoint(x, CreateColor(p[2], p[3], p[4], 1)); lastX = x end
-        end
-        fadeCurves[key] = curve
-    end)
-    return fadeCurves[key] or nil
+        curve = fadeCurves[key] or nil
+    end
+    fadeMemo[unit] = { blend, r, g, b, p1, c1, p2, c2, p3, c3, curve }
+    return curve
 end
 
 -- Returns true when the fade painted the bar.
@@ -753,13 +758,11 @@ end
 
 local refreshText   -- defined with the settings code below
 
--- Sets a bar's value, sliding to it (Blizzard's own interpolation, so protected values are fine) when
--- the frame's "Smooth bars" option is on and the client supports it.
+-- Sets a bar's value, sliding to it (Blizzard's own interpolation, so protected values are fine).
+-- Smooth bars are always on.
 local SMOOTH = Enum and Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
 local function setBarValue(f, bar, value)
-    if SMOOTH and getSetting(f.baseUnit, "smoothBars") then
-        if pcall(bar.SetValue, bar, value, SMOOTH) then return end
-    end
+    if SMOOTH and pcall(bar.SetValue, bar, value, SMOOTH) then return end
     bar:SetValue(value)
 end
 
@@ -850,27 +853,37 @@ local function updatePrediction(f)
     for _, bar in ipairs({ f.healBar, f.otherHealBar, f.absorbBar, f.healAbsorbBar }) do styleOverlay(f, bar) end
     local u = f.wfUnit
     local fill = f.hp:GetStatusBarTexture()
+    local healTex = f.healBar:GetStatusBarTexture()
+    local otherTex = f.otherHealBar:GetStatusBarTexture()
+    local absorbTex = f.absorbBar:GetStatusBarTexture()
+    local healAbsTex = f.healAbsorbBar:GetStatusBarTexture()
     local w = f.hp:GetWidth()
-    -- your heals start at the end of the health fill, then everyone else's, then the shield
-    f.healBar:ClearAllPoints()
-    f.healBar:SetPoint("TOPLEFT", fill, "TOPRIGHT")
-    f.healBar:SetPoint("BOTTOMLEFT", fill, "BOTTOMRIGHT")
-    f.healBar:SetWidth(w)
-    local myFill = f.healBar:GetStatusBarTexture()
-    f.otherHealBar:ClearAllPoints()
-    f.otherHealBar:SetPoint("TOPLEFT", myFill, "TOPRIGHT")
-    f.otherHealBar:SetPoint("BOTTOMLEFT", myFill, "BOTTOMRIGHT")
-    f.otherHealBar:SetWidth(w)
-    local healFill = f.otherHealBar:GetStatusBarTexture()
-    f.absorbBar:ClearAllPoints()
-    f.absorbBar:SetPoint("TOPLEFT", healFill, "TOPRIGHT")
-    f.absorbBar:SetPoint("BOTTOMLEFT", healFill, "BOTTOMRIGHT")
-    f.absorbBar:SetWidth(w)
-    -- healing absorbs run backwards from the end of the health fill
-    f.healAbsorbBar:ClearAllPoints()
-    f.healAbsorbBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT")
-    f.healAbsorbBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
-    f.healAbsorbBar:SetWidth(w)
+    -- The anchors sit on the health fill, which already moves. Re-anchor only when that fill, an
+    -- overlay texture, or the bar width changes.
+    if fill and healTex and otherTex and absorbTex and healAbsTex
+        and (f.predFill ~= fill or f.predHealTex ~= healTex or f.predOtherTex ~= otherTex
+            or f.predAbsorbTex ~= absorbTex or f.predHealAbsTex ~= healAbsTex or f.predW ~= w) then
+        f.predFill, f.predHealTex, f.predOtherTex = fill, healTex, otherTex
+        f.predAbsorbTex, f.predHealAbsTex, f.predW = absorbTex, healAbsTex, w
+        -- your heals start at the end of the health fill, then everyone else's, then the shield
+        f.healBar:ClearAllPoints()
+        f.healBar:SetPoint("TOPLEFT", fill, "TOPRIGHT")
+        f.healBar:SetPoint("BOTTOMLEFT", fill, "BOTTOMRIGHT")
+        f.healBar:SetWidth(w)
+        f.otherHealBar:ClearAllPoints()
+        f.otherHealBar:SetPoint("TOPLEFT", healTex, "TOPRIGHT")
+        f.otherHealBar:SetPoint("BOTTOMLEFT", healTex, "BOTTOMRIGHT")
+        f.otherHealBar:SetWidth(w)
+        f.absorbBar:ClearAllPoints()
+        f.absorbBar:SetPoint("TOPLEFT", otherTex, "TOPRIGHT")
+        f.absorbBar:SetPoint("BOTTOMLEFT", otherTex, "BOTTOMRIGHT")
+        f.absorbBar:SetWidth(w)
+        -- healing absorbs run backwards from the end of the health fill
+        f.healAbsorbBar:ClearAllPoints()
+        f.healAbsorbBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT")
+        f.healAbsorbBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+        f.healAbsorbBar:SetWidth(w)
+    end
 
     local max = value(UnitHealthMax, u)
     local dead = unitStatus(u) ~= nil
@@ -914,14 +927,6 @@ local function createDamageTrail(f)
     t:SetMinMaxValues(0, 1)
     t:SetValue(0)
     t:Hide()
-    t:SetScript("OnUpdate", function(self, elapsed)
-        if not self.pending then return end
-        self.wait = self.wait - elapsed
-        self.waited = self.waited + elapsed
-        if self.wait > 0 and self.waited < TRAIL_MAXWAIT then return end
-        self.pending = false
-        if not (SMOOTH and pcall(self.SetValue, self, self.target, SMOOTH)) then pcall(self.SetValue, self, self.target) end
-    end)
     f.hpTrail = t
 end
 
@@ -1047,10 +1052,25 @@ local function flyDamage(spell)
     end)
 end
 
+-- Runs only while a trail is waiting to catch up. A shown bar with no script costs nothing per frame.
+local function followTrail(self, elapsed)
+    self.wait = self.wait - elapsed
+    self.waited = self.waited + elapsed
+    if self.wait > 0 and self.waited < TRAIL_MAXWAIT then return end
+    self.pending = false
+    self:SetScript("OnUpdate", nil)
+    if not (SMOOTH and pcall(self.SetValue, self, self.target, SMOOTH)) then pcall(self.SetValue, self, self.target) end
+end
+
 local function updateDamageTrail(f, status)
     local t = f.hpTrail
     if not t then return end
-    if not getSetting(f.baseUnit, "damageTrail") then t:Hide(); return end
+    if not getSetting(f.baseUnit, "damageTrail") then
+        t.pending = false
+        t:SetScript("OnUpdate", nil)
+        t:Hide()
+        return
+    end
     styleOverlay(f, t)
     local u = f.wfUnit
     local max = value(UnitHealthMax, u)
@@ -1064,10 +1084,14 @@ local function updateDamageTrail(f, status)
     t.who = who
     if fresh or status then
         t.pending = false
+        t:SetScript("OnUpdate", nil)
         pcall(t.SetValue, t, now or 0)
     else
         t.target = now
-        if not t.pending then t.pending, t.waited = true, 0 end
+        if not t.pending then
+            t.pending, t.waited = true, 0
+            t:SetScript("OnUpdate", followTrail)
+        end
         t.wait = TRAIL_WAIT
     end
     t:Show()
@@ -1097,7 +1121,9 @@ local function updateHealth(f)
             if f.dmgWho ~= UnitGUID(u) then f.dmgFlying = nil; f.dmgBar:Hide() end
         end)
     end
-    if status then f.hpText:SetText(status) else setBarText(f.hpText, f, "hp") end
+    -- "off" hides the number, so the percent / abbreviate work is wasted. Dead / Ghost / Offline still shows.
+    if status then f.hpText:SetText(status)
+    elseif f.textMode ~= "off" then setBarText(f.hpText, f, "hp") end
     if status ~= f.statusText then
         f.statusText = status
         if refreshText then refreshText(f) end
@@ -1228,7 +1254,7 @@ local function updatePower(f)
     f.mp:SetStatusBarColor(pr, pg, pb, 1)
     f.mp:SetMinMaxValues(0, UnitPowerMax(u))
     setBarValue(f, f.mp, UnitPower(u))
-    setBarText(f.mpText, f, "mp")
+    if f.textMode ~= "off" then setBarText(f.mpText, f, "mp") end
     if f.costBar then pcall(updateCostPrediction, f) end
     -- a druid in bear or cat form: their mana in the slim bar under the frame
     local am = f.altMana
@@ -1245,7 +1271,7 @@ local function updatePower(f)
                 setBarValue(f, am.bar, UnitPower("player", mana))
                 am.text:SetText(AbbreviateLargeNumbers(UnitPower("player", mana)))
             end)
-            am.text:SetShown(getSetting("player", "textMode") ~= "off")
+            am.text:SetShown((f.textMode or getSetting("player", "textMode")) ~= "off")
         end
     end
 end
@@ -1281,6 +1307,13 @@ local function levelDifficultyColor(u, l)
     return c
 end
 
+local function updateLeader(f)
+    if not f.leaderIcon then return end
+    local lead = false
+    pcall(function() lead = UnitIsGroupLeader(f.wfUnit) and true or false end)
+    f.leaderIcon:SetShown(lead)
+end
+
 local function updateInfo(f)
     local u = f.wfUnit
     if not UnitExists(u) then return end
@@ -1293,59 +1326,41 @@ local function updateInfo(f)
     end
     -- level: coloured by difficulty on units you can attack (like the default UI), gold otherwise,
     -- white on the player. A secret level can't be compared, so it is shown as it is, uncoloured.
-    local lr, lg, lb = 1, 0.82, 0
-    if f.baseUnit == "player" then lr, lg, lb = 1, 1, 1 end
-    local skull = false
-    local shown = pcall(function()
-        local l = UnitLevel(u)
-        if l and l > 0 then
-            f.level:SetText(tostring(l))
-            if f.baseUnit ~= "player" and UnitCanAttack("player", u) then
-                local c = levelDifficultyColor(u, l)
-                if c then lr, lg, lb = c[1], c[2], c[3] end
-            end
-        else
-            -- too high to tell (bosses, far higher mobs): the skull, as on Blizzard's frames
-            f.level:SetText("??")
-            if f.baseUnit ~= "player" then lr, lg, lb = 1, 0.1, 0.1; skull = true end
-        end
-    end)
-    if not shown and not pcall(function() f.level:SetFormattedText("%d", UnitLevel(u)) end) then f.level:SetText("") end
-    f.level:SetTextColor(lr, lg, lb)
-    -- the skull sits in the level badge in place of "??"
-    if skull and f.badge and not f.skull then
-        f.skull = f.ov:CreateTexture(nil, "OVERLAY", nil, 4)
-        if hasAtlas("UI-HUD-UnitFrame-Target-HighLevelTarget_Icon") then
-            f.skull:SetAtlas("UI-HUD-UnitFrame-Target-HighLevelTarget_Icon")
-        else
-            f.skull:SetTexture("Interface\\TargetingFrame\\UI-TargetingFrame-Skull")
-        end
-        f.skull:SetSize(16, 16)
-        f.skull:SetPoint("CENTER", f.badge, "CENTER", 0, 0)
-    end
-    if f.skull then f.skull:SetShown(skull) end
-    if f.badge then f.level:SetShown(not (skull and f.skull)) end
-    -- name colour: the font's own (gold), white, the unit's class colour (players; NPCs keep the gold)
-    -- or its reaction colour
-    if not f.nameDefault then f.nameDefault = { f.name:GetTextColor() } end
-    local nm = getSetting(f.baseUnit, "nameColor")
-    local nr, ng, nb = f.nameDefault[1], f.nameDefault[2], f.nameDefault[3]
-    if nm == "white" then nr, ng, nb = 1, 1, 1
-    elseif nm == "class" then
-        pcall(function()
-            if UnitIsPlayer(u) then
-                local c = RAID_CLASS_COLORS[select(2, UnitClass(u))]
-                if c then nr, ng, nb = c.r, c.g, c.b end
+    -- Small frames have no level number.
+    if f.level then
+        local lr, lg, lb = 1, 0.82, 0
+        if f.baseUnit == "player" then lr, lg, lb = 1, 1, 1 end
+        local skull = false
+        local shown = pcall(function()
+            local l = UnitLevel(u)
+            if l and l > 0 then
+                f.level:SetText(tostring(l))
+                if f.baseUnit ~= "player" and UnitCanAttack("player", u) then
+                    local c = levelDifficultyColor(u, l)
+                    if c then lr, lg, lb = c[1], c[2], c[3] end
+                end
+            else
+                -- too high to tell (bosses, far higher mobs): the skull, as on Blizzard's frames
+                f.level:SetText("??")
+                if f.baseUnit ~= "player" then lr, lg, lb = 1, 0.1, 0.1; skull = true end
             end
         end)
-    elseif nm == "reaction" then
-        local r, g, b = reactionColorOf(u)
-        if r then nr, ng, nb = r, g, b end
-    elseif nm == "custom" then
-        local c = getSetting(f.baseUnit, "nameColorRGB")
-        if type(c) == "table" then nr, ng, nb = c[1] or 1, c[2] or 1, c[3] or 1 end
+        if not shown and not pcall(function() f.level:SetFormattedText("%d", UnitLevel(u)) end) then f.level:SetText("") end
+        f.level:SetTextColor(lr, lg, lb)
+        -- the skull sits in the level badge in place of "??"
+        if skull and f.badge and not f.skull then
+            f.skull = f.ov:CreateTexture(nil, "OVERLAY", nil, 4)
+            if hasAtlas("UI-HUD-UnitFrame-Target-HighLevelTarget_Icon") then
+                f.skull:SetAtlas("UI-HUD-UnitFrame-Target-HighLevelTarget_Icon")
+            else
+                f.skull:SetTexture("Interface\\TargetingFrame\\UI-TargetingFrame-Skull")
+            end
+            f.skull:SetSize(16, 16)
+            f.skull:SetPoint("CENTER", f.badge, "CENTER", 0, 0)
+        end
+        if f.skull then f.skull:SetShown(skull) end
+        if f.badge then f.level:SetShown(not (skull and f.skull)) end
     end
-    f.name:SetTextColor(nr, ng, nb)
     -- portrait: the unit's picture, or for players their class icon
     local classIcon = false
     if getSetting(f.baseUnit, "portraitStyle") == "class" then
@@ -1364,11 +1379,7 @@ local function updateInfo(f)
         f.portrait:SetTexCoord(0, 1, 0, 1)
         SetPortraitTexture(f.portrait, u)
     end
-    if f.leaderIcon then
-        local lead = false
-        pcall(function() lead = UnitIsGroupLeader(u) and true or false end)
-        f.leaderIcon:SetShown(lead)
-    end
+    updateLeader(f)
     -- offline players: greyed-out portrait with the red lightning bolt, as on the party frames
     local offline = false
     pcall(function() offline = UnitIsPlayer(u) and UnitIsConnected(u) == false end)
@@ -1598,7 +1609,7 @@ local function createIndicators(f)
         f.threatText:SetPoint("CENTER", box, "CENTER", 0, 0)
         f.threatText:SetJustifyH("CENTER")
         f.threatText:Hide()
-        -- or just the number, at the top of the portrait beside the raid marker (see updateThreat)
+        -- or just the number, at the top of the portrait beside the raid marker (placed by placeIndicators)
         local spot = CreateFrame("Frame", nil, ov)
         spot:SetSize(42, 20)
         spot:SetFrameLevel(ov:GetFrameLevel() + 2)
@@ -1797,20 +1808,32 @@ local function threatColor(base, status, scaled)
     return r, g, b
 end
 
+-- One roster, rebuilt when the group changes. The 0.2s threat tick only reads it.
+local threatRoster = { "pet" }
+local function rebuildThreatRoster()
+    for i = 2, #threatRoster do threatRoster[i] = nil end
+    local n = 1
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            n = n + 1; threatRoster[n] = "raid" .. i
+            n = n + 1; threatRoster[n] = "raidpet" .. i
+        end
+    elseif IsInGroup() then
+        for i = 1, GetNumGroupMembers() - 1 do
+            n = n + 1; threatRoster[n] = "party" .. i
+            n = n + 1; threatRoster[n] = "partypet" .. i
+        end
+    end
+end
+
 -- While you hold aggro the raw % stops updating (it's measured against the mob's target: you), so then
 -- the % is your threat against the next highest in your group, pets included: 255% = 2.55 times theirs.
 -- 100 when no one else is on the mob; nil when the amounts can't be read.
 local function threatOverNext(mob)
     local _, _, _, _, mine = UnitDetailedThreatSituation("player", mob)
     if not mine or mine <= 0 then return nil end
-    local units = { "pet" }
-    if IsInRaid() then
-        for i = 1, GetNumGroupMembers() do units[#units + 1] = "raid" .. i; units[#units + 1] = "raidpet" .. i end
-    elseif IsInGroup() then
-        for i = 1, GetNumGroupMembers() - 1 do units[#units + 1] = "party" .. i; units[#units + 1] = "partypet" .. i end
-    end
     local second = 0
-    for _, gu in ipairs(units) do
+    for _, gu in ipairs(threatRoster) do
         if UnitExists(gu) and not UnitIsUnit(gu, "player") then
             local _, _, _, _, v = UnitDetailedThreatSituation(gu, mob)
             if v and v > second then second = v end
@@ -1837,8 +1860,9 @@ local function updateThreat(f)
         local tanking, st, sc, raw = UnitDetailedThreatSituation("player", u)
         status, scaled = st, sc
         pct = raw or sc
-        -- holding aggro: the raw % would sit frozen, so measure against the next highest instead
-        if tanking then
+        -- holding aggro: the raw % would sit frozen, so measure against the next highest instead.
+        -- Glow-only uses the status from the call above; the group scan is only for the number.
+        if tanking and wantNumber then
             local over
             pcall(function() over = threatOverNext(u) end)
             if over then pct = over end
@@ -1862,16 +1886,10 @@ local function updateThreat(f)
     f.threatText:SetShown(shown and not byMarker)
     if f.threatBox then f.threatBox:SetShown(shown and not byMarker) end
     if f.threatBadge then
-        -- just the number, beside the raid marker on the bars' side, clear of the portrait
+        -- placed by placeIndicators, beside the raid marker on the bars' side
         f.threatBadge:SetShown(shown and byMarker)
-        if f.portrait then
-            f.threatBadge:ClearAllPoints()
-            f.threatBadge:SetPoint("CENTER", f.portrait, "TOP", f.layoutLeft and 36 or -36, -2)
-        end
     end
     f.threatGlow:SetShown(glowOn)
-    -- (the number sits in its own box above the name row now, so the name keeps its full width)
-    if f.nameBaseW then f.name:SetWidth(f.nameBaseW) end
 end
 
 ---------------------------------------------------------------------------
@@ -2041,7 +2059,7 @@ local function placeCastbar(f)
     cb.text:SetShown(getSetting(f.baseUnit, "castText") and true or false)
 end
 
--- Copies Blizzard's bar onto ours, every frame while the unit exists.
+-- Copies Blizzard's bar onto ours while that bar is shown.
 local function mirrorCastbar(f)
     local bar, cb = f.castbar, f.cb
     local box = cb.box
@@ -2085,7 +2103,14 @@ local function adoptCastbar(f, barName)
     f.portraitHolder = holder
     -- (Blizzard's bar stays in its own frame, which hideAllBlizzard keeps running but invisible)
     bar:HookScript("OnShow", function() pcall(placeCastbar, f) end)
-    f:HookScript("OnUpdate", function() mirrorCastbar(f) end)
+    -- Their OnUpdate runs only while their bar is shown, and it stops when the bar hides. The old
+    -- unit-frame poll noticed a hide because our frame stayed shown. This hook needs OnHide, or our
+    -- box stays up after you switch away, or after the cast ends and the fade finishes.
+    bar:HookScript("OnUpdate", function() mirrorCastbar(f) end)
+    bar:HookScript("OnHide", function()
+        local box = f.cb and f.cb.box
+        if box and box:IsShown() then box:Hide() end
+    end)
     placeCastbar(f)
 end
 
@@ -2354,7 +2379,6 @@ function updateAuras(f)       -- (the local declared above)
     c:SetShown(showB or showD)
     f.auraBox = c
     f.auraHeight = 0
-    placeCastbar(f)
 end
 
 
@@ -2653,22 +2677,12 @@ function Extras.happiness(f)
     end
 end
 
--- per-frame part of updateAll
--- Frame colour: the frame art (border, portrait ring, corner accent, level circle, cast bar border)
--- greyed and tinted, or left as drawn. "Silver" is just greyed; "class" is your class colour.
-Extras.TINTS = { dark = { 0.32, 0.32, 0.32 }, silver = { 1, 1, 1 } }
-
--- unit: whose options; shown: the unit the frame shows (for "unitclass": a player's class colour, the
--- art as drawn for NPCs)
-function Extras.tintColor(unit, shown)
+-- Frame colour: gold as drawn, your class colour, or a custom colour.
+function Extras.tintColor(unit)
     local mode = getSetting(unit, "frameTint")
-    if mode == "class" or mode == "unitclass" then
+    if mode == "class" then
         local class
-        pcall(function()
-            local who = (mode == "unitclass") and (shown or unit) or "player"
-            if mode == "unitclass" and not UnitIsPlayer(who) then return end
-            class = select(2, UnitClass(who))
-        end)
+        pcall(function() class = select(2, UnitClass("player")) end)
         local c = class and (RAID_CLASS_COLORS or {})[class]
         if c then return { c.r, c.g, c.b } end
         return nil
@@ -2677,11 +2691,10 @@ function Extras.tintColor(unit, shown)
         if type(c) == "table" then return { c[1] or 1, c[2] or 1, c[3] or 1 } end
         return { 1, 1, 1 }
     end
-    return Extras.TINTS[mode]
 end
 
 function Extras.tint(f)
-    local c = Extras.tintColor(f.baseUnit, f.wfUnit)
+    local c = Extras.tintColor(f.baseUnit)
     f.tintColor = c
     pcall(updateIndicators, f)       -- the resting glow follows the frame colour
     -- the resting Zzz too, when asked (made glow-fit like the resting glow, so a dark frame still
@@ -2754,17 +2767,13 @@ end
 
 function Extras.update(f)
     pcall(Extras.raid, f)
-    -- a frame coloured by the unit's class changes colour with the unit
-    if getSetting(f.baseUnit, "frameTint") == "unitclass" or f.tintFollows then
-        f.tintFollows = getSetting(f.baseUnit, "frameTint") == "unitclass" or nil
-        pcall(Extras.tint, f)
-    end
     if f.baseUnit == "pet" then pcall(Extras.happiness, f) end
     if f.baseUnit == "target" then pcall(Extras.combo, f) end
 end
 
 -- event watchers, once the frames exist
 function Extras.init()
+    rebuildThreatRoster()
     -- Threat on target and focus is re-read 5 times a second (as ThreatDisplay does): while you hold
     -- aggro the game sends few or no threat events, so the number would otherwise stand still.
     C_Timer.NewTicker(0.2, function()
@@ -2933,7 +2942,6 @@ local function applyLayout(f)
         if not f.badge then f.level:SetPoint("TOPRIGHT", f, "TOPRIGHT", -91, -27) end
         f:SetHitRectInsets(15, 20, 15, 20)
     end
-    f.nameBaseW = f.name:GetWidth()   -- updateThreat narrows the name to fit the threat %
     return true
 end
 
@@ -2942,6 +2950,7 @@ end
 ---------------------------------------------------------------------------
 function refreshText(f)
     local mode = getSetting(f.baseUnit, "textMode")
+    f.textMode = mode          -- updateHealth / updatePower / the hover poll read this, not getSetting
     local always = (mode == "always")
     local over = (mode == "mouseover")
     -- Dead / Ghost / Offline always shows, whatever the text mode
@@ -3132,7 +3141,7 @@ local function applyUnit(f)
     applyCorner(f)
     placeIndicators(f)
     pcall(applyFont, f)
-    pcall(updateInfo, f)          -- name colour and portrait style
+    pcall(updateInfo, f)          -- name, level and portrait
     pcall(updateThreat, f)
     pcall(updateIndicators, f)
     pcall(updateAuras, f)
@@ -3165,10 +3174,15 @@ local function applyAll()
     end
 end
 
+local function touchOptions()
+    if Opt and Opt.changed then Opt.changed() end
+end
+
 local function setSetting(unit, key, value)
     unitData(unit, true)[key] = value
     local f = frames[unit]
     if f then
+        if key == "textMode" then f.textMode = value end
         pcall(updateHealth, f)
         pcall(updatePower, f)
         if InCombatLockdown() then pendingApply = true else applyUnit(f) end
@@ -3176,6 +3190,7 @@ local function setSetting(unit, key, value)
     end
     -- the pet's bar can follow the player frame's colour
     if unit == "player" and frames.pet then pcall(updateHealth, frames.pet) end
+    touchOptions()
 end
 
 ---------------------------------------------------------------------------
@@ -3215,9 +3230,9 @@ local function addHover(f)
         self.hover = false; self.hoverHP = false; self.hoverMP = false; refreshText(self)
         if GameTooltip:IsOwned(self) then GameTooltip:Hide() end
     end)
-    -- numbers appear only on the bar under the cursor
+    -- numbers appear only on the bar under the cursor, and only when that option is on
     f:HookScript("OnUpdate", function(self)
-        if not self.hover then return end
+        if not self.hover or self.textMode ~= "mouseover" then return end
         local hp, mp = false, false
         pcall(function()
             local cx, cy = GetCursorPosition()
@@ -3337,15 +3352,17 @@ local function createFrame(unit)
         f.badge:SetAtlas("UI-HUD-UnitFrame-SmallCircle")
     end
 
-    -- Corner accent (DragonflightUI's art; shown by applyCorner), with a solid black silhouette of
-    -- itself, a little larger, behind it so nothing behind the accent can show through.
-    f.cornerBack = ov:CreateTexture(nil, "OVERLAY", nil, 0)
-    setArt(f.cornerBack, ART.corner, false, 1.15)
-    f.cornerBack:SetVertexColor(0, 0, 0, 1)
-    f.cornerBack:SetPoint("CENTER", f, "CENTER", CORNER_POS[1], CORNER_POS[2])
-    f.corner = ov:CreateTexture(nil, "OVERLAY", nil, 1)
-    setArt(f.corner, ART.corner)
-    f.corner:SetPoint("CENTER", f, "CENTER", CORNER_POS[1], CORNER_POS[2])
+    -- Corner accent (DragonflightUI's art; shown by applyCorner), player frame only, with a solid
+    -- black silhouette of itself, a little larger, behind it so nothing behind the accent shows through.
+    if isPlayer then
+        f.cornerBack = ov:CreateTexture(nil, "OVERLAY", nil, 0)
+        setArt(f.cornerBack, ART.corner, false, 1.15)
+        f.cornerBack:SetVertexColor(0, 0, 0, 1)
+        f.cornerBack:SetPoint("CENTER", f, "CENTER", CORNER_POS[1], CORNER_POS[2])
+        f.corner = ov:CreateTexture(nil, "OVERLAY", nil, 1)
+        setArt(f.corner, ART.corner)
+        f.corner:SetPoint("CENTER", f, "CENTER", CORNER_POS[1], CORNER_POS[2])
+    end
 
     f.ov = ov
     -- resting "Z" on the player frame, only while you are resting
@@ -3422,6 +3439,10 @@ local function createFrame(unit)
         elseif event == "PLAYER_REGEN_ENABLED" then self.combatFlag = false; updateIndicators(self)
         elseif event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FLAGS" then updateIndicators(self)
         elseif event:find("^UNIT_THREAT") then updateThreat(self)
+        elseif event == "GROUP_ROSTER_UPDATE" or event == "PARTY_LEADER_CHANGED" then
+            updateLeader(self)
+            pcall(Extras.raid, self)
+            if event == "GROUP_ROSTER_UPDATE" then rebuildThreatRoster() end
         elseif event == "UNIT_AURA" then safely(updateAuras, self)
         elseif event == "UNIT_COMBAT" then
             local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
@@ -3518,8 +3539,6 @@ local function createSmallFrame(unit)
     f.name:SetSize(68, 10)
     f.name:SetJustifyH("LEFT")
     f.name:SetPoint("TOPLEFT", f.portrait, "TOPRIGHT", 2, 0)
-    f.level = ov:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")   -- not shown on this frame, kept so shared code works
-    f.level:Hide()
     f.ov = ov
 
     addHover(f)
@@ -3779,6 +3798,7 @@ local function setupEditMode()
     lib:RegisterCallback("layout", function(layoutName)
         activeLayout = layoutName
         applyAll()
+        touchOptions()
     end)
     lib:RegisterCallback("enter", enterSample)
     lib:RegisterCallback("exit", exitSample)
@@ -3853,11 +3873,10 @@ end
 ---------------------------------------------------------------------------
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
-                    "castShow", "castText", "castIcon", "smoothBars", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castShow", "castText", "castIcon", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
-                    "auraGap", "auraGrowth", "auraStack", "nameSize", "nameColor", "nameColorRGB",
-                    "textSize", "textColor", "textColorRGB", "textAnchor", "portraitStyle" }
+                    "auraGap", "auraGrowth", "auraStack", "portraitStyle" }
 
 function resetFrame(unit)
     if InCombatLockdown() then print("|cff33ccffWebby Frames:|r can't reset in combat."); return end
@@ -3870,6 +3889,7 @@ function resetFrame(unit)
         pcall(updateAll, f)
         if lib then lib:RefreshFrameSettings(f) end
     end
+    touchOptions()
 end
 
 function copySettings(from, to)
@@ -3885,6 +3905,7 @@ function copySettings(from, to)
         pcall(updateAll, f)
         if lib then lib:RefreshFrameSettings(f) end
     end
+    touchOptions()
 end
 
 ---------------------------------------------------------------------------
@@ -3999,6 +4020,7 @@ function Profiles.import(text)
     applyAll()
     for _, f in pairs(frames) do pcall(updateAll, f) end
     if lib then for _, f in pairs(frames) do pcall(lib.RefreshFrameSettings, lib, f) end end
+    touchOptions()
     return true
 end
 
@@ -4056,7 +4078,7 @@ end
 -- can stay open while you play, target things or use Edit Mode. Esc > Options > AddOns > Webby Frames
 -- only describes the addon and has a button that opens this window.
 ---------------------------------------------------------------------------
-local Opt = { pages = {}, order = {}, ROW_H = 28, LABEL_X = 16, CONTROL_X = 300, CONTROL_W = 240, CONTENT_W = 580, MENU_ROWS = 14 }
+Opt = { pages = {}, order = {}, ROW_H = 28, LABEL_X = 16, CONTROL_X = 300, CONTROL_W = 240, CONTENT_W = 580, MENU_ROWS = 14 }
 
 local function addonVersion()
     local v
@@ -4258,10 +4280,17 @@ function Opt.layout()
 end
 
 -- After a change: redraw once, on the next frame (several settings can change in one click).
+-- While a mouse button is down (a slider drag), wait until it is released so the drag isn't reset.
 function Opt.changed()
     if Opt.pendingLayout then return end
     Opt.pendingLayout = true
-    C_Timer.After(0, function() Opt.pendingLayout = false; Opt.layout() end)
+    local function run()
+        local down = IsMouseButtonDown and (IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton"))
+        if down then C_Timer.After(0.05, run); return end
+        Opt.pendingLayout = false
+        Opt.layout()
+    end
+    C_Timer.After(0, run)
 end
 
 function Opt.select(id)
@@ -4349,14 +4378,6 @@ function Opt.buildWindow()
 
     w:SetScript("OnShow", function() Opt.layout() end)
     w:SetScript("OnHide", function() Opt.closeMenu(); GameTooltip:Hide() end)
-    -- picks up changes made elsewhere (Edit Mode's dialogs, a layout switch), but not mid-drag
-    local elapsed = 0
-    w:SetScript("OnUpdate", function(_, dt)
-        elapsed = elapsed + dt
-        if elapsed < 1 then return end
-        elapsed = 0
-        if not (IsMouseButtonDown and (IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton"))) then Opt.layout() end
-    end)
     return w
 end
 
@@ -4410,9 +4431,7 @@ function Opt.buildAddOnsPage()
     hint:SetPoint("TOPLEFT", open, "BOTTOMLEFT", 0, -12)
     hint:SetText("You can also type /webby, or click the Webby Frames minimap button.")
     if Settings and Settings.RegisterCanvasLayoutCategory then
-        local cat = Settings.RegisterCanvasLayoutCategory(p, "Webby Frames")
-        Settings.RegisterAddOnCategory(cat)
-        settingsCategory = cat
+        Settings.RegisterAddOnCategory(Settings.RegisterCanvasLayoutCategory(p, "Webby Frames"))
     elseif InterfaceOptions_AddCategory then
         InterfaceOptions_AddCategory(p)
     end
