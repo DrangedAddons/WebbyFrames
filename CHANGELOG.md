@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.10.1
+- In Edit Mode every frame's buffs and debuffs fill with sample icons (Blizzard's own aura preview), so you can see how they sit, party frames included.
+- Buffs and debuffs "Right of the frame" (party, target of target, focus target, pet): two rows beside the frame, at most a row of buffs and a row of debuffs, the ones that matter first, so nothing spills over the next frame. The party's default, with the members 6 px apart.
+- Debuffs on every frame are in Blizzard's own unit frame order: the ones that matter (boss, crowd control, priority) come first. Nothing is left out.
+- Buffs and debuffs, on every frame's page:
+  - Style: Retail (on a friend, only the buffs you put on them, your heals over time and shields; on an enemy, all their buffs) or Everything. The party starts on Retail, the other frames on Everything.
+  - Dispel glow: the frame glows in the dispel colour when the unit has a debuff you can dispel. Works in combat. On for the party, off for the rest until you turn it on.
+  - Bigger own debuffs: your own debuffs first and bigger (not on the player and pet frames). Off until you turn it on.
+
 ## 1.10.0
 - Frame colour "Class colour" on the target, focus, their targets and the party is now the class of whoever the frame shows (NPCs stay gold). The player and pet frames keep your own class colour.
 

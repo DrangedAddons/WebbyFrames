@@ -21,6 +21,8 @@ local function portraitOnLeft(unit) return unit ~= "target" and unit ~= "focus" 
 local function hasCastAndThreat(unit) return unit == "target" or unit == "focus" end
 -- the pointed corner accent is only offered on the player frame; the rest keep a round ring
 local function hasCorner(unit) return unit == "player" end
+-- your own frames (class colour = yours; no "your debuffs" on them)
+local OWN_CLASS = { player = true, pet = true }
 
 local COLOR_MODES = {
     { "smart",    "Class for players, reaction for NPCs" },
@@ -49,7 +51,8 @@ local UNIT_DEFAULTS = {
     pet = { textMode = "off", textFormat = "percent" },
     focustarget = { textMode = "off", textFormat = "percent" },
     -- party: health as a percentage, and their debuffs (small, one row under each member)
-    party = { textMode = "always", textFormat = "percent", auraDebuffs = true, auraSize = 16, auraPerRow = 6, auraMax = 6 },
+    party = { textMode = "always", textFormat = "percent", auraBuffs = true, auraDebuffs = true, auraSize = 16, auraPerRow = 6, auraMax = 6,
+              auraStyle = "retail", dispelGlow = true, auraPos = "side", partyGap = 6 },
 }
 
 local DEFAULT_SETTINGS = {
@@ -81,7 +84,9 @@ local DEFAULT_SETTINGS = {
     frameShown = true,       -- target of target, focus, focus target, pet, party: the frame is used at all
     -- party: gap between members (room for a row of debuffs), role / leader icons, fading out of range
     partyGap = 24, rangeFade = true,
-    smoothBars = true, healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
+    -- buffs and debuffs: "all" (every buff) or "retail" (the party's default: only your own buffs);
+    -- dispelGlow: the party frame glows in the dispel colour when you can dispel something on it
+    auraStyle = "all", dispelGlow = false, auraMineBig = false,   -- (auraMineBig: your own debuffs first, bigger)    smoothBars = true, healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
     combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus), one General switch
     -- icons and extras
     comboPoints = true,
@@ -2138,6 +2143,8 @@ local function auraAnchor(f, pos)
     end
     if f.small then
         if pos == "above" then return "BOTTOMLEFT", "TOPLEFT", 4, 2 end
+        -- right of the frame: two rows beside its art (the party's default, like Retail's party frames)
+        if pos == "side" then return "TOPLEFT", "TOPRIGHT", -4, -5 end
         return "TOPLEFT", "BOTTOMLEFT", 4, 0
     end
     -- tucked under the frame art's bottom edge, from its left edge (on the player frame, just right of the level circle)
@@ -2165,7 +2172,8 @@ end
 -- buttons we've styled: we give each button its icon texture, cooldown swipe, stack count and dispel
 -- border, and set the layout.
 ---------------------------------------------------------------------------
-local AuraKit = { GROUPS = { "buffs", "debuffs" } }
+-- groups, in the order they show: buffs, your own debuffs (only with "bigger own debuffs"), the rest
+local AuraKit = { GROUPS = { "buffs", "debuffsMine", "debuffs" } }
 
 -- Debuff edge colours by dispel type, as the container wants them (colour objects, "None" for none).
 function AuraKit.dispelColors()
@@ -2230,6 +2238,7 @@ end
 -- Size, sweep, countdown numbers and stack text to the frame's current options.
 function AuraKit.sizeButton(f, b)
     local size = getSetting(f.baseUnit, b.webbyDebuff and "auraDebuffSize" or "auraSize")
+    if b.webbyMine then size = math.floor(size * 1.35 + 0.5) end     -- (your own debuffs, bigger)
     b:SetSize(size, size)
     local swipe, timers = auraTimerParts(f.baseUnit)
     if b.webbyCD then
@@ -2247,6 +2256,13 @@ function AuraKit.sizeButton(f, b)
     end
 end
 
+-- One of Blizzard's aura orders (AuraContainerSortMethod: Default, UnitFrameDebuff, BigDefensive,
+-- Expiration, Name ...), or nil on a client without it. (A global table, not under Enum.)
+function AuraKit.sortBy(name)
+    local E = rawget(_G, "AuraContainerSortMethod") or (Enum and Enum.AuraContainerSortMethod)
+    return E and E[name]
+end
+
 -- The frame's container, made on first use; nil if the client doesn't have AuraContainer.
 function AuraKit.container(f)
     if f.auraContainer ~= nil then return f.auraContainer or nil end
@@ -2254,10 +2270,13 @@ function AuraKit.container(f)
     if not (ok and c) then f.auraContainer = false; return nil end
     local function initBuff(b) pcall(AuraKit.styleButton, f, b) end
     local function initDebuff(b) b.webbyDebuff = true; pcall(AuraKit.styleButton, f, b) end
+    local function initMine(b) b.webbyDebuff, b.webbyMine = true, true; pcall(AuraKit.styleButton, f, b) end
     local ok2 = pcall(function()
         c:SetUnit(f.wfUnit)
         c:AddAuraGroup("buffs", "HELPFUL", { initializeFrame = initBuff })
+        c:AddAuraGroup("debuffsMine", "HARMFUL|PLAYER", { initializeFrame = initMine })
         c:AddAuraGroup("debuffs", "HARMFUL", { initializeFrame = initDebuff })
+        c:SetAuraGroupEnabled("debuffsMine", false)
     end)
     if not ok2 then c:Hide(); f.auraContainer = false; return nil end
     f.auraContainer = c
@@ -2265,6 +2284,74 @@ function AuraKit.container(f)
 end
 
 local updateAuras     -- (below; the mover calls it)
+
+-- Party, dispel glow (Retail's dispel highlight): when a member has a debuff you can dispel, their frame
+-- glows in its dispel type's colour. A second container with one group of at most one "debuff you can
+-- dispel" (HARMFUL|RAID); its button isn't an icon but a copy of the frame's border art, tinted by the
+-- container per dispel type, so the container showing that button is the glow. It works in combat,
+-- when the aura data itself is hidden from addons.
+-- (any frame with "Dispel glow" on; the party's default. The glow is a copy of the frame's own border
+-- art, so it follows the big frames' and the mirrored target art too.)
+local function copyBorder(t, f)
+    t:SetTexture(f.border:GetTexture())
+    t:SetTexCoord(f.border:GetTexCoord())
+end
+function AuraKit.dispelGlow(f)
+    local want = f.border and getSetting(f.baseUnit, "dispelGlow")
+    local c = f.dispelBox
+    if not want then
+        if c then c:Hide() end
+        return
+    end
+    if c == false then return end
+    if c == nil then
+        local ok, box = pcall(CreateFrame, "AuraContainer", nil, f.ov or f, "CustomAuraContainerTemplate")
+        if not (ok and box) then f.dispelBox = false; return end
+        local function init(b)
+            pcall(function()
+                local t = b:CreateTexture(nil, "OVERLAY", nil, 7)
+                t:SetAllPoints()
+                copyBorder(t, f)
+                t:SetBlendMode("ADD")
+                local styles = Enum.CustomAuraButtonDispelTypeTextureStyle
+                b:AddDispelTypeTexture(t, {
+                    style = styles and styles.PreserveAsset,
+                    showWhenHarmful = true,
+                    showWithoutDispelType = false,
+                    customDispelColorMap = AuraKit.dispelColors(),
+                })
+                b:EnableMouse(false)
+                b.webbyGlow = t
+            end)
+            -- (made when a dispellable debuff first lands: the border's size now)
+            pcall(function() b:SetSize(f.border:GetSize()) end)
+        end
+        if not pcall(function()
+            box:SetUnit(f.wfUnit)
+            box:AddAuraGroup("dispel", "HARMFUL|RAID", { initializeFrame = init, maxFrameCount = 1 })
+        end) then box:Hide(); f.dispelBox = false; return end
+        box:SetFrameLevel((f.ov or f):GetFrameLevel() + 3)
+        f.dispelBox = box
+        c = box
+    end
+    pcall(function() if c:GetUnit() ~= f.wfUnit then c:SetUnit(f.wfUnit) end end)
+    -- over the frame's border art, the glow the same size as it
+    local w, h = ART.smallBorder[2], ART.smallBorder[3]
+    pcall(function() w, h = f.border:GetSize() end)
+    c:ClearAllPoints()
+    c:SetPoint("TOPLEFT", f.border, "TOPLEFT")
+    pcall(c.SetSize, c, w, h)
+    local n = 0
+    pcall(function() n = c:GetAuraGroupFrameCount("dispel") end)
+    for i = 1, n do
+        pcall(function()
+            local b = c:GetAuraGroupFrame("dispel", i)
+            b:SetSize(w, h)
+            if b.webbyGlow then copyBorder(b.webbyGlow, f) end   -- (the art can change with the layout)
+        end)
+    end
+    c:Show()
+end
 
 -- every unit frame
 function AuraKit.allFrames()
@@ -2331,9 +2418,15 @@ function AuraKit.placeMover(f, w, h)
 end
 
 -- Edit Mode on / off: show or hide the boxes.
+-- (and the containers' own preview: full rows of sample icons, so you can see how the buffs and debuffs
+-- will sit, party frames included, without anyone having any)
 function AuraKit.setEditing(on)
     AuraKit.editing = on and true or nil
-    for _, f in ipairs(AuraKit.allFrames()) do pcall(updateAuras, f) end
+    for _, f in ipairs(AuraKit.allFrames()) do
+        pcall(updateAuras, f)
+        local c = f.auraContainer
+        if c then pcall(c.SetEditModePreviewEnabled, c, on and true or false) end
+    end
 end
 
 function updateAuras(f)       -- (the local declared above)
@@ -2347,14 +2440,38 @@ function updateAuras(f)       -- (the local declared above)
     local size = math.max(showB and getSetting(base, "auraSize") or 0, showD and getSetting(base, "auraDebuffSize") or 0)
     if size == 0 then size = getSetting(base, "auraSize") end
     local pos = getSetting(base, "auraPos")
+    if pos == "side" and not f.small then pos = "below" end      -- (only the small frames have room beside them)
+    -- beside the frame there's room for two rows: buffs and debuffs a row's worth each at most, so
+    -- together they never spill past the frame (the ones that matter come first)
+    if pos == "side" then max = math.min(max, perRow) end
     local up = (pos == "above")
     local gap = getSetting(base, "auraGap")
     gap = (type(gap) == "number" and gap >= 0) and gap or AURA_GAP
     local leftward = getSetting(base, "auraGrowth") == "left"
     pcall(function() if c:GetUnit() ~= f.wfUnit then c:SetUnit(f.wfUnit) end end)
+    local hostile = false
+    pcall(function() hostile = UnitCanAttack("player", f.wfUnit) and true or false end)
+    -- Debuffs. "Only mine": just yours. "Bigger own debuffs": yours first, bigger (their own group), then
+    -- everyone else's.
+    local onlyMine = getSetting(base, "auraMine") and true or false
+    local big = getSetting(base, "auraMineBig") and not OWN_CLASS[base] and true or false
+    pcall(c.SetAuraGroupEnabled, c, "debuffsMine", showD and big)
+    pcall(c.SetAuraGroupEnabled, c, "debuffs", showD and not (big and onlyMine))
+    pcall(c.SetAuraGroupFilterString, c, "debuffs", big and "HARMFUL|!PLAYER" or (onlyMine and "HARMFUL|PLAYER" or "HARMFUL"))
+    -- Buffs. Retail style: on a friend, only the buffs you put on them (your heals over time, shields);
+    -- on an enemy, all of them. Everything: all of them.
+    local retail = getSetting(base, "auraStyle") == "retail" and not hostile
     pcall(c.SetAuraGroupEnabled, c, "buffs", showB)
-    pcall(c.SetAuraGroupEnabled, c, "debuffs", showD)
-    pcall(c.SetAuraGroupFilterString, c, "debuffs", getSetting(base, "auraMine") and "HARMFUL|PLAYER" or "HARMFUL")
+    pcall(c.SetAuraGroupFilterString, c, "buffs", retail and "HELPFUL|PLAYER" or "HELPFUL")
+    -- Debuffs in Blizzard's own unit frame order (the ones that matter first: boss, crowd control,
+    -- priority), on every frame; nothing is left out, only the order changes.
+    local order = AuraKit.sortBy("UnitFrameDebuff")
+    if order and not f.auraSorted then
+        f.auraSorted = true
+        pcall(c.SetAuraGroupSortMethod, c, "debuffs", order)
+        pcall(c.SetAuraGroupSortMethod, c, "debuffsMine", order)
+    end
+    pcall(AuraKit.dispelGlow, f)
     for _, g in ipairs(AuraKit.GROUPS) do
         pcall(c.SetAuraGroupMaxFrameCount, c, g, max)
         pcall(c.SetAuraGroupLayout, c, g, { elementSpacing = gap, lineSpacing = gap, groupSpacing = gap, groupLineSpacing = gap })
@@ -2691,7 +2808,6 @@ end
 -- Class colour: on the player and pet frames, your class; on the others (target, focus, their targets,
 -- the party), the class of whoever the frame shows, gold for an NPC or no one. who: the unit shown.
 -- ("theirclass" is the party's name for the same thing.)
-local OWN_CLASS = { player = true, pet = true }
 function Extras.tintColor(unit, who)
     local mode = getSetting(unit, "frameTint")
     if mode == "class" or mode == "theirclass" then
@@ -3647,7 +3763,7 @@ end
 function Party.place(f)
     local prev = Party.members[f.partyIndex - 1]
     if not prev then return end
-    local gap = tonumber(getSetting("party", "partyGap")) or 24
+    local gap = tonumber(getSetting("party", "partyGap")) or 6
     f:ClearAllPoints()
     f:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -gap)
 end
@@ -5106,7 +5222,7 @@ local function buildSettings()
         end
         B.slider("scale", "Scale", "How big the frame is.", defaultFor(unit, "scale"), 0.5, 2, 0.05)
         if unit == "party" then
-            B.slider("partyGap", "Spacing", "The gap between party members (leave room for their debuffs).", 24, 0, 60, 1,
+            B.slider("partyGap", "Spacing", "The gap between party members. With buffs and debuffs below the frames, leave room for them (about 20 px a row).", defaultFor("party", "partyGap"), 0, 60, 1,
                 function(v) return string.format("%d px", math.floor(v + 0.5)) end)
             B.pair({ "rangeFade", "Fade when out of range", "Members too far away for your spells fade out.", true })
         end
@@ -5183,6 +5299,12 @@ local function buildSettings()
                (unit == "target" or unit == "focus") and { "damagePredict", "Preview spell damage", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true } or nil)
 
         B.section("Buffs and debuffs", false)
+        -- Retail style, the dispel glow and bigger own debuffs: choices on every frame (the party starts
+        -- Retail with the glow on, the rest as before)
+        B.dropdown("auraStyle", "Style", "Retail: on a friend, only the buffs you put on them (your heals over time, shields); on an enemy, all their buffs.\nEverything: all their buffs.\n\nDebuffs always all show, the ones that matter first.", defaultFor(unit, "auraStyle"),
+            { { "retail", "Retail" }, { "all", "Everything" } })
+        B.pair({ "dispelGlow", "Dispel glow", "The frame glows in the dispel colour (magic blue, curse purple, disease brown, poison green) when the unit has a debuff you can dispel.", defaultFor(unit, "dispelGlow") },
+               (not OWN_CLASS[unit]) and { "auraMineBig", "Bigger own debuffs", "Your own debuffs (your damage over time and so on) first and bigger, so you can keep track of them.", false } or nil)
         local buffs = B.check("auraBuffs", "Buffs", nil, defaultFor(unit, "auraBuffs"))
         B.under(buffs, isOn("auraBuffs"),
             B.slider("auraSize", "Size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, px))
@@ -5190,8 +5312,13 @@ local function buildSettings()
         B.under(debuffs, isOn("auraDebuffs"),
             B.slider("auraDebuffSize", "Size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, px),
             B.check("auraMine", "Only mine", "Only the debuffs you applied.", false))
-        B.dropdown("auraPos", "Position", "Where the icons sit. With \"Drag in Edit Mode\", Edit Mode shows a blue box for them: drag it anywhere.", defaultFor(unit, "auraPos"),
-            { { "below", "Below the frame" }, { "above", "Above the frame" }, { "custom", "Drag in Edit Mode" } })
+        -- (the small frames can also have them beside the frame: two rows, a row of buffs and of debuffs at most)
+        local small = unit == "targettarget" or unit == "focustarget" or unit == "pet" or unit == "party"
+        local positions = { { "below", "Below the frame" }, { "above", "Above the frame" }, { "custom", "Drag in Edit Mode" } }
+        if small then table.insert(positions, 1, { "side", "Right of the frame" }) end
+        B.dropdown("auraPos", "Position", "Where the icons sit."
+            .. (small and " Right of the frame: two rows beside it, at most a row of buffs and a row of debuffs (the ones that matter first), so nothing spills over the next frame." or "")
+            .. " With \"Drag in Edit Mode\", Edit Mode shows a blue box for them: drag it anywhere.", defaultFor(unit, "auraPos"), positions)
         B.button("Move", "Open Edit Mode", openEditMode, "Drag the buffs and debuffs box (Position: Drag in Edit Mode).")
         B.slider("auraPerRow", "Per row", "How many icons fit on a row before the next one starts.", defaultFor(unit, "auraPerRow"), 1, 16, 1, whole)
         B.slider("auraMax", "Most shown", "How many buffs, and how many debuffs, can show at once.", defaultFor(unit, "auraMax"), 1, 32, 1, whole)
