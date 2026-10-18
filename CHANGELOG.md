@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.7.9
+- Damage prediction stays on the bar after the cast while the spell is on its way, until it hits, misses or is resisted (at most 3 seconds). A failed or interrupted cast still clears it at once, as does changing target.
+
 ## 1.7.8
 - No threat on players: enemy players, their pets and totems never show the threat glow or %, so it stays out of the way in PvP.
 

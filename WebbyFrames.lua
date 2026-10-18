@@ -977,7 +977,49 @@ local function updateDamagePrediction(f, spell)
     local max = value(UnitHealthMax, f.wfUnit)
     if max then pcall(bar.SetMinMaxValues, bar, 0, max) end
     pcall(bar.SetValue, bar, amount)
+    pcall(function() f.dmgWho = UnitGUID(f.wfUnit) end)   -- (a new unit in the frame clears it: updateHealth)
     bar:Show()
+end
+
+-- After the cast: the shading stays while the spell is on its way (a Fireball in the air), until the
+-- combat log says it hit, missed, was resisted or absorbed on that unit. Where the combat log can't be
+-- read, the unit's next combat event (UNIT_COMBAT) ends it instead; either way at most FLY_MAX seconds.
+local FLY_MAX = 3
+local cleuOK = false
+local function landDamage(f)
+    if f and f.dmgFlying then
+        f.dmgFlying = nil
+        pcall(updateDamagePrediction, f, nil)
+    end
+end
+
+local function flyDamage(spell)
+    local token = {}
+    for _, f in ipairs({ frames.target, frames.focus }) do
+        if f and f.dmgBar and f.dmgBar:IsShown() then
+            f.dmgFlying, f.dmgSpell, f.dmgFlyStart = token, spell, GetTime()
+        end
+    end
+    C_Timer.After(FLY_MAX, function()
+        for _, f in ipairs({ frames.target, frames.focus }) do
+            if f and f.dmgFlying == token then landDamage(f) end
+        end
+    end)
+end
+
+do
+    local cl = CreateFrame("Frame")
+    cleuOK = pcall(cl.RegisterEvent, cl, "COMBAT_LOG_EVENT_UNFILTERED") and true or false
+    cl:SetScript("OnEvent", function()
+        pcall(function()
+            local _, sub, _, src, _, _, _, dst, _, _, _, spellId = CombatLogGetCurrentEventInfo()
+            if src ~= UnitGUID("player") then return end
+            if not (sub:find("_DAMAGE$") or sub:find("_MISSED$") or sub == "SPELL_ABSORBED") then return end
+            for _, f in ipairs({ frames.target, frames.focus }) do
+                if f and f.dmgFlying and spellId == f.dmgSpell and dst == UnitGUID(f.wfUnit) then landDamage(f) end
+            end
+        end)
+    end)
 end
 
 local function updateDamageTrail(f, status)
@@ -1024,6 +1066,12 @@ local function updateHealth(f)
     end
     pcall(updatePrediction, f)
     pcall(updateDamageTrail, f, status)
+    -- the damage shading belongs to the unit it was cast at: gone if the frame now shows someone else
+    if f.dmgBar and f.dmgBar:IsShown() then
+        pcall(function()
+            if f.dmgWho ~= UnitGUID(u) then f.dmgFlying = nil; f.dmgBar:Hide() end
+        end)
+    end
     if status then f.hpText:SetText(status) else setBarText(f.hpText, f, "hp") end
     if status ~= f.statusText then
         f.statusText = status
@@ -3204,17 +3252,25 @@ local function createFrame(unit)
             local mine = true
             pcall(function() mine = (guid == self.castGUID) end)
             if mine then
+                local spell = self.castSpell
                 self.castSpell, self.castGUID = nil, nil
                 pcall(updateCostPrediction, self)
-                pcall(updateDamagePrediction, frames.target, nil)
-                pcall(updateDamagePrediction, frames.focus, nil)
+                if event == "UNIT_SPELLCAST_SUCCEEDED" then
+                    pcall(flyDamage, spell)                  -- on its way: stays until it lands
+                else
+                    pcall(updateDamagePrediction, frames.target, nil)
+                    pcall(updateDamagePrediction, frames.focus, nil)
+                end
             end
         elseif event == "PLAYER_REGEN_DISABLED" then self.combatFlag = true; updateIndicators(self)
         elseif event == "PLAYER_REGEN_ENABLED" then self.combatFlag = false; updateIndicators(self)
         elseif event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FLAGS" then updateIndicators(self)
         elseif event:find("^UNIT_THREAT") then updateThreat(self)
         elseif event == "UNIT_AURA" then safely(updateAuras, self)
-        elseif event == "UNIT_COMBAT" then local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
+        elseif event == "UNIT_COMBAT" then
+            local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
+            -- no combat log to tell when your spell landed: its next combat event will do
+            if self.dmgFlying and not cleuOK and GetTime() - (self.dmgFlyStart or 0) > 0.05 then landDamage(self) end
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)
@@ -3338,7 +3394,10 @@ local function createSmallFrame(unit)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then updateHealth(self)
         elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
         elseif event == "UNIT_AURA" then safely(updateAuras, self)
-        elseif event == "UNIT_COMBAT" then local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
+        elseif event == "UNIT_COMBAT" then
+            local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
+            -- no combat log to tell when your spell landed: its next combat event will do
+            if self.dmgFlying and not cleuOK and GetTime() - (self.dmgFlyStart or 0) > 0.05 then landDamage(self) end
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)
