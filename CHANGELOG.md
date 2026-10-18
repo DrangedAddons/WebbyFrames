@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.12.2
+- Dispel glow much more visible: the frame's border, portrait ring included, turns the dispel colour (magic blue, curse purple, disease brown, poison green) with a glow on and just round it. It blinks hard four times when the debuff lands, then pulses deeply every 0.8 seconds, back and forth between the frame's own colour and the dispel colour.
+
 ## 1.12.1
 - Fixed: buffs and debuffs not showing in 1.12.0, and the dispel glow not flashing or pulsing (the game's aura icons refuse script hooks; the flash, pulse and tooltip moving now run elsewhere).
 

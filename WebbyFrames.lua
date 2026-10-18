@@ -2343,7 +2343,12 @@ local function copyBorder(t, f)
     t:SetTexture(f.border:GetTexture())
     t:SetTexCoord(f.border:GetTexCoord())
 end
-AuraKit.GLOW_FLASH, AuraKit.GLOW_PULSE = 0.9, 1.0   -- seconds: the first blinks, then each pulse
+AuraKit.GLOW_FLASH, AuraKit.GLOW_PULSE = 1.2, 0.8   -- seconds: the first blinks, then each pulse
+AuraKit.GLOW_BLINKS = 4
+-- the glow's copies of the frame's border art: { px past the border, blend mode }. A plain one, greyed
+-- and tinted, takes the border (portrait ring included) over in the dispel colour; the added-light
+-- ones on it and just round it make it glow.
+AuraKit.GLOW_LAYERS = { { 0, "BLEND" }, { 0, "ADD" }, { 3, "ADD" } }
 
 -- The glow flashes when the debuff lands (three quick blinks), then keeps pulsing while it's there.
 -- Driven from a frame of ours (the game's aura buttons don't take script hooks): every glow box's
@@ -2366,9 +2371,11 @@ function AuraKit.startGlowPulse()
                 box.glowT = t
                 local a
                 if t < AuraKit.GLOW_FLASH then
-                    a = 0.15 + 0.85 * math.abs(math.cos(t * math.pi * 3 / AuraKit.GLOW_FLASH))
+                    -- hard blinks: full on, fully off
+                    a = math.abs(math.cos(t * math.pi * AuraKit.GLOW_BLINKS / AuraKit.GLOW_FLASH)) > 0.5 and 1 or 0
                 else
-                    a = 0.3 + 0.7 * (0.5 + 0.5 * math.cos((t - AuraKit.GLOW_FLASH) * 2 * math.pi / AuraKit.GLOW_PULSE))
+                    -- a deep pulse, nearly out to full
+                    a = 0.1 + 0.9 * (0.5 + 0.5 * math.cos((t - AuraKit.GLOW_FLASH) * 2 * math.pi / AuraKit.GLOW_PULSE))
                 end
                 box:SetAlpha(a)
             else
@@ -2392,14 +2399,17 @@ function AuraKit.dispelGlow(f)
         if not (ok and box) then f.dispelBox = false; return end
         local function init(b)
             pcall(function()
-                -- two added-light copies of the border, for a brighter glow
+                -- copies of the border: one recolouring it, added-light ones glowing on and round it
                 local styles = Enum.CustomAuraButtonDispelTypeTextureStyle
                 b.webbyGlows = {}
-                for _ = 1, 2 do
-                    local t = b:CreateTexture(nil, "OVERLAY", nil, 7)
-                    t:SetAllPoints()
+                for _, layer in ipairs(AuraKit.GLOW_LAYERS) do
+                    local grow, mode = layer[1], layer[2]
+                    local t = b:CreateTexture(nil, "OVERLAY", nil, mode == "BLEND" and 6 or 7)
+                    t:SetPoint("TOPLEFT", -grow, grow)
+                    t:SetPoint("BOTTOMRIGHT", grow, -grow)
                     copyBorder(t, f)
-                    t:SetBlendMode("ADD")
+                    t:SetBlendMode(mode)
+                    if mode == "BLEND" then t:SetDesaturated(true) end   -- (grey, so the tint is the pure colour)
                     b:AddDispelTypeTexture(t, {
                         style = styles and styles.PreserveAsset,
                         showWhenHarmful = true,
