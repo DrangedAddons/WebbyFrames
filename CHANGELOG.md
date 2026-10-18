@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.7.5
+- Spell cost shade set to darker now darkens only the cast preview; the flash when a spell goes off stays light.
+
 ## 1.7.4
 - Spell cost shade (Player page, under Spell cost): show the cost lighter or darker than the bar, and by how much.
 

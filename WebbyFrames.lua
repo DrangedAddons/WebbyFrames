@@ -917,14 +917,15 @@ local function fitCostBar(f, bar, side)
 end
 
 -- Shades a cost bar by the "Spell cost shade" slider (-100 to 100): above 0 it lightens the fill
--- (added white), below 0 it darkens it (black laid over), by that much. `boost` makes the flash a
--- little stronger than the preview. False at 0 (nothing to show).
-local function shadeCostBar(bar, boost)
+-- (added white), below 0 it darkens it (black laid over), by that much. The spent flash (`flash`)
+-- always lightens, by the same amount and a little more: only the cast preview darkens. False at 0
+-- (nothing to show).
+local function shadeCostBar(bar, flash)
     local v = tonumber(getSetting("player", "costShade")) or 55
     if v == 0 then return false end
-    local a = math.min(1, math.abs(v) / 100 + (boost or 0))
+    local a = math.min(1, math.abs(v) / 100 + (flash and 0.25 or 0))
     local tex = bar:GetStatusBarTexture()
-    if v > 0 then
+    if v > 0 or flash then
         pcall(tex.SetBlendMode, tex, "ADD")
         bar:SetStatusBarColor(1, 1, 1, a)
     else
@@ -957,7 +958,7 @@ local function flashSpent(f, spell)
     cost, f.costInfo = spellCost(spell, "spent")
     if not cost then return end
     fitCostBar(f, sb, "LEFT")
-    if not shadeCostBar(sb, 0.25) then return end
+    if not shadeCostBar(sb, true) then return end
     pcall(sb.SetValue, sb, cost)
     sb.left = SPENT_FADE
     sb:SetAlpha(1)
@@ -4020,7 +4021,7 @@ local function buildSettings()
             B.check("restTint", "Colour the Zzz", "The resting Zzz by the portrait takes the frame colour (it stays as drawn while the frame is gold).", false)
             local costOn = B.check("costPredict", "Spell cost", "Shows spell costs on your mana (or other power) bar. While you cast, the part the spell will use is shaded; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true)
             B.under(costOn, function() return getSetting("player", "costPredict") end,
-                B.slider("costShade", "Spell cost shade", "How the cost shows on the bar: lighter (right) or darker (left), and by how much.", 55, -100, 100, 5,
+                B.slider("costShade", "Spell cost shade", "How the cost shows on the bar while you cast: lighter (right) or darker (left), and by how much. The flash when a spell goes off always stays light.", 55, -100, 100, 5,
                     function(v)
                         v = math.floor(v + 0.5)
                         if v == 0 then return "Off" end
