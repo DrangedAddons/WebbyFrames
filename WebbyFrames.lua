@@ -985,7 +985,7 @@ end
 -- lands: the unit's health moves or it has a combat event (hit, miss, resist). At most FLY_MAX seconds.
 -- (Someone else hitting it first ends it early too: nothing tells the hits apart. The combat log
 -- would, but registering for it is forbidden to addons on 12.x and brings up the blocked-addon popup.)
-local FLY_MAX = 3
+local FLY_MAX = 1.5
 local function landDamage(f)
     if f and f.dmgFlying then
         f.dmgFlying = nil
@@ -997,7 +997,12 @@ local function flyDamage(spell)
     local token = {}
     for _, f in ipairs({ frames.target, frames.focus }) do
         if f and f.dmgBar and f.dmgBar:IsShown() then
-            f.dmgFlying, f.dmgSpell, f.dmgFlyStart = token, spell, GetTime()
+            -- a quick spell's hit can come in just before the cast's own "succeeded": already landed
+            if GetTime() - (f.hitAt or 0) < 0.2 then
+                pcall(updateDamagePrediction, f, nil)
+            else
+                f.dmgFlying = token
+            end
         end
     end
     C_Timer.After(FLY_MAX, function()
@@ -1051,8 +1056,6 @@ local function updateHealth(f)
     end
     pcall(updatePrediction, f)
     pcall(updateDamageTrail, f, status)
-    -- the spell on its way has landed: the health moved after the cast went off
-    if f.dmgFlying and GetTime() - (f.dmgFlyStart or 0) > 0.05 then landDamage(f) end
     -- the damage shading belongs to the unit it was cast at: gone if the frame now shows someone else
     if f.dmgBar and f.dmgBar:IsShown() then
         pcall(function()
@@ -3216,7 +3219,10 @@ local function createFrame(unit)
 
     -- events
     f:SetScript("OnEvent", function(self, event, ...)
-        if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then updateHealth(self)
+        if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
+            updateHealth(self)
+            -- a spell on its way has landed (see flyDamage)
+            if event == "UNIT_HEALTH" then self.hitAt = GetTime(); if self.dmgFlying then landDamage(self) end end
         elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_POWER_FREQUENT" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
         elseif event == "PLAYER_UPDATE_RESTING" then
             if self.updateRest then self.updateRest() end
@@ -3257,7 +3263,8 @@ local function createFrame(unit)
         elseif event == "UNIT_COMBAT" then
             local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
             -- the spell landed (or missed): its next combat event after the cast
-            if self.dmgFlying and GetTime() - (self.dmgFlyStart or 0) > 0.05 then landDamage(self) end
+            self.hitAt = GetTime()
+            if self.dmgFlying then landDamage(self) end
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)
@@ -3378,13 +3385,17 @@ local function createSmallFrame(unit)
     end
 
     f:SetScript("OnEvent", function(self, event, ...)
-        if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then updateHealth(self)
+        if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
+            updateHealth(self)
+            -- a spell on its way has landed (see flyDamage)
+            if event == "UNIT_HEALTH" then self.hitAt = GetTime(); if self.dmgFlying then landDamage(self) end end
         elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
         elseif event == "UNIT_AURA" then safely(updateAuras, self)
         elseif event == "UNIT_COMBAT" then
             local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
             -- the spell landed (or missed): its next combat event after the cast
-            if self.dmgFlying and GetTime() - (self.dmgFlyStart or 0) > 0.05 then landDamage(self) end
+            self.hitAt = GetTime()
+            if self.dmgFlying then landDamage(self) end
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)

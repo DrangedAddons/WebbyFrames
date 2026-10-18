@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.7.11
+- Damage prediction no longer hangs on after fast spells: a hit that lands just before the cast finishes now clears it too, and it waits at most 1.5 seconds for a spell in flight.
+
 ## 1.7.10
 - Damage prediction clears the moment the spell lands (the target's health moves, or it's hit, missed or resisted), instead of lingering and looking like another cast.
 - Fixed the "blocked from an action" Disable / Ignore popup that 1.7.9 could bring up (it listened to the combat log, which addons may not on this client).
