@@ -77,6 +77,9 @@ local DEFAULT_SETTINGS = {
     combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus), one General switch
     -- icons and extras
     comboPoints = true,
+    druidMana = true,        -- player: a druid's mana in a slim bar under the frame while in a form
+    restTint = false,        -- player: the resting Zzz takes the frame colour
+    costPredict = true,      -- player: while casting, the spell's cost shows on the power bar
     petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (green)
     petHappy = "corner",     -- hunter pet happiness: "corner" (over the corner accent), "badge" (in the level circle) or "off"
 }
@@ -869,6 +872,80 @@ local function updateHealth(f)
     end
 end
 
+-- Spell cost (player), shown on the power bar in the bar's own fill, lightened:
+--  - during a cast: the part the spell will spend.
+--    A reverse-fill bar as long as the power bar, its right end on the fill's moving end.
+--  - after: right after a spell goes off (keybinds and instants too), the part it just spent flashes
+--    past the end of the fill and fades out. A normal bar, its left end on the fill's end.
+-- Both have the power bar's max and the cost as their value, so no maths on the power itself.
+
+-- The cost of a spell in your current power type, or nil; and what was found (kept for /webby cost).
+local function spellCost(spell, label)
+    local cost
+    local info = label .. " spell " .. tostring(spell)
+    local ok, err = pcall(function()
+        local get = (C_Spell and C_Spell.GetSpellPowerCost) or GetSpellPowerCost
+        if not get then info = info .. ": no cost API"; return end
+        local ptype = UnitPowerType("player")
+        local list = get(spell)
+        info = info .. ", power type " .. tostring(ptype) .. ", costs:"
+        for _, c in ipairs(list or {}) do
+            local amount = c.cost or c.minCost
+            info = info .. " [type " .. tostring(c.type) .. " cost " .. tostring(amount) .. "]"
+            if c.type == ptype and amount and amount > 0 then cost = amount end
+        end
+    end)
+    if not ok then info = info .. " (error: " .. tostring(err) .. ")" end
+    return cost, info .. (cost and " -> shown" or " -> nothing to show")
+end
+
+-- Fits one of the cost bars to the power bar: its fill, mask and length, its end on the fill's end.
+local function fitCostBar(f, bar, side)
+    local tex = f.mpCurrent or PLAIN_FILL
+    if bar.tex ~= tex then
+        bar.tex = tex
+        if not pcall(bar.SetStatusBarTexture, bar, tex) or not bar:GetStatusBarTexture() then bar:SetStatusBarTexture(PLAIN_FILL) end
+        pcall(function() bar:GetStatusBarTexture():SetBlendMode("ADD") end)
+        if f.mpMaskOn then pcall(function() bar:GetStatusBarTexture():AddMaskTexture(f.mpMask) end) end
+    end
+    bar:ClearAllPoints()
+    bar:SetPoint("TOP", f.mp, "TOP")
+    bar:SetPoint("BOTTOM", f.mp, "BOTTOM")
+    bar:SetPoint(side, f.mp:GetStatusBarTexture(), "RIGHT")
+    bar:SetWidth(f.mp:GetWidth())
+    pcall(bar.SetMinMaxValues, bar, 0, UnitPowerMax("player"))
+end
+
+local function updateCostPrediction(f)
+    local cp = f.costBar
+    if not cp then return end
+    local cost
+    if f.castSpell and getSetting("player", "costPredict") then
+        cost, f.costInfo = spellCost(f.castSpell, "cast")
+    end
+    if not cost then cp:Hide(); return end
+    fitCostBar(f, cp, "RIGHT")
+    cp:SetStatusBarColor(1, 1, 1, 0.55)
+    pcall(cp.SetValue, cp, cost)
+    cp:Show()
+end
+
+-- A spell just went off: flash what it spent.
+local SPENT_FADE = 0.6       -- seconds
+local function flashSpent(f, spell)
+    local sb = f.spentBar
+    if not (sb and spell and getSetting("player", "costPredict")) then return end
+    local cost
+    cost, f.costInfo = spellCost(spell, "spent")
+    if not cost then return end
+    fitCostBar(f, sb, "LEFT")
+    sb:SetStatusBarColor(1, 1, 1, 0.8)
+    pcall(sb.SetValue, sb, cost)
+    sb.left = SPENT_FADE
+    sb:SetAlpha(1)
+    sb:Show()
+end
+
 local function updatePower(f)
     local u = f.wfUnit
     if not UnitExists(u) then return end
@@ -902,6 +979,25 @@ local function updatePower(f)
     f.mp:SetMinMaxValues(0, UnitPowerMax(u))
     setBarValue(f, f.mp, UnitPower(u))
     setBarText(f.mpText, f, "mp")
+    if f.costBar then pcall(updateCostPrediction, f) end
+    -- a druid in bear or cat form: their mana in the slim bar under the frame
+    local am = f.altMana
+    if am then
+        local show = false
+        pcall(function()
+            show = getSetting("player", "druidMana") and select(2, UnitClass("player")) == "DRUID" and token ~= "MANA"
+        end)
+        am:SetShown(show and true or false)
+        if show then
+            pcall(function()
+                local mana = Enum.PowerType and Enum.PowerType.Mana or 0
+                am.bar:SetMinMaxValues(0, UnitPowerMax("player", mana))
+                setBarValue(f, am.bar, UnitPower("player", mana))
+                am.text:SetText(AbbreviateLargeNumbers(UnitPower("player", mana)))
+            end)
+            am.text:SetShown(getSetting("player", "textMode") ~= "off")
+        end
+    end
 end
 
 -- The colour of a mob's level against yours, as the default UI shows it: grey (no challenge), green, yellow
@@ -1156,24 +1252,21 @@ local function createIndicators(f)
                 for _, t in ipairs({ glow, halo, lit }) do pcall(t.SetDesaturated, t, d) end
             end,
         }
-        -- one pulse animation per frame, started and stopped together
-        local anims = {}
-        pcall(function()
-            for _, fr in ipairs({ sf, cf }) do
-                local ag = fr:CreateAnimationGroup()
-                ag:SetLooping("BOUNCE")
-                local a = ag:CreateAnimation("Alpha")
-                a:SetFromAlpha(1); a:SetToAlpha(0.35); a:SetDuration(0.8)
-                anims[#anims + 1] = ag
-            end
+        -- pulse animations per frame, started and stopped together: a strong, quick one in combat and
+        -- a soft, slow breath while resting
+        -- Blizzard's own pulse (PlayerFrame_OnUpdate): the alpha ramps straight up from 55/255 to full
+        -- over half a second, then straight back down, for resting and combat alike. Runs while the
+        -- glow is shown; its colour is ours (updateIndicators).
+        local counter, sign = 0, 1
+        sf:SetScript("OnUpdate", function(_, elapsed)
+            counter = counter + elapsed
+            if counter > 0.5 then sign = -sign end
+            counter = counter % 0.5
+            local alpha
+            if sign == 1 then alpha = (55 + counter * 400) / 255 else alpha = (255 - counter * 400) / 255 end
+            alpha = math.max(0, math.min(1, alpha))
+            sf:SetAlpha(alpha); cf:SetAlpha(alpha)
         end)
-        if #anims > 0 then
-            f.statusAnim = {
-                IsPlaying = function() return anims[1]:IsPlaying() end,
-                Play = function() for _, ag in ipairs(anims) do ag:Play() end end,
-                Stop = function() for _, ag in ipairs(anims) do ag:Stop() end end,
-            }
-        end
         if not f.updateRest then
             f.restIcon = ov:CreateTexture(nil, "OVERLAY", nil, 5)
             f.restIcon:SetSize(24, 24)
@@ -1330,6 +1423,35 @@ local function placeIndicators(f)
     end
 end
 
+-- A frame colour made fit for a glow (the resting glow, the Zzz). Glows are added on top of the art,
+-- so pale colours wash out to white and yellow-greens read as yellow (the hunter's green looked gold).
+-- So: full brightness, more saturation, and yellow-greens nudged greener. Greys stay grey.
+local function glowColor(c)
+    local r, g, b = c[1], c[2], c[3]
+    local hi, lo = math.max(r, g, b), math.min(r, g, b)
+    if hi <= 0.01 then return 1, 1, 1 end
+    local s = (hi - lo) / hi
+    if s < 0.08 then return 1, 1, 1 end                     -- white, grey or black: a white glow
+    local h                                                 -- hue in degrees
+    if hi == r then h = 60 * (((g - b) / (hi - lo)) % 6)
+    elseif hi == g then h = 60 * ((b - r) / (hi - lo) + 2)
+    else h = 60 * ((r - g) / (hi - lo) + 4) end
+    if h > 65 and h < 115 then h = h + (115 - h) * 0.5 end   -- yellow-green: halfway to green
+    s = math.min(1, s * 1.5 + 0.1)
+    -- back to RGB at full brightness
+    local x = s * (1 - math.abs((h / 60) % 2 - 1))
+    local m = 1 - s
+    local seg = math.floor(h / 60) % 6
+    local rr, gg, bb
+    if seg == 0 then rr, gg, bb = s, x, 0
+    elseif seg == 1 then rr, gg, bb = x, s, 0
+    elseif seg == 2 then rr, gg, bb = 0, s, x
+    elseif seg == 3 then rr, gg, bb = 0, x, s
+    elseif seg == 4 then rr, gg, bb = x, 0, s
+    else rr, gg, bb = s, 0, x end
+    return rr + m, gg + m, bb + m
+end
+
 local function updateIndicators(f)
     if f.small or not f.pvpIcon then return end
     local u, base = f.wfUnit, f.baseUnit
@@ -1353,24 +1475,19 @@ local function updateIndicators(f)
                 f.status:SetDesaturated(false)
                 f.status:SetVertexColor(1, 0, 0)
                 f.status:Show()
-                if f.statusAnim and not f.statusAnim:IsPlaying() then f.statusAnim:Play() end
             elseif resting then
-                if f.statusAnim then f.statusAnim:Stop() end
-                f.status:SetAlpha(1)
-                -- the resting glow takes the frame colour (brightened to full strength, so a dark
-                -- frame still glows), gold when the frame is as drawn
+                -- the resting glow takes the frame colour (made glow-fit, so a dark frame still glows
+                -- and greens stay green), gold when the frame is as drawn
                 local c = f.tintColor
                 if c then
-                    local top = math.max(c[1], c[2], c[3], 0.01)
                     f.status:SetDesaturated(true)
-                    f.status:SetVertexColor(c[1] / top, c[2] / top, c[3] / top)
+                    f.status:SetVertexColor(glowColor(c))
                 else
                     f.status:SetDesaturated(false)
                     f.status:SetVertexColor(1, 0.88, 0.25)
                 end
                 f.status:Show()
             else
-                if f.statusAnim then f.statusAnim:Stop() end
                 f.status:Hide()
             end
         end
@@ -2272,6 +2389,17 @@ function Extras.tint(f)
     local c = Extras.tintColor(f.baseUnit, f.wfUnit)
     f.tintColor = c
     pcall(updateIndicators, f)       -- the resting glow follows the frame colour
+    -- the resting Zzz too, when asked (made glow-fit like the resting glow, so a dark frame still
+    -- shows it)
+    if f.restTex then
+        local z = getSetting(f.baseUnit, "restTint") and c
+        pcall(f.restTex.SetDesaturated, f.restTex, z and true or false)
+        if z then
+            f.restTex:SetVertexColor(glowColor(z))
+        else
+            f.restTex:SetVertexColor(1, 1, 1)
+        end
+    end
     local list = { f.border, f.ringTop, f.corner, f.badge }
     if f.cb then for _, t in ipairs(f.cb.slices) do list[#list + 1] = t end end
     for _, t in pairs(list) do
@@ -2757,6 +2885,49 @@ local function createFrame(unit)
     -- bars
     f.hp, f.hpMask = newBar(f)
     f.mp, f.mpMask = newBar(f)
+    -- the player's druid mana while in a form: a slim bar just under the frame art, below the mana
+    -- bar, in the frames' line style (shown by updatePower)
+    if isPlayer then
+        local am = CreateFrame("Frame", nil, f)
+        am:SetPoint("TOPLEFT", f, "TOPLEFT", 85, -74)
+        am:SetSize(124, 8)
+        am:SetFrameLevel(f:GetFrameLevel() + 2)
+        local line = am:CreateTexture(nil, "BACKGROUND", nil, 0)
+        line:SetAllPoints(); line:SetColorTexture(0.55, 0.55, 0.55, 1)
+        local inside = am:CreateTexture(nil, "BACKGROUND", nil, 1)
+        inside:SetPoint("TOPLEFT", 1, -1); inside:SetPoint("BOTTOMRIGHT", -1, 1)
+        inside:SetColorTexture(0.05, 0.05, 0.05, 0.9)
+        am.bar = CreateFrame("StatusBar", nil, am)
+        am.bar:SetPoint("TOPLEFT", 1, -1); am.bar:SetPoint("BOTTOMRIGHT", -1, 1)
+        am.bar:SetStatusBarTexture(BAR_FILE.player .. "Mana")
+        am.bar:SetMinMaxValues(0, 1)
+        am.text = am.bar:CreateFontString(nil, "OVERLAY", "TextStatusBarText")
+        am.text:SetPoint("CENTER")
+        pcall(function() local fp = am.text:GetFont(); am.text:SetFont(fp or STANDARD_TEXT_FONT, 8, "OUTLINE") end)
+        am:Hide()
+        f.altMana = am
+        -- spell cost prediction (shown by updateCostPrediction while you cast)
+        -- (both inside a frame that clips to the power bar, so neither can spill past its ends)
+        local clip = CreateFrame("Frame", nil, f.mp)
+        clip:SetAllPoints(f.mp)
+        clip:SetFrameLevel(f.mp:GetFrameLevel() + 1)
+        clip:SetClipsChildren(true)
+        f.costBar = CreateFrame("StatusBar", nil, clip)
+        f.costBar:SetReverseFill(true)
+        f.costBar:Hide()
+        -- the spent flash (flashSpent), fading out
+        f.spentBar = CreateFrame("StatusBar", nil, clip)
+        f.spentBar:Hide()
+        f.spentBar:SetScript("OnUpdate", function(self, elapsed)
+            self.left = (self.left or 0) - elapsed
+            if self.left <= 0 then self:Hide(); return end
+            self:SetAlpha(self.left / SPENT_FADE)
+        end)
+        for _, e in ipairs({ "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP", "UNIT_SPELLCAST_FAILED",
+                             "UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_SUCCEEDED" }) do
+            pcall(f.RegisterUnitEvent, f, e, "player")
+        end
+    end
 
     -- text above everything
     local ov = CreateFrame("Frame", nil, f)
@@ -2798,6 +2969,7 @@ local function createFrame(unit)
         tex:SetTexture(MEDIA .. "uiunitframerestingflipbook")
         tex:SetTexCoord(0, 7 / 8, 0, 7 / 8)
         tex:SetAllPoints()
+        f.restTex = tex      -- (Extras.tint colours it when "Colour the Zzz" is on)
         local anim
         pcall(function()
             local ag = tex:CreateAnimationGroup()
@@ -2825,6 +2997,22 @@ local function createFrame(unit)
         elseif event == "PLAYER_UPDATE_RESTING" then
             if self.updateRest then self.updateRest() end
             updateIndicators(self)
+        elseif event == "UNIT_SPELLCAST_START" then
+            local _, guid, spellID = ...
+            self.castSpell, self.castGUID = spellID, guid
+            self.costStarts = (self.costStarts or 0) + 1   -- (for /webby cost)
+            pcall(updateCostPrediction, self)
+        elseif event:find("^UNIT_SPELLCAST_") then
+            -- went off (cast or instant, however it was pressed): flash what it spent
+            if event == "UNIT_SPELLCAST_SUCCEEDED" then local _, _, spellID = ...; pcall(flashSpent, self, spellID) end
+            -- only the cast being shown ends it (a failed second spell mid-cast leaves it alone)
+            local _, guid = ...
+            local mine = true
+            pcall(function() mine = (guid == self.castGUID) end)
+            if mine then
+                self.castSpell, self.castGUID = nil, nil
+                pcall(updateCostPrediction, self)
+            end
         elseif event == "PLAYER_REGEN_DISABLED" then self.combatFlag = true; updateIndicators(self)
         elseif event == "PLAYER_REGEN_ENABLED" then self.combatFlag = false; updateIndicators(self)
         elseif event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FLAGS" then updateIndicators(self)
@@ -3173,6 +3361,70 @@ local function setupEditMode()
     end)
     lib:RegisterCallback("enter", enterSample)
     lib:RegisterCallback("exit", exitSample)
+end
+
+-- EllesmereUI's Unlock Mode: the frames can be dragged there too. Positions are saved in the same
+-- place as Edit Mode's (this Edit Mode layout), so either one works and they agree. Ellesmere doesn't
+-- anchor or reapply them itself (ownsPosition), so it never moves a secure frame in combat.
+local ellesmereDone = false
+local function setupEllesmere()
+    local E = rawget(_G, "EllesmereUI")
+    if ellesmereDone or type(E) ~= "table" or type(E.RegisterUnlockElements) ~= "function" then return end
+    ellesmereDone = true
+    -- a frame's spot as CENTER offsets from the screen's centre, in the frame's own scale
+    local function centerOffset(f)
+        local cx, cy = f:GetCenter()
+        if not cx then return nil end
+        local k = UIParent:GetEffectiveScale() / f:GetEffectiveScale()
+        local ux, uy = UIParent:GetCenter()
+        return cx - ux * k, cy - uy * k
+    end
+    local list = {}
+    for i, unit in ipairs(UNITS) do
+        local f = frames[unit]
+        if f then
+            list[#list + 1] = {
+                key = "WebbyFrames_" .. unit,
+                label = "Webby " .. UNIT_LABEL[unit] .. " Frame",
+                order = 500 + i,
+                ownsPosition = true, noAnchorTo = true, noResize = true, noSizeMatchTarget = true,
+                getFrame = function() return f end,
+                loadPosition = function()
+                    local x, y = centerOffset(f)
+                    if not x then return nil end
+                    return { point = "CENTER", relPoint = "CENTER", x = x, y = y }
+                end,
+                savePosition = function(_, point, relPoint, x, y)
+                    if InCombatLockdown() or type(x) ~= "number" or type(y) ~= "number" then return end
+                    if type(relPoint) ~= "string" then relPoint = point end
+                    f:ClearAllPoints()
+                    f:SetPoint(point or "CENTER", UIParent, relPoint or "CENTER", x, y)
+                    local cx, cy = centerOffset(f)
+                    if not cx then return end
+                    local u = unitData(unit, true)
+                    u.point, u.x, u.y = "CENTER", cx, cy
+                    pcall(updateAttachment, f, unit, activeLayout)   -- sticky frames work here too
+                    pcall(placeFrame, f, unit)
+                end,
+                clearPosition = function()
+                    if InCombatLockdown() then return end
+                    local u = unitData(unit, true)
+                    u.point, u.x, u.y, u.attach, u.ax, u.ay = nil, nil, nil, nil, nil, nil
+                    pcall(placeFrame, f, unit)
+                end,
+                applyPosition = function()
+                    if not InCombatLockdown() then pcall(placeFrame, f, unit) end
+                end,
+            }
+        end
+    end
+    pcall(E.RegisterUnlockElements, E, list, "WebbyFrames")
+    -- target, focus and the rest show the player as a stand-in while Unlock Mode is open, as in Edit Mode
+    if type(E.RegisterUnlockModeListener) == "function" then
+        pcall(E.RegisterUnlockModeListener, E, "WebbyFrames", function(active)
+            if active then enterSample() else exitSample() end
+        end)
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -3746,6 +3998,11 @@ local function buildSettings()
         if unit == "target" then
             B.check("comboPoints", "Combo points", "Rogues and druids: your combo points in an arc round the target's portrait.", true)
         end
+        if unit == "player" then
+            B.check("restTint", "Colour the Zzz", "The resting Zzz by the portrait takes the frame colour (it stays as drawn while the frame is gold).", false)
+            B.check("costPredict", "Spell cost", "Shows spell costs on your mana (or other power) bar. While you cast, the part the spell will use shows lighter; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true)
+            B.check("druidMana", "Druid mana", "Druids: while you're in bear or cat form, your mana shows in a slim bar just under the frame.", true)
+        end
         if unit == "pet" then
             B.dropdown("petHappy", "Pet happiness", "Hunters: your pet's mood, with its diet, damage and loyalty in the tooltip.\n\nCorner: at the portrait's bottom right, where your frame has its corner point and combat swords.\nLevel badge: at the portrait's bottom left, where your frame has its level circle (the tooltip gives the pet's level).", "corner",
                 { { "off", "Off" }, { "corner", "On the corner" }, { "badge", "Level badge" } })
@@ -3915,6 +4172,8 @@ init:SetScript("OnEvent", function(_, event)
     hideAllBlizzard()
     C_Timer.After(2, hideAllBlizzard)
     setupEditMode()
+    pcall(setupEllesmere)
+    C_Timer.After(3, function() pcall(setupEllesmere) end)   -- (in case EllesmereUI finishes loading after us)
     applyAll()
     print("|cff33ccffWebby Frames|r v" .. addonVersion() .. " loaded. Type |cff33ccff/webby|r for options.")
 end)
@@ -3998,6 +4257,17 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         print("  your % of the next highest: " .. (ok and tostring(over) or ("can't be worked out (" .. tostring(err) .. ")")))
     elseif msg == "export" or msg == "import" then
         Profiles.show(msg)
+    elseif msg == "cost" then
+        -- what the spell cost prediction saw on your last cast
+        local f = frames.player
+        local p = "|cff33ccffWebby Frames:|r "
+        if not (f and f.costBar) then print(p .. "no player frame."); return end
+        print(p .. "Spell cost is " .. (getSetting("player", "costPredict") and "on" or "off")
+            .. "; cast starts seen: " .. tostring(f.costStarts or 0)
+            .. "; C_Spell.GetSpellPowerCost " .. ((C_Spell and C_Spell.GetSpellPowerCost) and "yes" or "no")
+            .. ", GetSpellPowerCost " .. (GetSpellPowerCost and "yes" or "no"))
+        print(p .. "last cast: " .. tostring(f.costInfo or "none yet (cast something with a cast time, then try again)"))
+        print(p .. "bar: " .. (f.costBar:IsShown() and "showing" or "hidden") .. ", width " .. tostring(math.floor(f.costBar:GetWidth() or 0)))
     elseif msg == "errors" then
         -- the errors caught while updating the frames (each shown once)
         if #updateErrors == 0 then print("|cff33ccffWebby Frames:|r no errors caught.") end
@@ -4007,6 +4277,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         print("  /webby - options   /webby edit - move the frames   /webby reset - reset every frame")
         print("  /webby test - preview heals, shields and a combat number on your frame")
         print("  /webby threat - what the game reports for your target's threat")
+        print("  /webby cost - what the spell cost bar saw on your last cast")
         print("  /webby export, /webby import - share a profile   /webby errors - anything that went wrong")
     else
         print("|cff33ccffWebby Frames:|r unknown command. Type |cff33ccff/webby help|r.")

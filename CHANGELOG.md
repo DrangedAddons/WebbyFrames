@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.3
+- Druid mana: in bear or cat form, your mana shows in a slim bar just under the player frame (Player page, on by default).
+- The player's resting and combat glows pulse the way the default player frame's do, in your frame colour.
+- Spell cost (Player page, on by default): while you cast, the part of your mana bar the spell will use shows lighter; and when any spell or ability goes off (instants too), what it spent flashes past the end of the bar. `/webby cost` shows what it found.
+- Colour the Zzz (Player page): the resting Zzz takes the frame colour.
+- Coloured resting glows look truer: richer colour, and yellow-greens lean green (the hunter's glow was coming out yellow).
+- EllesmereUI: the frames can be moved in its Unlock Mode as well as in Edit Mode. Both save to the same place.
+
 ## 1.7.2
 - Enemy levels are coloured by difficulty again (grey, green, yellow, orange, red), and unknown levels show the skull in the level badge.
 - Name and number colours: a Custom name colour and a Number colour, each with a colour picker. The outline options are gone.

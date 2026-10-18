@@ -4,6 +4,7 @@
 ## Author: Webby
 ## Version: 1.7.2
 ## X-DrangedAddons-Games: _classic_beta_, _forever_
+## OptionalDeps: EllesmereUI
 ## AddonCompartmentFunc: WebbyFrames_OnCompartmentClick
 ## SavedVariables: WebbyFramesDB, DFFramesForeverDB
 

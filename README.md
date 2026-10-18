@@ -12,6 +12,7 @@ Unzip the `WebbyFrames` folder into `World of Warcraft/_classic_beta_/Interface/
   common options on every frame at once) and one page per frame, in collapsible sections.
 - `/webby edit` opens Edit Mode to move the frames: they snap to each other, a frame dropped next to another
   sticks to it and moves with it, and the arrow keys nudge the clicked frame (1px, or 10px with Shift).
+- With EllesmereUI, the frames can also be moved in its Unlock Mode (same saved positions).
 - Everything is saved per Edit Mode layout. Profiles can be exported and imported as text (General page).
 
 Commands: `/webby` (options), `/webby edit`, `/webby reset`, `/webby test` (preview heals, shields and a combat
@@ -20,7 +21,7 @@ number), `/webby threat` (what the game reports for your target's threat), `/web
 
 ## Options per frame
 - **Frame:** scale, name, portrait (picture or class icon), frame colour (gold, dark, silver, your class, the
-  unit's class or any colour; the player's resting glow follows it), combo points (target), pet happiness (pet)
+  unit's class or any colour; the player's resting glow follows it), combo points (target), druid mana in bear and cat form (player), pet happiness (pet)
 - **Bars:** health and power textures, font (SharedMedia ones too), numbers always / on mouseover / never as
   totals, percentages or both, smooth bars
 - **Text:** name colour (gold, white, class, reaction or any colour) and size; number colour (theirs or any
