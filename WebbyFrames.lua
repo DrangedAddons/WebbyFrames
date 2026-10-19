@@ -118,7 +118,7 @@ local DEFAULT_SETTINGS = {
     restTint = false,        -- player: the resting Zzz takes the frame colour
     costPredict = true,      -- player: while casting, the spell's cost shows on the power bar
     manaTick = true,         -- player: a light crossing the mana bar for the five second rule
-    manaTickSparkle = true, manaTickSize = 100,
+    manaTickSparkle = true, manaTickTrail = true, manaTickSize = 100,
     costShade = 55,          -- player: how much lighter (above 0) or darker (below 0) the cost shows
     cornerStyle = "retail",  -- player: the corner accent's art, Retail's or Forever's own
     petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (Default: as drawn)
@@ -1410,12 +1410,15 @@ ns.MANA_SPARKLES = {
     star = "Interface\\Cooldown\\star4", starburst = "Interface\\Cooldown\\starburst",
     ring = "Interface\\Cooldown\\ping4", spark = "Interface\\CastingBar\\UI-CastingBar-Spark",
     flare = "Interface\\Buttons\\UI-ActionButton-Border",
+    raidstar = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_1", diamond = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_3",
+    glow = "Interface\\Buttons\\CheckButtonGlow",
 }
-ns.MANA_SPARKLE_CHOICES = { { "star", "Star" }, { "starburst", "Starburst" }, { "ring", "Ring" }, { "spark", "Spark" }, { "flare", "Flare" } }
+ns.MANA_SPARKLE_CHOICES = { { "star", "Star" }, { "starburst", "Starburst" }, { "ring", "Ring" }, { "spark", "Spark" }, { "flare", "Flare" },
+    { "raidstar", "Raid star" }, { "diamond", "Diamond" }, { "glow", "Soft glow" } }
 local function updateManaTick(f, curP, maxP, isMana)
     local mt = f.manaTick
     if not (isMana and getSetting("player", "manaTick")) then
-        if mt then mt:Hide(); mt.ruleUntil, mt.opts = nil, nil end     -- (off: a spell won't start it either)
+        if mt then mt:Hide(); mt.clearDust(); mt.dust:Hide(); mt.ruleUntil, mt.opts = nil, nil end     -- (off: a spell won't start it either)
         return
     end
     if not mt then
@@ -1429,6 +1432,62 @@ local function updateManaTick(f, curP, maxP, isMana)
         mt.star = mt:CreateTexture(nil, "OVERLAY", nil, 1)
         mt.star:SetBlendMode("ADD")
         mt.star:SetPoint("CENTER")
+        -- the sparkle trail: little stars left behind as the light goes, twinkling, drifting and fading
+        -- (on a frame of their own, so they stay where they were dropped while the light moves on)
+        mt.dust = CreateFrame("Frame", nil, f.mp)
+        mt.dust:SetAllPoints(f.mp)
+        mt.dust:SetFrameLevel(f.mp:GetFrameLevel() + 4)
+        mt.motes = {}
+        local function clearDust()
+            for _, m in ipairs(mt.motes) do m.tex:Hide(); m.live = false end
+        end
+        local function dropMote(x, h, c, z, now)
+            local m
+            for _, o in ipairs(mt.motes) do if not o.live then m = o; break end end
+            if not m then
+                if #mt.motes >= 24 then return end
+                m = { tex = mt.dust:CreateTexture(nil, "OVERLAY") }
+                m.tex:SetBlendMode("ADD")
+                mt.motes[#mt.motes + 1] = m
+            end
+            if m.texFile ~= mt.starTex then m.texFile = mt.starTex; m.tex:SetTexture(mt.starTex) end
+            m.live, m.born = true, now
+            m.life = 0.45 + math.random() * 0.4
+            m.x, m.y = x, (math.random() - 0.5) * h * 0.9
+            m.drift = (math.random() - 0.5) * h * 0.8          -- (up or down a little as it fades)
+            m.size = h * (0.35 + math.random() * 0.45) * z
+            m.spin = (math.random() - 0.5) * 6
+            m.tex:SetVertexColor(0.6 + c[1] * 0.4, 0.6 + c[2] * 0.4, 0.6 + c[3] * 0.4)
+            m.tex:Show()
+        end
+        local function moveDust(now)
+            local any = false
+            for _, m in ipairs(mt.motes) do
+                if m.live then
+                    local a = (now - m.born) / m.life
+                    if a >= 1 then
+                        m.live = false
+                        m.tex:Hide()
+                    else
+                        -- (a quick twinkle in, then fading and shrinking out)
+                        local tw = a < 0.15 and a / 0.15 or 1 - (a - 0.15) / 0.85
+                        local s = m.size * (0.6 + 0.4 * tw)
+                        m.tex:ClearAllPoints()
+                        m.tex:SetPoint("CENTER", mt.dust, "LEFT", m.x, m.y + m.drift * a)
+                        m.tex:SetSize(s, s)
+                        m.tex:SetAlpha(0.9 * tw)
+                        pcall(m.tex.SetRotation, m.tex, m.spin * a)
+                        any = true
+                    end
+                end
+            end
+            -- (nothing left twinkling: the trail's frame rests until the next star)
+            if not any then mt.dust:Hide() end
+        end
+        -- (the stars fade out on their own, so they finish after the light has stopped)
+        mt.dust:SetScript("OnUpdate", function() moveDust(GetTime()) end)
+        mt.dust:Hide()
+        mt.clearDust = clearDust
         mt:SetScript("OnUpdate", function(self)
             local o, now = self.opts, GetTime()
             -- done: it stops at the bar's end
@@ -1437,6 +1496,12 @@ local function updateManaTick(f, curP, maxP, isMana)
             local p = 1 - (self.ruleUntil - now) / MANA_RULE    -- 0 at the left end, 1 at the right
             local k = p * p                                      -- (slow at first, swelling towards the end)
             local c, z = o.color, o.size
+            -- (the trail: a new star every few hundredths of a second, more as it speeds up and grows)
+            if o.trail and now >= (self.nextMote or 0) then
+                dropMote(p * w, h, c, z, now)
+                self.dust:Show()
+                self.nextMote = now + 0.09 - 0.05 * k
+            end
             self:ClearAllPoints()
             self:SetPoint("CENTER", f.mp, "LEFT", p * w, 0)
             self.glow:SetVertexColor(c[1], c[2], c[3])
@@ -1466,6 +1531,7 @@ local function updateManaTick(f, curP, maxP, isMana)
     end
     mt.opts = {
         sparkle = getSetting("player", "manaTickSparkle") ~= false,
+        trail = getSetting("player", "manaTickTrail") ~= false,
         size = (tonumber(getSetting("player", "manaTickSize")) or 100) / 100,
         color = type(c) == "table" and { c[1] or 1, c[2] or 1, c[3] or 1 } or { 1, 1, 1 },
     }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.8
+- Mana tick: a sparkle trail. Little stars are left behind as the light crosses the bar, twinkling, drifting and fading out (Sparkle trail, on to start with).
+- More sparkle shapes: Raid star, Diamond and Soft glow, for the sparkle and the trail alike.
+
 ## 1.16.7
 - Mana tick is now just the five second rule: when a spell that costs mana goes off, the light crosses your mana bar over 5 seconds, growing and sparkling, and stops at the end. The regen tick sweeps are gone. Options: Light colour, Light size, Sparkle, Sparkle texture.
 

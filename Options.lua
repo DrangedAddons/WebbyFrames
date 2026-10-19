@@ -1869,9 +1869,10 @@ local function buildSettings()
                 B.slider("manaTickSize", "Light size", "How big the light grows.", 100, 50, 200, 5,
                     function(v) return string.format("%d%%", math.floor(v + 0.5)) end))
             local sparkle = B.check("manaTickSparkle", "Sparkle", "A star turning in the light as it goes.", true)
-            B.under(tick, tickOn, sparkle)
-            B.under(sparkle, function() return tickOn() and get("manaTickSparkle") ~= false end,
-                B.dropdown("manaTickStar", "Sparkle texture", "The shape of the sparkle.", "star", ns.MANA_SPARKLE_CHOICES or { { "star", "Star" } }))
+            B.under(tick, tickOn, sparkle,
+                B.check("manaTickTrail", "Sparkle trail", "Little stars left behind as the light crosses the bar, twinkling, drifting and fading out (in the sparkle's shape).", true))
+            B.under(tick, function() return tickOn() and (get("manaTickSparkle") ~= false or get("manaTickTrail") ~= false) end,
+                B.dropdown("manaTickStar", "Sparkle texture", "The shape of the sparkle and of the trail's stars.", "star", ns.MANA_SPARKLE_CHOICES or { { "star", "Star" } }))
             if myClass == "DRUID" then
                 local druid = B.check("druidMana", "Druid mana", "While you're in bear or cat form, your mana shows in a slim bar under the frame. Drag it anywhere in Edit Mode.", true)
                 B.under(druid, isOn("druidMana"),
