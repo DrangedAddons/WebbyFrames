@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.7
+- Mana tick is now just the five second rule: when a spell that costs mana goes off, the light crosses your mana bar over 5 seconds, growing and sparkling, and stops at the end. The regen tick sweeps are gone. Options: Light colour, Light size, Sparkle, Sparkle texture.
+
 ## 1.16.6
 - Mana tick: works when the game hides your mana from addons. The five second rule now starts when a spell that costs mana goes off, the ticks come from the mana changes themselves, and the light rests once they stop (full mana).
 
