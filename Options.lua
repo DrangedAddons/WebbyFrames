@@ -6,6 +6,7 @@
 -- file builds it at login (Opt.build).
 local _, ns = ...
 local Opt = ns.Opt
+Opt.sections = {}       -- (every collapsible section on every page: all folded each time the window opens)
 local UNITS, UNIT_LABEL, frames, Party, Extras = ns.UNITS, ns.UNIT_LABEL, ns.frames, ns.Party, ns.Extras
 local getSetting, setSetting, defaultFor, frameOn, plain = ns.getSetting, ns.setSetting, ns.defaultFor, ns.frameOn, ns.plain
 local DEFAULT_SETTINGS, ALWAYS_SHOWN, OWN_CLASS, COLOR_MODES = ns.DEFAULT_SETTINGS, ns.ALWAYS_SHOWN, ns.OWN_CLASS, ns.COLOR_MODES
@@ -29,22 +30,160 @@ function Opt.tip(frame, title, tip)
     frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
 end
 
--- A plain check box made from textures (nothing depends on a template this client may not have).
-function Opt.newCheck(parent)
-    local cb = CreateFrame("CheckButton", nil, parent)
-    cb:SetSize(26, 26)
-    cb:SetNormalTexture("Interface\\Buttons\\UI-CheckBox-Up")
-    cb:SetPushedTexture("Interface\\Buttons\\UI-CheckBox-Down")
-    cb:SetHighlightTexture("Interface\\Buttons\\UI-CheckBox-Highlight", "ADD")
-    cb:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
-    pcall(cb.SetDisabledCheckedTexture, cb, "Interface\\Buttons\\UI-CheckBox-Check-Disabled")
-    return cb
+---------------------------------------------------------------------------
+-- The look: flat dark panels, one accent colour, thin lines. Everything is drawn from plain colour
+-- textures (no art files), so the whole window recolours from THEME. Change THEME.accent to retint it.
+---------------------------------------------------------------------------
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+local THEME = {
+    accent = { 1, 0.72, 0.18 },         -- amber: lit toggles, slider fills, the page you're on
+    bg     = { 0.035, 0.04, 0.05 },     -- the window
+    panel  = { 0.06, 0.068, 0.085 },    -- the page list and the page
+    raised = { 0.1, 0.11, 0.135 },      -- fields, buttons, section cards
+    line   = { 1, 1, 1, 0.08 },         -- hairlines
+    text   = { 0.93, 0.94, 0.96 },
+    dim    = { 0.56, 0.59, 0.65 },
+}
+Opt.THEME, Opt.WHITE = THEME, WHITE
+local A = THEME.accent
+
+-- Font objects by size (the game's own font, so every language still has its letters).
+local fontObjects = {}
+function Opt.fontObject(size)
+    local name = "WebbyFramesOptFont" .. size
+    if not fontObjects[size] then
+        local f = CreateFont(name)
+        local path = GameFontNormal and select(1, GameFontNormal:GetFont()) or "Fonts\\FRIZQT__.TTF"
+        f:SetFont(path, size, "")
+        f:SetShadowOffset(1, -1)
+        f:SetShadowColor(0, 0, 0, 0.85)
+        f:SetTextColor(THEME.text[1], THEME.text[2], THEME.text[3])
+        fontObjects[size] = f
+    end
+    return name
+end
+function Opt.text(parent, size, color, layer)
+    local fs = parent:CreateFontString(nil, layer or "OVERLAY", Opt.fontObject(size or 12))
+    local c = color or THEME.text
+    fs:SetTextColor(c[1], c[2], c[3], c[4] or 1)
+    return fs
 end
 
-function Opt.dark(frame, edge)
-    frame:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-    frame:SetBackdropColor(0, 0, 0, 0.6)
-    frame:SetBackdropBorderColor(edge or 0.4, edge or 0.4, edge or 0.4, 1)
+function Opt.rect(parent, layer, c, a, sub)
+    local t = parent:CreateTexture(nil, layer or "BACKGROUND", nil, sub)
+    t:SetColorTexture(c[1], c[2], c[3], a or c[4] or 1)
+    return t
+end
+
+-- A colour fading across a texture (left to right: "HORIZONTAL"; bottom to top: "VERTICAL").
+function Opt.gradient(tex, orient, c1, a1, c2, a2)
+    tex:SetTexture(WHITE)
+    local ok = CreateColor and pcall(tex.SetGradient, tex, orient, CreateColor(c1[1], c1[2], c1[3], a1), CreateColor(c2[1], c2[2], c2[3], a2))
+    if not ok then pcall(tex.SetGradientAlpha, tex, orient, c1[1], c1[2], c1[3], a1, c2[1], c2[2], c2[3], a2) end
+end
+
+-- A one-pixel outline on a draw layer ("HIGHLIGHT": only while the mouse is over a button).
+function Opt.outline(frame, layer, c, a)
+    local lines = {}
+    for i, p in ipairs({ { "TOPLEFT", "TOPRIGHT" }, { "BOTTOMLEFT", "BOTTOMRIGHT" }, { "TOPLEFT", "BOTTOMLEFT" }, { "TOPRIGHT", "BOTTOMRIGHT" } }) do
+        local t = Opt.rect(frame, layer or "BORDER", c, a)
+        t:SetPoint(p[1]); t:SetPoint(p[2])
+        if i <= 2 then t:SetHeight(1) else t:SetWidth(1) end
+        lines[i] = t
+    end
+    return lines
+end
+
+-- A flat panel with a hairline edge. (edge: how bright the edge is, 0-1; the old grey value)
+function Opt.dark(frame, edge, shade)
+    local c = shade or THEME.raised
+    frame:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 })
+    frame:SetBackdropColor(c[1], c[2], c[3], 0.96)
+    frame:SetBackdropBorderColor(1, 1, 1, 0.05 + (edge or 0.4) * 0.2)
+end
+
+-- A clickable field (dropdowns, key buttons): a panel that lights its edge and brightens on hover.
+function Opt.styleField(b)
+    Opt.dark(b, 0.4)
+    local hl = Opt.rect(b, "HIGHLIGHT", { 1, 1, 1 }, 0.04)
+    hl:SetAllPoints()
+    Opt.outline(b, "HIGHLIGHT", A, 0.8)
+end
+
+-- A small down-pointing chevron, tinted (rotate it with SetRotation to point elsewhere).
+function Opt.chevron(parent, size)
+    local t = parent:CreateTexture(nil, "ARTWORK")
+    t:SetSize(size or 14, size or 14)
+    t:SetTexture("Interface\\Buttons\\Arrow-Down-Up")
+    pcall(t.SetDesaturated, t, true)
+    t:SetVertexColor(THEME.dim[1], THEME.dim[2], THEME.dim[3])
+    return t
+end
+
+-- A flat button: a raised panel, its text in capitals, an accent edge and lift on hover (and while
+-- LockHighlight'ed, for a tab that's picked). b:SetText / b:GetFontString work as usual.
+function Opt.newButton(parent, w, h, text)
+    local b = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    b:SetSize(w or 160, h or 26)
+    Opt.dark(b, 0.5)
+    local fs = Opt.text(b, 11)
+    fs:SetPoint("LEFT", 8, 0)
+    fs:SetPoint("RIGHT", -8, 0)
+    pcall(fs.SetWordWrap, fs, false)
+    b:SetFontString(fs)
+    local hl = Opt.rect(b, "HIGHLIGHT", A, 0.12)
+    hl:SetAllPoints()
+    Opt.outline(b, "HIGHLIGHT", A, 0.9)
+    local bar = Opt.rect(b, "HIGHLIGHT", A, 1)
+    bar:SetPoint("BOTTOMLEFT"); bar:SetPoint("BOTTOMRIGHT"); bar:SetHeight(2)
+    b:SetScript("OnMouseDown", function(self) if self:IsEnabled() then fs:SetPoint("LEFT", 9, -1) end end)
+    b:SetScript("OnMouseUp", function() fs:SetPoint("LEFT", 8, 0) end)
+    b:SetMotionScriptsWhileDisabled(true)
+    if text then b:SetText(text:upper()) end
+    return b
+end
+
+-- A flat X (the window's close button, a row's remove button).
+function Opt.newX(parent, size)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(size or 26, size or 26)
+    local hl = Opt.rect(b, "HIGHLIGHT", { 0.9, 0.25, 0.2 }, 0.35)
+    hl:SetAllPoints()
+    for _, deg in ipairs({ 45, -45 }) do
+        local t = Opt.rect(b, "ARTWORK", THEME.text, 0.85)
+        t:SetSize((size or 26) * 0.55, 2)
+        t:SetPoint("CENTER")
+        t:SetRotation(math.rad(deg))
+    end
+    return b
+end
+
+-- A toggle switch (a CheckButton, so GetChecked / SetChecked / OnClick work as for a check box): a dark
+-- track with the knob on the left, or an accent track with the knob on the right when on.
+function Opt.newCheck(parent)
+    local cb = CreateFrame("CheckButton", nil, parent)
+    cb:SetSize(36, 18)
+    local track = Opt.rect(cb, "BACKGROUND", THEME.raised, 1)
+    track:SetAllPoints()
+    Opt.outline(cb, "BORDER", { 1, 1, 1 }, 0.12)
+    local lit = Opt.rect(cb, "ARTWORK", A, 0.9)
+    lit:SetAllPoints()
+    cb:SetCheckedTexture(lit)
+    local hl = Opt.rect(cb, "HIGHLIGHT", { 1, 1, 1 }, 0.08)
+    hl:SetAllPoints()
+    local knob = Opt.rect(cb, "OVERLAY", THEME.text, 1)
+    knob:SetSize(12, 12)
+    local function place()
+        local on = cb:GetChecked()
+        knob:ClearAllPoints()
+        knob:SetPoint(on and "RIGHT" or "LEFT", on and -3 or 3, 0)
+        if on then knob:SetColorTexture(0.06, 0.06, 0.07, 1) else knob:SetColorTexture(THEME.dim[1], THEME.dim[2], THEME.dim[3], 1) end
+    end
+    local setChecked = cb.SetChecked
+    function cb:SetChecked(v) setChecked(self, v); place() end
+    cb:SetScript("PostClick", place)        -- (the builders set OnClick; this runs after it)
+    place()
+    return cb
 end
 
 -- The open dropdown's list (one, shared by every dropdown). Long lists scroll with the mouse wheel;
@@ -60,25 +199,26 @@ function Opt.openMenu(owner, choices, current, pick)
         m:SetClampedToScreen(true)
         m:EnableMouse(true)
         m:EnableMouseWheel(true)
-        m:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 14,
-            insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-        m:SetBackdropColor(0.06, 0.06, 0.06, 0.97)
+        m:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 })
+        m:SetBackdropColor(THEME.bg[1], THEME.bg[2], THEME.bg[3], 0.98)
+        m:SetBackdropBorderColor(A[1], A[2], A[3], 0.55)
         m.buttons = {}
         for i = 1, Opt.MENU_ROWS do
             local b = CreateFrame("Button", nil, m)
             b:SetHeight(20)
             b:SetPoint("TOPLEFT", 6, -6 - (i - 1) * 20)
             b:SetPoint("RIGHT", m, "RIGHT", -6, 0)
-            b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-            b.check = b:CreateTexture(nil, "ARTWORK")
-            b.check:SetSize(16, 16)
-            b.check:SetPoint("LEFT", 2, 0)
-            b.check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+            local hl = Opt.rect(b, "HIGHLIGHT", A, 0.16)
+            hl:SetAllPoints()
+            -- (the choice that's set: an accent bar at its left)
+            b.check = Opt.rect(b, "ARTWORK", A, 1)
+            b.check:SetSize(3, 14)
+            b.check:SetPoint("LEFT", 6, 0)
             b.icon = b:CreateTexture(nil, "ARTWORK")
             b.icon:SetSize(16, 16)
             b.icon:SetPoint("LEFT", 22, 0)
             b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-            b.text = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            b.text = Opt.text(b, 12)
             b.text:SetPoint("RIGHT", -4, 0)
             b.text:SetJustifyH("LEFT")
             pcall(b.text.SetWordWrap, b.text, false)
@@ -88,7 +228,7 @@ function Opt.openMenu(owner, choices, current, pick)
             end)
             m.buttons[i] = b
         end
-        m.more = m:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        m.more = Opt.text(m, 10, THEME.dim)
         m.more:SetPoint("BOTTOMRIGHT", -8, 4)
         -- a search box on top of long lists: typing keeps the choices whose name has it in
         m.search = CreateFrame("EditBox", nil, m, "BackdropTemplate")
@@ -96,10 +236,10 @@ function Opt.openMenu(owner, choices, current, pick)
         m.search:SetPoint("TOPLEFT", 6, -6)
         m.search:SetPoint("RIGHT", m, "RIGHT", -6, 0)
         m.search:SetAutoFocus(false)
-        m.search:SetFontObject("GameFontHighlightSmall")
+        m.search:SetFontObject(Opt.fontObject(12))
         m.search:SetTextInsets(6, 6, 0, 0)
         Opt.dark(m.search, 0.5)
-        m.search.hint = m.search:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        m.search.hint = Opt.text(m.search, 12, THEME.dim)
         m.search.hint:SetPoint("LEFT", 6, 0)
         m.search.hint:SetText("Type to search")
         m.search:SetScript("OnTextChanged", function(self)
@@ -131,7 +271,9 @@ function Opt.openMenu(owner, choices, current, pick)
                     -- (a heading: gold, not clickable; a choice may have an icon)
                     b.value = (not c.header) and c[1] or nil
                     b:EnableMouse(not c.header)
-                    b.text:SetText(c.header and ("|cffffd100" .. (c[2] or "") .. "|r") or (c[2] or tostring(c[1])))
+                    b.text:SetText(c[2] or (not c.header and tostring(c[1])) or "")
+                    local tc = c.header and A or THEME.text
+                    b.text:SetTextColor(tc[1], tc[2], tc[3])
                     b.check:SetShown(not c.header and c[1] == self.current)
                     b.icon:SetShown(c.icon ~= nil)
                     if c.icon then b.icon:SetTexture(c.icon) end
@@ -182,7 +324,12 @@ function Opt.setRowEnabled(row, on)
         if c.EnableMouse then pcall(c.EnableMouse, c, on) end
     end
     for _, t in ipairs(row.texts or {}) do
-        if on then t:SetTextColor(1, 1, 1) else t:SetTextColor(0.5, 0.5, 0.5) end
+        local c = on and THEME.text or THEME.dim
+        t:SetTextColor(c[1], c[2], c[3], on and 1 or 0.6)
+    end
+    -- (and its controls faded)
+    for _, c in ipairs(row.controls or {}) do
+        if c.SetAlpha then c:SetAlpha(on and 1 or 0.4) end
     end
 end
 
@@ -196,66 +343,162 @@ end
 -- Redraws the shown page: which rows show (closed sections and B.showIf hide them), where they sit,
 -- which are greyed out (B.under) and what each control shows. Cheap enough to run on every change.
 local layoutErrorShown = false
+-- (a page's rows are made the first time it's shown, or searched)
+local function makeRows(page)
+    if page.content then return end
+    page.content = CreateFrame("Frame", nil, Opt.scroll)
+    page.content:SetSize(Opt.CONTENT_W, 10)
+    page.content:Hide()
+    for _, row in ipairs(page.rows) do
+        local f = CreateFrame("Frame", nil, page.content)
+        f:SetHeight(row.height)
+        row.frame = f
+        if row.section then
+            -- (the rows of a section sit on its card)
+            local card = Opt.rect(f, "BACKGROUND", THEME.raised, 0.35)
+            card:SetPoint("TOPLEFT", 6, 0)
+            card:SetPoint("BOTTOMRIGHT", -6, 0)
+        end
+        local ok, err = pcall(row.make, f, row)
+        if not ok and not layoutErrorShown then
+            layoutErrorShown = true
+            print("|cffff9900Webby Frames:|r an options row couldn't be drawn: " .. tostring(err))
+        end
+    end
+end
+
+-- Whether a row's own conditions (B.showIf, B.under, and its section's) let it show.
+local function rowShowable(row)
+    for _, r in ipairs({ row, row.section and row.section.header }) do
+        for _, pred in ipairs(r.preds or {}) do
+            local ok, v = pcall(pred)
+            if not (ok and v) then return false end
+        end
+    end
+    return true
+end
+
+-- Puts a row at y in content (the search results borrow rows from their pages), greys it out or
+-- not, and redraws its controls. Returns the height it takes.
+local function placeRow(row, content, y)
+    if row.frame:GetParent() ~= content then row.frame:SetParent(content) end
+    row.frame:Show()
+    row.frame:ClearAllPoints()
+    row.frame:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -y)
+    row.frame:SetPoint("RIGHT", content, "RIGHT")
+    row.y = y
+    local on = true
+    if row.enabledIf then
+        local ok, v = pcall(row.enabledIf)
+        on = ok and v and true or false
+    end
+    if row.parentRow and row.parentRow.enabled == false then on = false end
+    Opt.setRowEnabled(row, on)
+    if row.refresh then
+        row.updating = true
+        pcall(row.refresh)
+        row.updating = false
+    end
+    return row.height
+end
+
+-- The search results, in place of a page (like the game's own settings search): every setting
+-- whose name has what was typed in, from every page, live, under its page's and section's name.
+local function layoutSearch(q)
+    local content = Opt.searchContent
+    if not content then
+        content = CreateFrame("Frame", nil, Opt.scroll)
+        content:SetSize(Opt.CONTENT_W, 10)
+        content.heads = {}
+        content.none = Opt.text(content, 13, THEME.dim)
+        content.none:SetPoint("TOPLEFT", Opt.LABEL_X, -16)
+        content.none:SetText("No settings match.")
+        Opt.searchContent = content
+    end
+    for _, p in pairs(Opt.pages) do
+        if p.content then p.content:Hide() end
+    end
+    content:Show()
+    if Opt.scroll:GetScrollChild() ~= content then
+        Opt.scroll:SetScrollChild(content)
+        Opt.scroll:SetVerticalScroll(0)
+    end
+    for _, h in ipairs(content.heads) do h:Hide() end
+    for _, row in ipairs(Opt.borrowed or {}) do row.frame:Hide() end
+    Opt.borrowed = {}
+    local y, nHeads, lastHead = 6, 0, nil
+    for _, id in ipairs(Opt.order) do
+        local page = Opt.pages[id]
+        if page and not (UNIT_LABEL[id] and not frameOn(id)) then
+            for _, row in ipairs(page.rows) do
+                if row.search and row.search:lower():find(q, 1, true) and rowShowable(row) then
+                    makeRows(page)
+                    if row.frame then
+                        -- a heading each time the page or section changes
+                        local head = page.name:upper() .. (row.section and ("  |cff8f96a6/  " .. row.section.title:upper() .. "|r") or "")
+                        if head ~= lastHead then
+                            lastHead = head
+                            nHeads = nHeads + 1
+                            local fs = content.heads[nHeads]
+                            if not fs then
+                                fs = Opt.text(content, 12, A)
+                                fs:SetJustifyH("LEFT")
+                                content.heads[nHeads] = fs
+                            end
+                            fs:ClearAllPoints()
+                            fs:SetPoint("TOPLEFT", content, "TOPLEFT", Opt.LABEL_X, -(y + 12))
+                            fs:SetText(head)
+                            fs:Show()
+                            y = y + 32
+                        end
+                        y = y + placeRow(row, content, y)
+                        Opt.borrowed[#Opt.borrowed + 1] = row
+                    end
+                end
+            end
+        end
+    end
+    content.none:SetShown(#Opt.borrowed == 0)
+    return content, y
+end
+
 function Opt.layout()
     local w = Opt.window
     if not (w and w:IsShown()) then return end
-    local page = Opt.pages[Opt.current]
-    if not page then return end
-    if not page.content then
-        page.content = CreateFrame("Frame", nil, Opt.scroll)
-        page.content:SetSize(Opt.CONTENT_W, 10)
+    local q = Opt.query or ""
+    local content, y
+    if #q >= 2 then
+        content, y = layoutSearch(q)
+    else
+        local page = Opt.pages[Opt.current]
+        if not page then return end
+        makeRows(page)
+        if Opt.searchContent then Opt.searchContent:Hide() end
+        for _, p in pairs(Opt.pages) do
+            if p.content then p.content:SetShown(p == page) end
+        end
+        content = page.content
+        if Opt.scroll:GetScrollChild() ~= content then
+            Opt.scroll:SetScrollChild(content)
+            Opt.scroll:SetVerticalScroll(0)
+        end
+        y = 6
         for _, row in ipairs(page.rows) do
-            local f = CreateFrame("Frame", nil, page.content)
-            f:SetHeight(row.height)
-            row.frame = f
-            local ok, err = pcall(row.make, f, row)
-            if not ok and not layoutErrorShown then
-                layoutErrorShown = true
-                print("|cffff9900Webby Frames:|r an options row couldn't be drawn: " .. tostring(err))
+            local shown = (not row.section or row.section.expanded) and rowShowable(row)
+            if shown then
+                y = y + placeRow(row, content, y)
+            else
+                if row.frame:GetParent() ~= content then row.frame:SetParent(content) end
+                row.frame:Hide()
             end
         end
     end
-    for _, p in pairs(Opt.pages) do
-        if p.content then p.content:SetShown(p == page) end
-    end
-    if Opt.scroll:GetScrollChild() ~= page.content then
-        Opt.scroll:SetScrollChild(page.content)
-        Opt.scroll:SetVerticalScroll(0)
-    end
-    local y = 6
-    for _, row in ipairs(page.rows) do
-        local shown = not row.section or row.section.expanded
-        if shown then
-            for _, pred in ipairs(row.preds) do
-                local ok, v = pcall(pred)
-                if not (ok and v) then shown = false; break end
-            end
-        end
-        row.frame:SetShown(shown)
-        if shown then
-            row.frame:ClearAllPoints()
-            row.frame:SetPoint("TOPLEFT", page.content, "TOPLEFT", 0, -y)
-            row.frame:SetPoint("RIGHT", page.content, "RIGHT")
-            y = y + row.height
-            local on = true
-            if row.enabledIf then
-                local ok, v = pcall(row.enabledIf)
-                on = ok and v and true or false
-            end
-            if row.parentRow and row.parentRow.enabled == false then on = false end
-            Opt.setRowEnabled(row, on)
-            if row.refresh then
-                row.updating = true
-                pcall(row.refresh)
-                row.updating = false
-            end
-        end
-    end
-    page.content:SetHeight(y + 10)
+    content:SetHeight(y + 10)
     -- (the plain scroll frame doesn't keep its position inside the new height by itself)
     local max = math.max(0, y + 10 - Opt.scroll:GetHeight())
     if Opt.scroll:GetVerticalScroll() > max then Opt.scroll:SetVerticalScroll(max) end
-    for id, b in pairs(Opt.navButtons or {}) do b.selected:SetShown(id == Opt.current) end
+    local searching = #q >= 2
+    for id, b in pairs(Opt.navButtons or {}) do b.selected:SetShown(not searching and id == Opt.current) end
     Opt.layoutNav()
 end
 
@@ -269,7 +512,7 @@ function Opt.layoutNav()
         Opt.current = "all"
         Opt.changed()
     end
-    local i = 0
+    local y = 8
     for _, id in ipairs(Opt.order) do
         local b = Opt.navButtons[id]
         local isFrame = UNIT_LABEL[id] ~= nil      -- (General, All frames and Click casting are top-level)
@@ -278,17 +521,14 @@ function Opt.layoutNav()
             b:SetShown(shown and true or false)
             if shown then
                 b:ClearAllPoints()
-                b:SetPoint("TOPLEFT", 4, -6 - i * 24)
-                b:SetPoint("RIGHT", b:GetParent(), "RIGHT", -4, 0)
-                i = i + 1
+                b:SetPoint("TOPLEFT", 1, -y)
+                b:SetPoint("RIGHT", b:GetParent(), "RIGHT", -1, 0)
+                y = y + b:GetHeight() + 2
             end
         end
     end
     local all = Opt.navButtons.all
-    if all and all.toggle then
-        local t = Opt.framesOpen and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up"
-        all.toggle:SetNormalTexture(t)
-    end
+    if all and all.toggle then all.toggle.fs:SetText(Opt.framesOpen and "-" or "+") end
 end
 
 -- After a change: redraw once, on the next frame (several settings can change in one click).
@@ -310,8 +550,66 @@ function Opt.select(id)
     -- a frame turned off has no page to show
     if UNIT_LABEL[id] and not frameOn(id) then id = "all" end
     Opt.current = id
+    -- (picking a page ends a search)
+    if Opt.searchBox and Opt.searchBox:GetText() ~= "" then Opt.searchBox:SetText(""); Opt.searchBox:ClearFocus() end
     Opt.closeMenu()
     Opt.layout()
+end
+
+-- The settings search, at the top of the window on every page: typing swaps the page for the
+-- matching settings from every page (see layoutSearch); clearing it brings the page back.
+function Opt.setQuery(text)
+    local q = (text or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+    if q == Opt.query then return end
+    Opt.query = q
+    Opt.closeMenu()
+    Opt.scroll:SetVerticalScroll(0)
+    Opt.layout()
+end
+
+function Opt.makeSearch(w, rightOf)
+    local box = CreateFrame("EditBox", nil, w, "BackdropTemplate")
+    box:SetSize(250, 28)
+    -- (in the title bar, centred on it, left of the close button)
+    box:SetPoint("RIGHT", rightOf, "LEFT", -10, 0)
+    box:SetAutoFocus(false)
+    box:SetFontObject(Opt.fontObject(12))
+    box:SetTextInsets(28, 24, 0, 0)
+    Opt.dark(box, 0.3, THEME.panel)
+    -- (an accent underline while you're typing in it)
+    local focus = Opt.rect(box, "ARTWORK", A, 1)
+    focus:SetPoint("BOTTOMLEFT"); focus:SetPoint("BOTTOMRIGHT"); focus:SetHeight(2)
+    focus:Hide()
+    local glass = box:CreateTexture(nil, "OVERLAY")
+    glass:SetSize(14, 14)
+    glass:SetPoint("LEFT", 9, 0)
+    glass:SetTexture("Interface\\Common\\UI-Searchbox-Icon")
+    glass:SetVertexColor(THEME.dim[1], THEME.dim[2], THEME.dim[3])
+    local hint = Opt.text(box, 12, THEME.dim)
+    hint:SetPoint("LEFT", 28, 0)
+    hint:SetText("Search settings")
+    local clear = Opt.newX(box, 18)
+    clear:SetPoint("RIGHT", -5, 0)
+    clear:SetScript("OnClick", function() box:SetText(""); box:ClearFocus() end)
+    clear:Hide()
+    box:SetScript("OnTextChanged", function(self)
+        local empty = self:GetText() == ""
+        hint:SetShown(empty)
+        clear:SetShown(not empty)
+        Opt.setQuery(self:GetText())
+    end)
+    box:SetScript("OnEditFocusGained", function()
+        focus:Show()
+        glass:SetVertexColor(A[1], A[2], A[3])
+    end)
+    box:SetScript("OnEditFocusLost", function()
+        focus:Hide()
+        glass:SetVertexColor(THEME.dim[1], THEME.dim[2], THEME.dim[3])
+    end)
+    box:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    Opt.searchBox = box
+    return box
 end
 
 function Opt.buildWindow()
@@ -335,61 +633,116 @@ function Opt.buildWindow()
         local p, _, rp, x, y = self:GetPoint()
         if WebbyFramesDB then WebbyFramesDB.optionsPos = { p, rp, x, y } end
     end)
-    w:SetBackdrop({ bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark", edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 32, insets = { left = 11, right = 12, top = 12, bottom = 11 } })
+    w:SetBackdrop({ edgeFile = WHITE, edgeSize = 1 })
+    w:SetBackdropBorderColor(1, 1, 1, 0.1)
     tinsert(UISpecialFrames, "WebbyFramesOptions")     -- (Esc closes it)
+    -- a soft shadow round it
+    for i, s in ipairs({ { 4, 0.35 }, { 10, 0.18 }, { 18, 0.08 } }) do
+        local sh = Opt.rect(w, "BACKGROUND", { 0, 0, 0 }, s[2], -8 + i)
+        sh:SetPoint("TOPLEFT", -s[1], s[1])
+        sh:SetPoint("BOTTOMRIGHT", s[1], -s[1])
+    end
+    -- (the window's own fill, over the shadow)
+    local fill = Opt.rect(w, "BACKGROUND", THEME.bg, 0.97, -4)
+    fill:SetPoint("TOPLEFT", 1, -1)
+    fill:SetPoint("BOTTOMRIGHT", -1, 1)
 
-    local title = w:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", 22, -18)
-    title:SetText("Webby Frames  |cff808080v" .. addonVersion() .. "|r")
-    local close = CreateFrame("Button", nil, w, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", -6, -6)
+    -- the title bar: a faint glow of the accent from the left, and an accent line under it
+    local BAR_H = 56
+    local glow = w:CreateTexture(nil, "BACKGROUND", nil, 1)
+    glow:SetPoint("TOPLEFT", 1, -1)
+    glow:SetPoint("BOTTOMRIGHT", w, "TOPRIGHT", -1, -BAR_H)
+    Opt.gradient(glow, "HORIZONTAL", A, 0.16, A, 0)
+    local shine = w:CreateTexture(nil, "BACKGROUND", nil, 2)
+    shine:SetPoint("TOPLEFT", 1, -1)
+    shine:SetPoint("BOTTOMRIGHT", w, "TOPRIGHT", -1, -BAR_H)
+    Opt.gradient(shine, "VERTICAL", { 1, 1, 1 }, 0, { 1, 1, 1 }, 0.04)
+    local rule = w:CreateTexture(nil, "BORDER")
+    rule:SetPoint("TOPLEFT", 1, -BAR_H)
+    rule:SetPoint("TOPRIGHT", -1, -BAR_H)
+    rule:SetHeight(1)
+    Opt.gradient(rule, "HORIZONTAL", A, 0.9, A, 0.05)
+    local mark = Opt.rect(w, "ARTWORK", A, 1)      -- (a short accent block before the name)
+    mark:SetSize(4, 22)
+    mark:SetPoint("LEFT", w, "TOPLEFT", 18, -BAR_H / 2)
+    local title = Opt.text(w, 20)
+    title:SetPoint("LEFT", mark, "RIGHT", 10, 1)
+    title:SetText("WEBBY |cff" .. string.format("%02x%02x%02x", math.floor(A[1] * 255), math.floor(A[2] * 255), math.floor(A[3] * 255)) .. "FRAMES|r")
+    local ver = Opt.text(w, 11, THEME.dim)
+    ver:SetPoint("BOTTOMLEFT", title, "BOTTOMRIGHT", 10, 2)
+    ver:SetText("v" .. addonVersion())
+    local close = Opt.newX(w, 30)
+    close:SetPoint("RIGHT", w, "TOPRIGHT", -14, -BAR_H / 2)
+    close:SetScript("OnClick", function() w:Hide() end)
+    Opt.makeSearch(w, close)
 
     -- the page list
+    local NAV_W, GAP = 172, 10
     local nav = CreateFrame("Frame", nil, w, "BackdropTemplate")
-    nav:SetPoint("TOPLEFT", 16, -44)
-    nav:SetPoint("BOTTOMLEFT", 16, 16)
-    nav:SetWidth(160)
-    Opt.dark(nav, 0.25)
+    nav:SetPoint("TOPLEFT", 14, -(BAR_H + 12))
+    nav:SetPoint("BOTTOMLEFT", 14, 14)
+    nav:SetWidth(NAV_W)
+    Opt.dark(nav, 0.15, THEME.panel)
     Opt.navButtons = {}
     for i, id in ipairs(Opt.order) do
         local page = Opt.pages[id]
+        local top = not UNIT_LABEL[id]          -- (General, All frames, Click casting...; the frames sit under All frames)
         local b = CreateFrame("Button", nil, nav)
-        b:SetHeight(22)
-        b:SetPoint("TOPLEFT", 4, -6 - (i - 1) * 24)
-        b:SetPoint("RIGHT", nav, "RIGHT", -4, 0)
-        b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-        b.selected = b:CreateTexture(nil, "BACKGROUND")
-        b.selected:SetAllPoints()
-        b.selected:SetColorTexture(1, 0.82, 0, 0.18)
-        b.selected:Hide()
-        local fs = b:CreateFontString(nil, "OVERLAY", (not UNIT_LABEL[id]) and "GameFontNormal" or "GameFontHighlight")
-        fs:SetPoint("LEFT", (not UNIT_LABEL[id]) and 8 or 18, 0)
-        fs:SetText(page.name)
-        b:SetScript("OnClick", function() Opt.select(id) end)
+        b:SetHeight(top and 30 or 24)
+        b:SetPoint("TOPLEFT", 1, -6 - (i - 1) * 30)
+        b:SetPoint("RIGHT", nav, "RIGHT", -1, 0)
+        local hl = Opt.rect(b, "HIGHLIGHT", { 1, 1, 1 }, 0.05)
+        hl:SetAllPoints()
+        local fs = Opt.text(b, top and 12 or 11, THEME.dim)
+        fs:SetPoint("LEFT", top and 16 or 28, 0)
+        fs:SetText(top and page.name:upper() or page.name)
+        -- (the page on show: an accent bar at its left, the accent fading out behind it, its name lit)
+        -- (b.selected is an empty frame: shown / hidden by Opt.layout, it lights these up)
+        local wash = b:CreateTexture(nil, "BACKGROUND")
+        wash:SetAllPoints()
+        Opt.gradient(wash, "HORIZONTAL", A, 0.22, A, 0)
+        local bar = Opt.rect(b, "ARTWORK", A, 1)
+        bar:SetPoint("TOPLEFT"); bar:SetPoint("BOTTOMLEFT"); bar:SetWidth(3)
+        local sel = CreateFrame("Frame", nil, b)
+        local function lit(on)
+            wash:SetShown(on); bar:SetShown(on)
+            local c = on and THEME.text or THEME.dim
+            fs:SetTextColor(c[1], c[2], c[3])
+        end
+        sel:SetScript("OnShow", function() lit(true) end)
+        sel:SetScript("OnHide", function() lit(false) end)
+        lit(false)
+        sel:Hide()
+        b.selected = sel
+        b:SetScript("OnClick", function()
+            pcall(PlaySound, SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or 856)
+            Opt.select(id)
+        end)
         if id == "all" then
             -- the + / - that shows or folds away the frame pages under it
             local t = CreateFrame("Button", nil, b)
-            t:SetSize(16, 16)
-            t:SetPoint("RIGHT", -4, 0)
-            t:SetHighlightTexture("Interface\\Buttons\\UI-PlusButton-Hilight", "ADD")
+            t:SetSize(22, 22)
+            t:SetPoint("RIGHT", -6, 0)
+            local thl = Opt.rect(t, "HIGHLIGHT", { 1, 1, 1 }, 0.08)
+            thl:SetAllPoints()
+            t.fs = Opt.text(t, 16, THEME.dim)
+            t.fs:SetPoint("CENTER", 0, 1)
             t:SetScript("OnClick", function()
                 Opt.framesOpen = not Opt.framesOpen
-                if WebbyFramesDB then WebbyFramesDB.optionsFramesOpen = Opt.framesOpen end
                 Opt.layoutNav()
             end)
             b.toggle = t
         end
         Opt.navButtons[id] = b
     end
-    Opt.framesOpen = WebbyFramesDB and WebbyFramesDB.optionsFramesOpen and true or false
+    Opt.framesOpen = false
     Opt.layoutNav()
 
     -- the page itself, scrolling
     local area = CreateFrame("Frame", nil, w, "BackdropTemplate")
-    area:SetPoint("TOPLEFT", nav, "TOPRIGHT", 8, 0)
-    area:SetPoint("BOTTOMRIGHT", -16, 16)
-    Opt.dark(area, 0.25)
+    area:SetPoint("TOPLEFT", nav, "TOPRIGHT", GAP, 0)
+    area:SetPoint("BOTTOMRIGHT", -14, 14)
+    Opt.dark(area, 0.15, THEME.panel)
     local ok, scroll = pcall(CreateFrame, "ScrollFrame", "WebbyFramesOptionsScroll", area, "UIPanelScrollFrameTemplate")
     if not ok then
         scroll = CreateFrame("ScrollFrame", nil, area)
@@ -400,12 +753,47 @@ function Opt.buildWindow()
             self:SetVerticalScroll(math.max(0, math.min(max, self:GetVerticalScroll() - delta * 40)))
         end)
     end
-    scroll:SetPoint("TOPLEFT", 4, -4)
-    scroll:SetPoint("BOTTOMRIGHT", -26, 4)
+    scroll:SetPoint("TOPLEFT", 4, -6)
+    scroll:SetPoint("BOTTOMRIGHT", -16, 6)
+    -- (the template's scroll bar, slimmed down: no arrow buttons, a thin track and a thin thumb)
+    pcall(function()
+        local bar = scroll.ScrollBar or _G["WebbyFramesOptionsScrollScrollBar"]
+        if not bar then return end
+        for _, r in ipairs({ bar:GetRegions() }) do if r.SetAlpha then r:SetAlpha(0) end end
+        for _, k in ipairs({ "ScrollUpButton", "ScrollDownButton" }) do
+            local btn = bar[k] or (bar:GetName() and _G[bar:GetName() .. k])
+            if btn then btn:SetAlpha(0); btn:EnableMouse(false); btn:SetSize(1, 1) end
+        end
+        bar:ClearAllPoints()
+        bar:SetPoint("TOPRIGHT", area, "TOPRIGHT", -5, -8)
+        bar:SetPoint("BOTTOMRIGHT", area, "BOTTOMRIGHT", -5, 8)
+        bar:SetWidth(6)
+        local track = Opt.rect(bar, "BACKGROUND", { 1, 1, 1 }, 0.05)
+        track:SetAllPoints()
+        local thumb = bar:GetThumbTexture()
+        if thumb then
+            thumb:SetAlpha(1)
+            thumb:SetColorTexture(A[1], A[2], A[3], 0.6)
+            thumb:SetSize(6, 48)
+        end
+    end)
     Opt.scroll = scroll
-    Opt.CONTENT_W = 820 - 16 - 160 - 8 - 16 - 4 - 26
+    Opt.CONTENT_W = 820 - 14 - NAV_W - GAP - 14 - 4 - 16
 
-    w:SetScript("OnShow", function() Opt.layout() end)
+    -- (opening: a quick fade in)
+    local fade = w:CreateAnimationGroup()
+    local a = fade:CreateAnimation("Alpha")
+    a:SetFromAlpha(0)
+    a:SetToAlpha(1)
+    a:SetDuration(0.14)
+    pcall(a.SetSmoothing, a, "OUT")
+    -- every section starts folded each time the window opens
+    w:SetScript("OnShow", function()
+        fade:Stop(); fade:Play()
+        for _, sec in ipairs(Opt.sections) do sec.expanded = false end
+        Opt.framesOpen = false      -- (the frame pages under All frames start folded away too)
+        Opt.layout()
+    end)
     w:SetScript("OnHide", function() Opt.closeMenu(); GameTooltip:Hide() end)
     return w
 end
@@ -526,7 +914,7 @@ local function buildSettings()
             if redraw then Opt.changed() end
         end
         local function label(f, row, text, tip)
-            local fs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            local fs = Opt.text(f, 12)
             fs:SetPoint("LEFT", L + 20 + 18 * (row.indent or 0), 0)
             fs:SetPoint("RIGHT", f, "LEFT", CX - 10, 0)
             fs:SetJustifyH("LEFT")
@@ -544,44 +932,61 @@ local function buildSettings()
         function B.header(text)
             current = nil
             local small = text:find("^|cff808080") ~= nil
-            return add({ height = small and 22 or 36, make = function(f)
-                local fs = f:CreateFontString(nil, "OVERLAY", small and "GameFontHighlightSmall" or "GameFontHighlightLarge")
-                fs:SetPoint("BOTTOMLEFT", L, small and 4 or 8)
+            return add({ height = small and 22 or 44, make = function(f)
+                local fs = Opt.text(f, small and 11 or 17, small and THEME.dim or THEME.text)
+                fs:SetPoint("BOTTOMLEFT", L, small and 4 or 14)
                 fs:SetPoint("RIGHT", -L, 0)
                 fs:SetJustifyH("LEFT")
                 fs:SetText(text)
+                if not small then
+                    -- (a short accent underline under a big heading)
+                    local u = Opt.rect(f, "ARTWORK", A, 1)
+                    u:SetSize(36, 2)
+                    u:SetPoint("TOPLEFT", fs, "BOTTOMLEFT", 0, -5)
+                end
             end })
         end
         function B.section(text, open)
-            local sec = { expanded = open and true or false }
+            local sec = { expanded = false, title = text }
+            Opt.sections[#Opt.sections + 1] = sec
             current = nil
-            local header = add({ height = 32, make = function(f, row)
+            -- (a card's top: a bar with the section's name in capitals and a chevron; the rows under it
+            -- sit on the card's body, see makeRows)
+            local header = add({ height = 44, make = function(f, row)
                 local b = CreateFrame("Button", nil, f, "BackdropTemplate")
-                b:SetPoint("TOPLEFT", 6, -4)
-                b:SetPoint("BOTTOMRIGHT", -6, 2)
-                b:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8" })
-                b:SetBackdropColor(1, 1, 1, 0.07)
-                b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-                local icon = b:CreateTexture(nil, "ARTWORK")
-                icon:SetSize(16, 16)
-                icon:SetPoint("LEFT", 8, 0)
-                local fs = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-                fs:SetPoint("LEFT", icon, "RIGHT", 8, 0)
-                fs:SetText(text)
+                b:SetPoint("TOPLEFT", 6, -8)
+                b:SetPoint("BOTTOMRIGHT", -6, 0)
+                Opt.dark(b, 0.2)
+                local hl = Opt.rect(b, "HIGHLIGHT", { 1, 1, 1 }, 0.05)
+                hl:SetAllPoints()
+                local edge = Opt.rect(b, "ARTWORK", A, 1)
+                edge:SetPoint("TOPLEFT"); edge:SetPoint("BOTTOMLEFT"); edge:SetWidth(3)
+                local fs = Opt.text(b, 12)
+                fs:SetPoint("LEFT", 16, 0)
+                fs:SetText(text:upper())
+                local chev = Opt.chevron(b, 14)
+                chev:SetPoint("RIGHT", -12, 0)
                 b:SetScript("OnClick", function()
                     sec.expanded = not sec.expanded
                     pcall(PlaySound, SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or 856)
                     Opt.layout()
                 end)
                 row.refresh = function()
-                    icon:SetTexture(sec.expanded and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up")
+                    -- open: the accent edge lit, the name white, the chevron down; shut: dimmed, pointing right
+                    local open = sec.expanded or (Opt.query or "") ~= ""
+                    edge:SetAlpha(open and 1 or 0.25)
+                    local c = open and THEME.text or THEME.dim
+                    fs:SetTextColor(c[1], c[2], c[3])
+                    chev:SetRotation(open and 0 or math.rad(90))
+                    b:SetBackdropColor(THEME.raised[1], THEME.raised[2], THEME.raised[3], open and 1 or 0.7)
                 end
             end })
+            sec.header = header
             current = sec
-            return header       -- (so a whole section can be shown only sometimes: B.showIf)
+            return header      -- (so a whole section can be shown only sometimes: B.showIf)
         end
         function B.check(key, text, tip, default)
-            return add({ make = function(f, row)
+            return add({ search = text, tip = tip, make = function(f, row)
                 label(f, row, text, tip)
                 local cb = Opt.newCheck(f)
                 cb:SetPoint("LEFT", CX, 0)
@@ -593,7 +998,7 @@ local function buildSettings()
         end
         -- Two checkboxes on one row: a and b are { key, label, tip, default } (b may be nil).
         function B.pair(a, b)
-            return add({ make = function(f, row)
+            return add({ search = a[2] .. (b and (" / " .. b[2]) or ""), tip = (a[3] or "") .. " " .. (b and b[3] or ""), make = function(f, row)
                 row.controls, row.texts = {}, {}
                 local boxes = {}
                 for i, d in ipairs({ a, b }) do
@@ -601,8 +1006,8 @@ local function buildSettings()
                     -- (the first box where the other rows' names start, so it lines up with them and stays clear of
                     -- the section edge; the second at the controls' column)
                     cb:SetPoint("LEFT", i == 1 and (L + 17 + 18 * (row.indent or 0)) or (CX - 10), 0)
-                    local fs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-                    fs:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+                    local fs = Opt.text(f, 12)
+                    fs:SetPoint("LEFT", cb, "RIGHT", 10, 0)
                     fs:SetText(d[2])
                     cb:SetScript("OnClick", function(self) set(d[1], self:GetChecked() and true or false, true) end)
                     Opt.tip(cb, d[2], d[3])
@@ -618,16 +1023,17 @@ local function buildSettings()
         -- A colour row: label and a swatch of the colour, which opens the colour picker when clicked.
         -- getc() -> { r, g, b }; setc(r, g, b).
         function B.swatch(text, getc, setc, tip)
-            return add({ make = function(f, row)
+            return add({ search = text, tip = tip, make = function(f, row)
                 label(f, row, text, tip)
                 local b = CreateFrame("Button", nil, f, "BackdropTemplate")
-                b:SetSize(22, 22)
-                b:SetPoint("LEFT", CX + 2, 0)
+                b:SetSize(36, 18)
+                b:SetPoint("LEFT", CX, 0)
                 Opt.dark(b, 0.6)
                 b:SetBackdropColor(0, 0, 0, 1)
+                Opt.outline(b, "HIGHLIGHT", A, 1)
                 local tex = b:CreateTexture(nil, "ARTWORK")
-                tex:SetPoint("TOPLEFT", 3, -3)
-                tex:SetPoint("BOTTOMRIGHT", -3, 3)
+                tex:SetPoint("TOPLEFT", 2, -2)
+                tex:SetPoint("BOTTOMRIGHT", -2, 2)
                 b:SetScript("OnClick", function()
                     local c = getc() or { 1, 1, 1 }
                     Extras.openPicker({ c[1] or 1, c[2] or 1, c[3] or 1 }, function(r, g, bl)
@@ -649,34 +1055,39 @@ local function buildSettings()
                 v = math.floor((v - lo) / step + 0.5) * step + lo
                 return math.max(lo, math.min(hi, v))
             end
-            return add({ make = function(f, row)
+            return add({ search = text, tip = tip, make = function(f, row)
                 label(f, row, text, tip)
                 local s = CreateFrame("Slider", nil, f, "BackdropTemplate")
                 s:SetOrientation("HORIZONTAL")
-                s:SetSize(150, 17)
-                s:SetPoint("LEFT", CX + 22, 0)
-                s:SetBackdrop({ bgFile = "Interface\\Buttons\\UI-SliderBar-Background", edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
-                    tile = true, tileSize = 8, edgeSize = 8, insets = { left = 3, right = 3, top = 6, bottom = 6 } })
-                s:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+                s:SetSize(150, 18)
+                s:SetPoint("LEFT", CX + 24, 0)
+                -- (a thin track, the accent filling it up to a slim white thumb)
+                local track = Opt.rect(s, "BACKGROUND", { 1, 1, 1 }, 0.1)
+                track:SetPoint("LEFT"); track:SetPoint("RIGHT"); track:SetHeight(4)
+                local thumb = Opt.rect(s, "OVERLAY", THEME.text, 1)
+                thumb:SetSize(6, 16)
+                s:SetThumbTexture(thumb)
+                local filled = Opt.rect(s, "ARTWORK", A, 1)
+                filled:SetPoint("LEFT", track, "LEFT")
+                filled:SetPoint("RIGHT", thumb, "CENTER")
+                filled:SetHeight(4)
                 s:SetMinMaxValues(lo, hi)
                 s:SetValueStep(step)
                 pcall(s.SetObeyStepOnDrag, s, true)
-                local val = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                local val = Opt.text(f, 11, THEME.text)
                 local function stepper(dir)
-                    local b = CreateFrame("Button", nil, f)
-                    b:SetSize(20, 20)
-                    local name = dir < 0 and "Prev" or "Next"
-                    b:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. name .. "Page-Up")
-                    b:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. name .. "Page-Down")
-                    b:SetDisabledTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. name .. "Page-Disabled")
-                    b:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
+                    local b = Opt.newButton(f, 18, 18, dir < 0 and "-" or "+")
+                    b:GetFontString():SetPoint("LEFT", 0, 1)
+                    b:GetFontString():SetPoint("RIGHT", 0, 1)
+                    b:SetScript("OnMouseDown", nil)
+                    b:SetScript("OnMouseUp", nil)
                     b:SetScript("OnClick", function() s:SetValue(snap(s:GetValue() + dir * step)) end)
                     return b
                 end
                 local prev, nxt = stepper(-1), stepper(1)
-                prev:SetPoint("RIGHT", s, "LEFT", -1, 0)
-                nxt:SetPoint("LEFT", s, "RIGHT", 1, 0)
-                val:SetPoint("LEFT", nxt, "RIGHT", 4, 0)
+                prev:SetPoint("RIGHT", s, "LEFT", -5, 0)
+                nxt:SetPoint("LEFT", s, "RIGHT", 5, 0)
+                val:SetPoint("LEFT", nxt, "RIGHT", 8, 0)
                 s:SetScript("OnValueChanged", function(_, v)
                     v = snap(v)
                     val:SetText(fmt(v))
@@ -713,19 +1124,16 @@ local function buildSettings()
         -- choices: { { value, label }, ... }, or a function returning that (read each time it opens).
         function B.dropdown(key, text, tip, default, choices)
             local function list() return (type(choices) == "function" and choices() or choices) or {} end
-            return add({ make = function(f, row)
+            return add({ search = text, tip = tip, make = function(f, row)
                 label(f, row, text, tip)
                 local b = CreateFrame("Button", nil, f, "BackdropTemplate")
-                b:SetSize(CW, 24)
+                b:SetSize(CW, 26)
                 b:SetPoint("LEFT", CX, 0)
-                Opt.dark(b, 0.45)
-                b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-                local arrow = b:CreateTexture(nil, "ARTWORK")
-                arrow:SetSize(16, 16)
-                arrow:SetPoint("RIGHT", -4, 0)
-                arrow:SetTexture("Interface\\Buttons\\Arrow-Down-Up")
-                local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                fs:SetPoint("LEFT", 8, 0)
+                Opt.styleField(b)
+                local arrow = Opt.chevron(b, 14)
+                arrow:SetPoint("RIGHT", -8, 0)
+                local fs = Opt.text(b, 12)
+                fs:SetPoint("LEFT", 10, 0)
                 fs:SetPoint("RIGHT", arrow, "LEFT", -2, 0)
                 fs:SetJustifyH("LEFT")
                 pcall(fs.SetWordWrap, fs, false)
@@ -747,12 +1155,10 @@ local function buildSettings()
             end })
         end
         function B.button(text, buttonText, onClick, tip)
-            return add({ make = function(f, row)
+            return add({ search = text, tip = tip, make = function(f, row)
                 label(f, row, text, tip)
-                local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-                b:SetSize(180, 24)
+                local b = Opt.newButton(f, 180, 26, buttonText)
                 b:SetPoint("LEFT", CX, 0)
-                b:SetText(buttonText)
                 b:SetScript("OnClick", function()
                     onClick()
                     Opt.changed()

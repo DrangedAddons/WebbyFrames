@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.14.0
+A new look for the settings window
+- Flat dark panels with an amber accent: a title bar with a glow and an accent line, a soft shadow, and a quick fade in when it opens.
+- The page list: the page you're on lit with an accent bar; the frame pages folded under All frames.
+- Sections are cards with a chevron, all folded each time the window opens.
+- Toggle switches instead of check boxes, slim sliders with an accent fill, flat dropdowns and buttons that light up on hover, colour swatches to match.
+- The Click casting page in the same style.
+
+Settings search
+- A search box at the top of the window, on every page: as you type, the page is swapped for every matching setting from every page, under its page and section, and they work right there. Clearing it (or picking a page) brings the page back.
+
 ## 1.13.0
 Click casting, reworked (the page laid out like NeoHeal's)
 - Pick a modifier (no modifier, Shift, Ctrl, Alt), then each mouse button's row: what it does, its rank, who it casts on, and Also target.
