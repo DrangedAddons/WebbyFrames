@@ -37,8 +37,8 @@ number), `/webby threat` (what the game reports for your target's threat), `/web
   threat as a glow and / or a % (by the raid marker or in a box), green to red or in Blizzard's colours
 
 Always on: the player's corner accent, raid markers, combat swords and resting Zzz, the PvP shield, enemy level
-colours (and the skull for unknown levels). Combat numbers on the player, target and focus have one switch on
-the General page. Mobs tagged by someone else stay grey. Party frames are left to Blizzard or your party addon.
+colours (and the skull for unknown levels). Combat numbers on you, your pet and the focus have one switch on
+the General page, and can sit still, rise, or arc like a fountain. The target's numbers have their own switch, since every hit on the target shows. Mobs tagged by someone else stay grey. Party frames are left to Blizzard or your party addon.
 
 ## Credits
 Made by **Webby**, **Lexible** and **Dranged**.

@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.16.24
+- Combat numbers: hits were dropped before they could draw, so nothing showed, crit or not. The font is set before the text again.
+
+## 1.16.23
+- Combat numbers: crits redone from the 390 clip. A crit starts small and faint, below centre. It grows and becomes solid while it rises, then settles back to a size still above a normal hit. It does not use a scale animation.
+
+## 1.16.22
+- Combat numbers: a critical hit changes font size around its centre instead of using a scale animation. The scale was pinned to a corner of the text, so the pop slid in from the right.
+
+## 1.16.21
+- Combat numbers: a critical hit scales from the middle of the number. It was growing from a corner, so the pop looked offset to the right.
+
+## 1.16.20
+- Combat numbers: a critical hit no longer follows Straight, Fountain or Static. It slams in at double size, shrinks back over a fifth of a second, and stays in the middle of the portrait until it fades, the way Blizzard's combat text does.
+
+## 1.16.19
+- Combat numbers: nature damage, including poison, is a darker green. Heals stay the bright green.
+
+## 1.16.18
+- Combat numbers: damage is white. Holy, fire, nature, frost, shadow and arcane each use their own colour. A school the game hides stays white. Heals stay green.
+
+## 1.16.17
+- Combat numbers: after a critical hit pops, it sits still for a moment, then its usual rise, arc or fade carries on. A crit heal stays readable before it moves.
+
+## 1.16.16
+- Combat numbers: a critical hit pops a little harder, then stays at full strength a moment longer than a normal hit before it fades. `/webby crit` plays a normal hit and then a crit on your portrait.
+
+## 1.16.15
+- Combat numbers: Target numbers, under Combat numbers on the General page. On to start with. Off, the target frame draws no combat numbers and runs none of that animation. You and your pet are unchanged. Every hit on a target shows, yours or not; the game no longer says which.
+
+## 1.16.14
+- Combat numbers: Straight and Fountain start just below the centre of the portrait. A critical hit pops large, then shrinks to a size a little above a normal hit, still inside the portrait.
+
+## 1.16.13
+- Combat numbers: Number style, under Combat numbers on the General page. Static sits in the middle and fades, as before. Straight rises up the portrait. Fountain arcs up, alternating left and right. Straight and Fountain stay inside the portrait. Player, target, focus and pet.
+
+## 1.16.12
+- Combat numbers on the pet frame: damage, heals and misses pop up over its portrait, the same as on the player, target and focus. Still the one switch on the General page.
+
 ## 1.16.11
 - Click casting can be turned off (Click casting page). While it is off, none of it runs: no spellbook checks, no listeners. Clicks go back to targeting and the menu. Your bindings are kept, and come back when you turn it on.
 - Buff bars: the per-frame update only runs while a bar is counting down in plain numbers.

@@ -56,7 +56,7 @@ local UNIT_DEFAULTS = {
     target = { auraBuffs = true, auraDebuffs = true, combatNumbers = true },
     focus  = { auraBuffs = true, auraDebuffs = true, combatNumbers = true },
     targettarget = { textMode = "off", textFormat = "percent" },
-    pet = { textMode = "off", textFormat = "percent" },
+    pet = { textMode = "off", textFormat = "percent", combatNumbers = true },
     focustarget = { textMode = "off", textFormat = "percent" },
     -- party: health as a percentage, and their debuffs (small, one row under each member)
     party = { colorMode = "class", textMode = "always", textFormat = "percent", auraBuffs = true, auraDebuffs = true, auraSize = 16, auraPerRow = 6, auraMax = 6,
@@ -107,7 +107,7 @@ local DEFAULT_SETTINGS = {
     -- dispelGlow: the party frame glows in the dispel colour when you can dispel something on it
     auraStyle = "all", dispelGlow = true, dispelWho = "mine", auraMineBig = false,   -- (auraMineBig: your own debuffs first, bigger)
     healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
-    combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus), one General switch
+    combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus, pet), one General switch
     -- icons and extras
     comboPoints = true,
     druidMana = true,        -- player: a druid's mana in a slim bar under the frame while in a form
@@ -2542,61 +2542,331 @@ end
 ---------------------------------------------------------------------------
 -- Combat numbers: damage and healing the unit takes pop up over its portrait and fade, like Blizzard's
 -- old portrait hit indicator. From UNIT_COMBAT; the amount may be protected, so it only goes to setters.
+-- Static sits in the middle. Straight rises. Fountain arcs, alternating sides, on the same quarter
+-- circle Ellesmere's combat text uses. Straight and Fountain are clipped to the portrait.
 ---------------------------------------------------------------------------
 local HIT_WORDS = {   -- actions shown as a word instead of a number
     DODGE = DODGE, PARRY = PARRY, BLOCK = BLOCK, MISS = MISS, IMMUNE = IMMUNE, ABSORB = ABSORB,
     RESIST = RESIST, EVADE = EVADE, DEFLECT = DEFLECT, REFLECT = REFLECT,
 }
 
-local function hitText(f)
-    if f.hitText then return f.hitText end
-    local fs = f.ov:CreateFontString(nil, "OVERLAY", "NumberFontNormalHuge")
-    fs:SetDrawLayer("OVERLAY", 7)
-    fs:SetPoint("CENTER", f.portrait, "CENTER", 0, 0)
-    fs:Hide()
-    local ag = fs:CreateAnimationGroup()
-    local fade = ag:CreateAnimation("Alpha")
-    fade:SetFromAlpha(1); fade:SetToAlpha(0)
-    fade:SetStartDelay(0.7); fade:SetDuration(0.5)
-    ag:SetScript("OnFinished", function() fs:Hide() end)
-    fs.anim = ag
-    f.hitText = fs
-    return fs
+local Hit = {
+    -- quarter circle of radius 1: x toward the side, y along the rise (Ellesmere's fountain)
+    ARC = { { 0.134, 0.5 }, { 0.5, 0.866 }, { 1, 1 } },
+    POOL = 6,
+    RISE = 0.5,       -- how far a number travels, as a fraction of the portrait's height
+    DROP = 0.14,      -- straight and fountain start this far below centre (fraction of the portrait)
+    NORM = 0.38,      -- normal hit, fraction of the portrait height
+    CRIT = 0.456,     -- where a crit rests: 30/25 of a normal hit
+    CRIT_FROM = 0.5,  -- starts at half of that, and faint (the 390 clip)
+    CRIT_PEAK = 2.05, -- crest, about twice the settled size
+    CRIT_GROW = 0.12, -- small and faint, up to the crest
+    CRIT_LAND = 0.15, -- crest back down to the settled size
+    CRIT_DIP = 0.10,  -- starts this far below centre, fraction of the portrait
+    CRIT_ARC = 0.16,  -- crest this far above centre, then it drops back
+    CRIT_HOLD = 1.0,  -- full strength after it lands
+    CRIT_OUT = 0.6,   -- then it fades
+    MOVE_DUR = 1.05,
+    FADE_FRAC = 0.3,  -- moving numbers fade across the last part of the rise. Crits fade on their own.
+    STATIC_FADE = 0.5,
+    -- UNIT_COMBAT's school mask. Physical (and a hidden school) is white. A mix uses the first magic school.
+    SCHOOL = {
+        [1]  = { 1, 1, 1 },          -- physical
+        [2]  = { 1, 0.92, 0.4 },     -- holy
+        [4]  = { 1, 0.15, 0.08 },    -- fire
+        [8]  = { 0.16, 0.5, 0.08 },   -- nature (poison). Darker than a heal, which is (0.1, 1, 0.3)
+        [16] = { 0.35, 0.68, 1 },    -- frost
+        [32] = { 0.58, 0.32, 1 },    -- shadow
+        [64] = { 0.85, 0.42, 1 },    -- arcane
+    },
+}
+
+function Hit.woundColor(school)
+    local c = Hit.SCHOOL[school]
+    if c then return c[1], c[2], c[3] end
+    local b = 2
+    while b <= 64 do
+        if school % (b * 2) >= b then
+            c = Hit.SCHOOL[b]
+            if c then return c[1], c[2], c[3] end
+        end
+        b = b * 2
+    end
+    return 1, 1, 1
 end
 
-local function showHit(f, action, indicator, amount)
+function Hit.mode()
+    local m = DB and DB.combatStyle
+    if m == "straight" or m == "fountain" then return m end
+    return "static"
+end
+
+-- How far along its rise a number is, 0 to 1. Linear for Straight. Fountain's control points are
+-- evenly spaced in time, so its height comes off the arc. None for Static.
+function Hit.travel(m, now)
+    if m.mode ~= "straight" and m.mode ~= "fountain" then return 0 end
+    -- the pop and the pause are spent sitting still; the rise starts after them
+    local frac = (now - m.t0 - (m.stick or 0)) / m.dur
+    if frac > 1 then frac = 1 elseif frac < 0 then frac = 0 end
+    if m.mode ~= "fountain" then return frac end
+    local n = #Hit.ARC
+    local seg = frac * n
+    local i = math.floor(seg)
+    if i >= n then return Hit.ARC[n][2] end
+    local from = i > 0 and Hit.ARC[i][2] or 0
+    return from + (Hit.ARC[i + 1][2] - from) * (seg - i)
+end
+
+-- A new number starts at origin (centre, or just below it). Push this side's live numbers up until
+-- the nearest one clears it, but only a little: a full line would kick it straight out of the portrait.
+function Hit.clear(box, lane, h, origin)
+    local now = GetTime()
+    local near, nearD
+    for i = 1, #box.pool do
+        local m = box.pool[i]
+        if m.live and m.lane == lane and now - m.t0 < m.dur + (m.stick or 0) then
+            local d = m.y0 + m.rise * Hit.travel(m, now)
+            if not nearD or d < nearD then near, nearD = m, d end
+        end
+    end
+    if not near then return end
+    local need = (h + near.h) * 0.5 + 2 - (nearD - (origin or 0))
+    if need <= 0 then return end
+    local cap = box:GetHeight() * 0.22
+    if cap < 6 then cap = 6 end
+    if need > cap then need = cap end
+    for i = 1, #box.pool do
+        local m = box.pool[i]
+        if m.live and m.lane == lane and now - m.t0 < m.dur + (m.stick or 0) then
+            m.y0 = m.y0 + need
+            m.holder:ClearAllPoints()
+            m.holder:SetPoint("CENTER", box, "CENTER", 0, m.y0)
+        end
+    end
+end
+
+function Hit.box(f)
+    if f.hitBox then return f.hitBox end
+    local box = CreateFrame("Frame", nil, f.ov)
+    box:SetAllPoints(f.portrait)
+    pcall(box.SetClipsChildren, box, true)
+    box:SetFrameLevel(f.ov:GetFrameLevel() + 4)
+    box.pool = {}
+    box.xDir = 1
+    box.next = 0
+    for i = 1, Hit.POOL do
+        -- movement and fade run on this frame. The text is pinned to its centre. A crit changes the
+        -- font size from here, so the glyphs grow from the middle instead of a corner.
+        local holder = CreateFrame("Frame", nil, box)
+        holder:SetSize(2, 2)
+        holder:Hide()
+        local fs = holder:CreateFontString(nil, "OVERLAY")
+        fs:SetDrawLayer("OVERLAY", 7)
+        fs:SetPoint("CENTER", holder, "CENTER", 0, 0)
+        fs:SetJustifyH("CENTER")
+        fs:SetJustifyV("MIDDLE")
+        fs:Hide()
+        fs.holder = holder
+        fs.cps = {}
+        local ag = holder:CreateAnimationGroup()
+        fs.mv = ag:CreateAnimation("Translation")
+        pcall(function()
+            local path = ag:CreateAnimation("Path")
+            path:SetCurveType("SMOOTH")
+            local cps = {}
+            for j = 1, #Hit.ARC do cps[j] = path:CreateControlPoint(nil, nil, j) end
+            fs.path, fs.cps = path, cps
+        end)
+        local fade = ag:CreateAnimation("Alpha")
+        fade:SetFromAlpha(1)
+        fade:SetToAlpha(0)
+        fs.fade = fade
+        ag:SetScript("OnFinished", function() fs:Hide(); holder:Hide(); fs.live = nil end)
+        fs.ag = ag
+        box.pool[i] = fs
+    end
+    f.hitBox = box
+    return box
+end
+
+function Hit.stop(m)
+    m.ag:Stop()
+    m.live = nil
+    m:Hide()
+    m.holder:Hide()
+    pcall(m.holder.SetScript, m.holder, "OnUpdate", nil)
+end
+
+-- Leaves the origin quickly and eases into the end. The 390 clip does not creep up to its crest.
+local function hitEase(t)
+    if t < 0 then return 0 elseif t > 1 then return 1 end
+    t = 1 - t
+    return 1 - t * t
+end
+
+-- The 390 clip: small and faint, below where it will rest. It grows and becomes solid while it
+-- rises, crests, then settles to a size still above a normal hit. Font size, not a scale, so the
+-- centre of the glyphs stays put. The rise and fade group is not played for a crit.
+function Hit.critPlay(fs, settled, ph)
+    local small = math.max(8, settled * Hit.CRIT_FROM)
+    local big = settled * Hit.CRIT_PEAK
+    local dip, crest = -ph * Hit.CRIT_DIP, ph * Hit.CRIT_ARC
+    local grow, land = Hit.CRIT_GROW, Hit.CRIT_LAND
+    local holdEnd = grow + land + Hit.CRIT_HOLD
+    local life = holdEnd + Hit.CRIT_OUT
+    local t0 = GetTime()
+    local parent = fs.holder:GetParent()
+    local shown = -1
+    local function place(holder, size, alpha, y)
+        if math.abs(size - shown) >= 0.4 then
+            shown = size
+            pcall(fs.SetFont, fs, STANDARD_TEXT_FONT, size, "OUTLINE")
+        end
+        holder:SetAlpha(alpha)
+        holder:ClearAllPoints()
+        holder:SetPoint("CENTER", parent, "CENTER", 0, (fs.y0 or 0) + y)
+    end
+    place(fs.holder, small, 0.2, dip)
+    fs.holder:SetScript("OnUpdate", function(holder)
+        local e = GetTime() - t0
+        local size, alpha, y
+        if e < grow then
+            local u = hitEase(e / grow)
+            size = small + (big - small) * u
+            alpha = 0.2 + 0.8 * u
+            y = dip + (crest - dip) * u
+        elseif e < grow + land then
+            local u = hitEase((e - grow) / land)
+            size = big + (settled - big) * u
+            alpha = 1
+            y = crest * (1 - u)
+        elseif e < holdEnd then
+            size, alpha, y = settled, 1, 0
+        elseif e < life then
+            size, alpha, y = settled, 1 - (e - holdEnd) / Hit.CRIT_OUT, 0
+        else
+            holder:SetScript("OnUpdate", nil)
+            pcall(fs.SetFont, fs, STANDARD_TEXT_FONT, settled, "OUTLINE")
+            fs:Hide()
+            holder:Hide()
+            fs.live = nil
+            return
+        end
+        place(holder, size, alpha, y)
+    end)
+end
+
+function Hit.arm(fs, mode, rise, dur, xDir, crit)
+    -- straight and fountain move normal hits. A crit is not played here; critPlay throws it.
+    local moving = mode ~= "static" and not crit
+    fs.stick = 0
+    fs.mv:SetOffset(0, (moving and mode == "straight") and rise or 0)
+    fs.mv:SetStartDelay(0)
+    fs.mv:SetDuration(dur)
+    if fs.path then
+        fs.path:SetStartDelay(0)
+        fs.path:SetDuration(dur)
+        if moving and mode == "fountain" then
+            for j = 1, #Hit.ARC do
+                fs.cps[j]:SetOffset(xDir * Hit.ARC[j][1] * rise, Hit.ARC[j][2] * rise)
+            end
+        else
+            for j = 1, #fs.cps do fs.cps[j]:SetOffset(0, 0) end
+        end
+    elseif moving and mode == "fountain" then
+        fs.mv:SetOffset(0, rise)   -- no path animation here: rise instead of the arc
+    end
+    if crit then
+        -- the crit's fade is Hit.critPlay. This group is not played for one.
+        fs.fade:SetStartDelay(0)
+        fs.fade:SetDuration(0.01)
+    elseif mode == "static" then
+        fs.fade:SetDuration(Hit.STATIC_FADE)
+        fs.fade:SetStartDelay(math.max(0, dur - Hit.STATIC_FADE))
+    else
+        local fadeDur = Hit.MOVE_DUR * Hit.FADE_FRAC
+        fs.fade:SetDuration(fadeDur)
+        fs.fade:SetStartDelay(math.max(0, dur - fadeDur))
+    end
+end
+
+local function showHit(f, action, indicator, amount, school)
     -- the General page's master switch, then the frame's own option
-    -- one switch on the General page; the numbers show on the player, target and focus frames
+    -- one switch on the General page; the numbers show on the player, target, focus and pet frames
     if DB.combatNumbers == false or not defaultFor(f.baseUnit, "combatNumbers") then return end
-    local fs = hitText(f)
+    -- target: every hit on them, yours or not. Off means no text and no animation. The event itself
+    -- still marks a spell preview as landed (UNIT_COMBAT below).
+    if f.baseUnit == "target" and DB.combatTarget == false then return end
+    if not (f.ov and f.portrait) then return end
     -- (the action and crit flag may be protected too: compared inside pcall, a protected one counts as a hit)
     local crit, word, kind = false, nil, "WOUND"
     pcall(function() crit = (indicator == "CRITICAL" or indicator == "CRUSHING") end)
     pcall(function() word = HIT_WORDS[action] end)
     pcall(function() if action == "HEAL" or action == "ENERGIZE" or action == "WOUND" then kind = action elseif not word then kind = nil end end)
-    -- sized to the portrait: about 40% of it, more for a crit
-    local size = math.max(10, math.floor((f.portrait:GetHeight() or 60) * (crit and 0.5 or 0.38)))
-    if fs.hitSize ~= size then
-        fs.hitSize = size
-        pcall(fs.SetFont, fs, STANDARD_TEXT_FONT, size, "OUTLINE")
-    end
+    if not word and not kind then return end
+    local box = Hit.box(f)
+    local mode = Hit.mode()
+    -- the text is set before any running number is stopped, so a value the game won't show leaves them alone
+    local idx = mode == "static" and 1 or (box.next % #box.pool + 1)
+    local fs = box.pool[idx]
+    -- normal hits ~40% of the portrait. A crit settles a little larger; critPlay grows it past that.
+    -- the font has to be set before the text. Without one, SetText fails and the hit is dropped.
+    local ph = f.portrait:GetHeight() or 60
+    local size = math.max(10, math.floor(ph * (crit and Hit.CRIT or Hit.NORM)))
+    pcall(fs.SetFont, fs, STANDARD_TEXT_FONT, size, "OUTLINE")
     if word then
         fs:SetText(word)
         fs:SetTextColor(1, 1, 1)
-    elseif kind then
+    else
         if not pcall(function() fs:SetText(AbbreviateLargeNumbers(amount)) end) then
             if not pcall(function() fs:SetFormattedText("%d", amount) end) then return end
         end
         if kind == "HEAL" then fs:SetTextColor(0.1, 1, 0.3)
         elseif kind == "ENERGIZE" then fs:SetTextColor(0.4, 0.6, 1)
-        else fs:SetTextColor(1, 0.15, 0.15) end
-    else
-        return
+        else
+            -- physical, or a school the game has hidden: white. A readable school takes its own colour.
+            local r, g, b = 1, 1, 1
+            pcall(function() r, g, b = Hit.woundColor(school) end)
+            fs:SetTextColor(r, g, b)
+        end
     end
-    fs.anim:Stop()
-    fs:SetAlpha(1)
+    if mode == "static" then
+        for i = 1, #box.pool do
+            local m = box.pool[i]
+            Hit.stop(m)
+        end
+    else
+        Hit.stop(fs)
+        box.next = idx
+    end
+    local rise = ph * Hit.RISE
+    local dur = mode == "static" and (0.7 + Hit.STATIC_FADE) or Hit.MOVE_DUR
+    local lane, xDir = 0, 1
+    if mode == "fountain" and not crit then
+        box.xDir = -box.xDir
+        xDir, lane = box.xDir, box.xDir
+    end
+    local h = size * 1.15
+    -- straight and fountain come in from just below centre. A crit rests in the middle; its throw
+    -- is the arc in critPlay, not this style.
+    local origin = (mode == "static" or crit) and 0 or -(ph * Hit.DROP)
+    if crit then rise = 0; dur = Hit.CRIT_GROW + Hit.CRIT_LAND + Hit.CRIT_HOLD + Hit.CRIT_OUT end
+    if mode ~= "static" then Hit.clear(box, lane, h, origin) end
+    -- the pop is larger than the portrait, so a crit is not clipped to it
+    pcall(box.SetClipsChildren, box, mode ~= "static" and not crit)
+    fs.t0, fs.y0, fs.h, fs.lane = GetTime(), origin, h, lane
+    fs.mode, fs.rise, fs.dur, fs.live = mode, rise, dur, true
+    fs.holder:ClearAllPoints()
+    fs.holder:SetPoint("CENTER", box, "CENTER", 0, origin)
+    fs.holder:SetAlpha(1)
     fs:Show()
-    fs.anim:Play()
+    fs.holder:Show()
+    Hit.arm(fs, mode, rise, dur, xDir, crit)
+    if crit then
+        Hit.critPlay(fs, size, ph)
+    else
+        fs.ag:Play()
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -3710,7 +3980,10 @@ local function createFrame(unit)
             local _, info = ...
             pcall(AuraKit.auraChanged, self, info)   -- (the aura containers redraw on their own)
         elseif event == "UNIT_COMBAT" then
-            local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
+            -- target numbers can be off: still note the hit for a spell preview, but draw nothing
+            if self.baseUnit ~= "target" or DB.combatTarget ~= false then
+                local _, action, indicator, amount, school = ...; pcall(showHit, self, action, indicator, amount, school)
+            end
             -- the spell landed (or missed): its next combat event after the cast
             self.hitAt = GetTime()
             if self.dmgFlying then landDamage(self) end
@@ -3850,7 +4123,7 @@ local function createSmallFrame(unit, wf, index)
             local _, info = ...
             pcall(AuraKit.auraChanged, self, info)   -- (the aura containers redraw on their own)
         elseif event == "UNIT_COMBAT" then
-            local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
+            local _, action, indicator, amount, school = ...; pcall(showHit, self, action, indicator, amount, school)
             -- the spell landed (or missed): its next combat event after the cast
             self.hitAt = GetTime()
             if self.dmgFlying then landDamage(self) end
@@ -4635,7 +4908,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         -- a 10-second preview on your own frame: health slides to 60% (smooth bars), with 20% incoming
         -- heals, a 15% shield and a 10% heal-absorb; then everything goes back to the real values
         local f = frames.player
-        if not f then return end
+        if not f then print("|cff33ccffWebby Frames:|r no player frame."); return end
         pcall(updatePrediction, f)
         if not f.healBar then print("|cff33ccffWebby Frames:|r turn on Incoming heals or Absorb shields for the player frame first."); return end
         f.previewing = true
@@ -4649,9 +4922,22 @@ SlashCmdList.WEBBYFRAMES = function(msg)
             f.absorbBar:SetValue(getSetting("player", "absorbs") and 15 or 0)
             f.healAbsorbBar:SetValue(getSetting("player", "absorbs") and 10 or 0)
         end)
-        pcall(showHit, f, "WOUND", "CRITICAL", 1234)      -- and a combat number on the portrait
+        local ok, err = pcall(showHit, f, "WOUND", "CRITICAL", 1234)      -- and a combat number on the portrait
+        if not ok then print("|cff33ccffWebby Frames:|r combat number failed: " .. tostring(err)) end
         C_Timer.After(10, function() f.previewing = nil; pcall(updateAll, f) end)
         print("|cff33ccffWebby Frames:|r previewing heals (green), a shield, a heal-absorb (red) and a combat number on your frame for 10 seconds.")
+    elseif msg == "crit" then
+        -- a normal hit, then a crit, so the throw and the longer hold can be seen on your portrait
+        local f = frames.player
+        if not f then print("|cff33ccffWebby Frames:|r no player frame."); return end
+        if DB.combatNumbers == false then print("|cff33ccffWebby Frames:|r combat numbers are off."); return end
+        local ok, err = pcall(showHit, f, "WOUND", nil, 412)
+        if not ok then print("|cff33ccffWebby Frames:|r combat number failed: " .. tostring(err)) end
+        C_Timer.After(0.45, function()
+            local ok2, err2 = pcall(showHit, f, "WOUND", "CRITICAL", 1840)
+            if not ok2 then print("|cff33ccffWebby Frames:|r crit failed: " .. tostring(err2)) end
+        end)
+        print("|cff33ccffWebby Frames:|r a normal hit, then a crit, on your portrait.")
     elseif msg == "threat" then
         -- what the game reports for your target's threat: yours, then everyone else's in your group
         local mob = "target"
@@ -4758,6 +5044,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         print("|cff33ccffWebby Frames|r commands:")
         print("  /webby - options   /webby edit - move the frames   /webby reset - reset every frame")
         print("  /webby test - preview heals, shields and a combat number on your frame")
+        print("  /webby crit - a normal hit, then a crit, on your portrait")
         print("  /webby party - a sample party on your party frames")
         print("  /webby threat - what the game reports for your target's threat")
         print("  /webby cost - what the spell cost bar saw on your last cast")

@@ -554,6 +554,8 @@ end
 -- "oom" Healer mana. Only ever whole settings: section headings aren't searched (too broad).
 Opt.SEARCH_WORDS = {
     enabled = "enable disable turn off addon", combatNumbers = "floating combat text fct damage numbers",
+    combatStyle = "straight fountain static animation scroll combat numbers",
+    combatTarget = "target combat numbers other players damage",
     minimapButton = "minimap icon", scale = "size bigger smaller", font = "text typeface",
     frameTint = "border color gold class", portraitStyle = "class icon face picture",
     barTexture = "hp health statusbar", powerTexture = "mana rage energy focus power statusbar",
@@ -1436,13 +1438,23 @@ local function buildSettings()
         local general = setmetatable({}, {
             -- addon-wide switches, both on unless turned off; "show_<unit>" is that frame's Show
             __index = function(_, k)
-                if k == "enabled" or k == "combatNumbers" then return WebbyFramesDB[k] ~= false end
+                if k == "enabled" or k == "combatNumbers" or k == "combatTarget" then return WebbyFramesDB[k] ~= false end
+                if k == "combatStyle" then
+                    local v = WebbyFramesDB.combatStyle
+                    if v == "straight" or v == "fountain" then return v end
+                    return "static"
+                end
                 if k == "minimapButton" then return not (type(WebbyFramesDB.minimap) == "table" and WebbyFramesDB.minimap.hide) end
                 local unit = k:match("^show_(.+)$")
                 if unit then return frameOn(unit) end
             end,
             __newindex = function(_, k, v)
-                if k == "enabled" or k == "combatNumbers" then WebbyFramesDB[k] = v and true or false; return end
+                if k == "enabled" or k == "combatNumbers" or k == "combatTarget" then WebbyFramesDB[k] = v and true or false; return end
+                if k == "combatStyle" then
+                    if v ~= "straight" and v ~= "fountain" then v = "static" end
+                    WebbyFramesDB.combatStyle = v
+                    return
+                end
                 if k == "minimapButton" then Opt.setMinimapShown(v); return end
                 local unit = k:match("^show_(.+)$")
                 if unit then setSetting(unit, "frameShown", v and true or false) end
@@ -1450,8 +1462,12 @@ local function buildSettings()
         })
         local B = builders(Opt.newPage("general", "General"), general)
         B.header("Webby Frames  |cff808080v" .. addonVersion() .. "  -  by Webby, Lexible and Dranged|r")
-        B.pair({ "enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames.\n\n|cffffd100Needs a /reload.|r", true },
-               { "combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on the player, target and focus frames.", true })
+        local combatRow = B.pair({ "enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames.\n\n|cffffd100Needs a /reload.|r", true },
+               { "combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Damage is white, or the colour of its school (holy, fire, nature, frost, shadow, arcane). Heals are green. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on you and your pet. The target has its own switch. Focus shows them too.", true })
+        local styleRow = B.dropdown("combatStyle", "Number style", "How the combat numbers move on the portrait.\n\nStatic: they sit in the middle and fade.\nStraight: they rise up the portrait.\nFountain: they arc up, alternating left and right.\n\nStraight and Fountain start just below the centre and stay inside the portrait. A critical hit ignores that. It starts small and faint, grows as it rises, then settles a little larger than a normal hit.", "static",
+            { { "straight", "Straight" }, { "fountain", "Fountain" }, { "static", "Static" } })
+        local targetRow = B.check("combatTarget", "Target numbers", "Numbers on the target's portrait.\n\nEvery hit on the target shows, yours and everyone else's. The game no longer says which are yours.\n\nOff: the target frame draws none, and does not run their animation. You and your pet keep theirs.", true)
+        B.under(combatRow, function() return general.combatNumbers end, styleRow, targetRow)
         B.pair({ "minimapButton", "Minimap button", "A Webby Frames button on the minimap: click it for these options, right-click it for Edit Mode. Drag it round the minimap to move it.", true })
 
         B.header("Frames")
