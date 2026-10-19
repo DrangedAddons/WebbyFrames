@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.14.1
+- A logo: a web with a W and an F, in the settings window's title bar (with the name stacked beside it), on the minimap button, in the AddOns list, on the Esc > Options page and in the DrangedAddons app.
+
 ## 1.14.0
 A new look for the settings window
 - Flat dark panels with an amber accent: a title bar with a glow and an accent line, a soft shadow, and a quick fade in when it opens.

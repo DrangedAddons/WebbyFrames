@@ -45,6 +45,7 @@ local THEME = {
     dim    = { 0.56, 0.59, 0.65 },
 }
 Opt.THEME, Opt.WHITE = THEME, WHITE
+Opt.LOGO = "Interface\\AddOns\\WebbyFrames\\Media\\logo"      -- (the web emblem; also the minimap button's and the AddOns list's icon)
 local A = THEME.accent
 
 -- Font objects by size (the game's own font, so every language still has its letters).
@@ -662,14 +663,32 @@ function Opt.buildWindow()
     rule:SetPoint("TOPRIGHT", -1, -BAR_H)
     rule:SetHeight(1)
     Opt.gradient(rule, "HORIZONTAL", A, 0.9, A, 0.05)
-    local mark = Opt.rect(w, "ARTWORK", A, 1)      -- (a short accent block before the name)
-    mark:SetSize(4, 22)
-    mark:SetPoint("LEFT", w, "TOPLEFT", 18, -BAR_H / 2)
-    local title = Opt.text(w, 20)
-    title:SetPoint("LEFT", mark, "RIGHT", 10, 1)
-    title:SetText("WEBBY |cff" .. string.format("%02x%02x%02x", math.floor(A[1] * 255), math.floor(A[2] * 255), math.floor(A[3] * 255)) .. "FRAMES|r")
-    local ver = Opt.text(w, 11, THEME.dim)
-    ver:SetPoint("BOTTOMLEFT", title, "BOTTOMRIGHT", 10, 2)
+    -- the logo: the web emblem, and the name stacked beside it (WEBBY large in the accent, F R A M E S
+    -- small and spaced out under it)
+    local logo = w:CreateTexture(nil, "ARTWORK")
+    logo:SetSize(46, 46)
+    logo:SetPoint("LEFT", w, "TOPLEFT", 12, -BAR_H / 2)
+    logo:SetTexture(Opt.LOGO)
+    local title = Opt.text(w, 19, A)
+    title:SetPoint("TOPLEFT", logo, "RIGHT", 8, 16)     -- (the two lines together centred on the emblem)
+    title:SetText("WEBBY")
+    -- FRAMES: one letter each with the same gap between every pair, so the word starts and ends
+    -- exactly under WEBBY (even gaps, not even steps: the letters aren't all as wide)
+    local letters, fsList, used = { "F", "R", "A", "M", "E", "S" }, {}, 0
+    for i, ch in ipairs(letters) do
+        local fs = Opt.text(w, 11)
+        fs:SetText(ch)
+        fsList[i] = fs
+        used = used + fs:GetStringWidth()
+    end
+    local gap = math.max(1, (title:GetStringWidth() - used) / (#fsList - 1))
+    local x = 1
+    for _, fs in ipairs(fsList) do
+        fs:SetPoint("TOPLEFT", title, "BOTTOMLEFT", math.floor(x + 0.5), -4)
+        x = x + fs:GetStringWidth() + gap
+    end
+    local ver = Opt.text(w, 10, THEME.dim)
+    ver:SetPoint("BOTTOMLEFT", title, "BOTTOMRIGHT", 10, 1)
     ver:SetText("v" .. addonVersion())
     local close = Opt.newX(w, 30)
     close:SetPoint("RIGHT", w, "TOPRIGHT", -14, -BAR_H / 2)
@@ -820,8 +839,12 @@ end
 function Opt.buildAddOnsPage()
     local p = CreateFrame("Frame")
     p.name = "Webby Frames"
+    local logo = p:CreateTexture(nil, "ARTWORK")
+    logo:SetSize(48, 48)
+    logo:SetPoint("TOPLEFT", 10, -8)
+    logo:SetTexture(Opt.LOGO)
     local title = p:CreateFontString(nil, "ARTWORK", "GameFontNormalHuge")
-    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetPoint("TOPLEFT", 64, -16)
     title:SetText("Webby Frames")
     local sub = p:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
@@ -864,7 +887,7 @@ function Opt.setupMinimap()
     local launcher = LDB:NewDataObject("WebbyFrames", {
         type = "launcher",
         text = "Webby Frames",
-        icon = "Interface\\Icons\\Spell_Nature_Web",
+        icon = Opt.LOGO,
         OnClick = function(_, button)
             if button == "RightButton" then openEditMode() else Opt.toggle() end
         end,
