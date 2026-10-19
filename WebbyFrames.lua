@@ -252,8 +252,8 @@ ns.Opt = Opt
 ---------------------------------------------------------------------------
 -- Saved settings (per Edit Mode layout)
 ---------------------------------------------------------------------------
--- Older saved keys, rewritten once per unit table. Live fallbacks (debuff icon size, power texture)
--- stay in getSetting, because those are "use the other setting until this one is set".
+-- Older saved keys, rewritten once per unit table. The live fallback (debuff icon size) stays in
+-- getSetting, because it's "use the other setting until this one is set".
 local migratedUnits = {}
 local function migrateUnit(u)
     if migratedUnits[u] then return end
@@ -283,6 +283,9 @@ local function migrateUnit(u)
     u.nameSize, u.nameColor, u.nameColorRGB = nil, nil, nil
     u.textSize, u.textColor, u.textColorRGB, u.textAnchor = nil, nil, nil
     u.smoothBars = nil
+    -- the power bar's texture used to follow the health bar's until it was set; now they're separate, so
+    -- a frame relying on that keeps its look by having it saved as its own
+    if u.powerTexture == nil and u.barTexture ~= nil and u.barTexture ~= "default" then u.powerTexture = u.barTexture end
 end
 
 local function unitData(unit, create, layoutName)
@@ -308,9 +311,8 @@ end
 local function getSetting(unit, key)
     local u = unitData(unit)
     local v = u and u[key]
-    -- 0.57 test builds had one icon size; the power bar's texture follows the health bar's until it's set
+    -- 0.57 test builds had one icon size
     if v == nil and key == "auraDebuffSize" then return getSetting(unit, "auraSize") end
-    if v == nil and key == "powerTexture" then return getSetting(unit, "barTexture") end
     if v == nil then v = defaultFor(unit, key) end
     return v
 end

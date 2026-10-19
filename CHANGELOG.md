@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.15.1
+Settings search, smarter
+- It finds settings that are switched off or hidden too, with a short note saying why ("Needs Pets turned on.", "Raid style only.", "The focus frame is turned off.") and the switch they need right above them. Only settings under a switch that's off stay greyed; ones for the other party style or a hidden frame can still be set.
+- A pair of switches shows just the half that matches ("pet" no longer brings up Focus target).
+- Hidden search words ("kick" finds Cast bar, "oom" Healer mana) and words that mean the same give the same results: threat / aggro, health / hp, mana / power / rage / energy, colour / color, dispel / cleanse and more.
+
+Also
+- Power bar texture is chosen on its own now (it no longer follows the health bar texture). Frames that relied on that keep their look.
+- The switches' knob always shows (white when on), never covered by the amber.
+- Clearer names: Health / Power bar texture, Number format, Buffs shown, Display, Icon spacing, Custom frame / health colour, Tank / Healer / Damage power bars.
+
 ## 1.15.0
 Raid-style pets, reworked
 - Pets on the raid-style party frames are now their own group, as Blizzard's raid frames and EllesmereUI do it: tiles as wide as the members', in their owners' order, packed with no gaps for members without a pet.

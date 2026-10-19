@@ -172,13 +172,23 @@ function Opt.newCheck(parent)
     cb:SetCheckedTexture(lit)
     local hl = Opt.rect(cb, "HIGHLIGHT", { 1, 1, 1 }, 0.08)
     hl:SetAllPoints()
-    local knob = Opt.rect(cb, "OVERLAY", THEME.text, 1)
+    -- (the knob on a frame of its own above the switch, so the game's drawing of the checked fill can
+    -- never cover it)
+    local top = CreateFrame("Frame", nil, cb)
+    top:SetAllPoints()
+    top:SetFrameLevel(cb:GetFrameLevel() + 2)
+    local shadow = Opt.rect(top, "ARTWORK", { 0, 0, 0 }, 0.45)
+    shadow:SetSize(14, 14)
+    local knob = Opt.rect(top, "OVERLAY", THEME.text, 1)
     knob:SetSize(12, 12)
     local function place()
-        local on = cb:GetChecked()
+        local on = cb:GetChecked() and true or false
         knob:ClearAllPoints()
         knob:SetPoint(on and "RIGHT" or "LEFT", on and -3 or 3, 0)
-        if on then knob:SetColorTexture(0.06, 0.06, 0.07, 1) else knob:SetColorTexture(THEME.dim[1], THEME.dim[2], THEME.dim[3], 1) end
+        shadow:ClearAllPoints()
+        shadow:SetPoint("CENTER", knob, "CENTER", 0, -1)
+        -- on: a light knob at the right of the amber track; off: a grey one at the left of the dark track
+        if on then knob:SetColorTexture(1, 1, 1, 1) else knob:SetColorTexture(THEME.dim[1], THEME.dim[2], THEME.dim[3], 1) end
     end
     local setChecked = cb.SetChecked
     function cb:SetChecked(v) setChecked(self, v); place() end
@@ -381,19 +391,25 @@ end
 
 -- Puts a row at y in content (the search results borrow rows from their pages), greys it out or
 -- not, and redraws its controls. Returns the height it takes.
-local function placeRow(row, content, y)
+-- (off: greyed out whatever its own conditions say: a search result that isn't in use now)
+-- (which: for a pair of switches, the one half a search matched; nil: both, as on the page)
+local function placeRow(row, content, y, off, which)
     if row.frame:GetParent() ~= content then row.frame:SetParent(content) end
     row.frame:Show()
+    if row.only and row.onlyNow ~= (which or 0) then
+        row.onlyNow = which or 0
+        row.only(which)
+    end
     row.frame:ClearAllPoints()
     row.frame:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -y)
     row.frame:SetPoint("RIGHT", content, "RIGHT")
     row.y = y
-    local on = true
-    if row.enabledIf then
+    local on = not off
+    if on and row.enabledIf then
         local ok, v = pcall(row.enabledIf)
         on = ok and v and true or false
     end
-    if row.parentRow and row.parentRow.enabled == false then on = false end
+    if on and row.parentRow and row.parentRow.enabled == false then on = false end
     Opt.setRowEnabled(row, on)
     if row.refresh then
         row.updating = true
@@ -425,35 +441,82 @@ local function layoutSearch(q)
         Opt.scroll:SetVerticalScroll(0)
     end
     for _, h in ipairs(content.heads) do h:Hide() end
+    content.notes = content.notes or {}
+    for _, n in ipairs(content.notes) do n:Hide() end
     for _, row in ipairs(Opt.borrowed or {}) do row.frame:Hide() end
     Opt.borrowed = {}
-    local y, nHeads, lastHead = 6, 0, nil
+    local placed = {}
+    local y, nHeads, nNotes, lastHead = 6, 0, 0, nil
+    local function heading(text)
+        if text == lastHead then return end
+        lastHead = text
+        nHeads = nHeads + 1
+        local fs = content.heads[nHeads]
+        if not fs then
+            fs = Opt.text(content, 12, A)
+            fs:SetJustifyH("LEFT")
+            content.heads[nHeads] = fs
+        end
+        fs:ClearAllPoints()
+        fs:SetPoint("TOPLEFT", content, "TOPLEFT", Opt.LABEL_X, -(y + 12))
+        fs:SetText(text)
+        fs:Show()
+        y = y + 32
+    end
+    -- (a small line saying why the setting under it is greyed out)
+    local function note(text, indent)
+        nNotes = nNotes + 1
+        local fs = content.notes[nNotes]
+        if not fs then
+            fs = Opt.text(content, 11, THEME.dim)
+            fs:SetJustifyH("LEFT")
+            content.notes[nNotes] = fs
+        end
+        fs:ClearAllPoints()
+        fs:SetPoint("TOPLEFT", content, "TOPLEFT", Opt.LABEL_X + 20 + 18 * (indent or 0), -(y + 4))
+        fs:SetText(text)
+        fs:Show()
+        y = y + 18
+    end
+    -- (what to look for: what was typed, and the words that mean the same)
+    local terms = Opt.searchTerms(q)
+    local function matches(text)
+        if not text then return false end
+        for _, term in ipairs(terms) do if text:find(term, 1, true) then return true end end
+        return false
+    end
+    -- (a pair of switches where only one half's name matches: just that half)
+    local function half(row)
+        local h = row.halves
+        if not h then return nil end
+        local m1, m2 = matches(h[1]:lower()), matches(h[2]:lower())
+        if m1 and not m2 then return 1 elseif m2 and not m1 then return 2 end
+    end
+    local function place(row, off, which)
+        if placed[row] then return end
+        placed[row] = true
+        y = y + placeRow(row, content, y, off, which)
+        Opt.borrowed[#Opt.borrowed + 1] = row
+    end
     for _, id in ipairs(Opt.order) do
         local page = Opt.pages[id]
-        if page and not (UNIT_LABEL[id] and not frameOn(id)) then
-            for _, row in ipairs(page.rows) do
-                if row.search and row.search:lower():find(q, 1, true) and rowShowable(row) then
-                    makeRows(page)
-                    if row.frame then
-                        -- a heading each time the page or section changes
-                        local head = page.name:upper() .. (row.section and ("  |cff8f96a6/  " .. row.section.title:upper() .. "|r") or "")
-                        if head ~= lastHead then
-                            lastHead = head
-                            nHeads = nHeads + 1
-                            local fs = content.heads[nHeads]
-                            if not fs then
-                                fs = Opt.text(content, 12, A)
-                                fs:SetJustifyH("LEFT")
-                                content.heads[nHeads] = fs
-                            end
-                            fs:ClearAllPoints()
-                            fs:SetPoint("TOPLEFT", content, "TOPLEFT", Opt.LABEL_X, -(y + 12))
-                            fs:SetText(head)
-                            fs:Show()
-                            y = y + 32
-                        end
-                        y = y + placeRow(row, content, y)
-                        Opt.borrowed[#Opt.borrowed + 1] = row
+        local pageOff = page and UNIT_LABEL[id] and not frameOn(id)
+        for _, row in ipairs(page and page.rows or {}) do
+            if matches(row.find) and not placed[row] then
+                makeRows(page)
+                if row.frame then
+                    -- a heading each time the page or section changes
+                    heading(page.name:upper() .. (row.section and ("  |cff8f96a6/  " .. row.section.title:upper() .. "|r") or ""))
+                    local why, parent, usable = Opt.whyOff(page, row, pageOff)
+                    if not why then
+                        place(row, false, half(row))
+                    else
+                        -- not in use now: the switch it needs, to turn on right here; a note saying why; then
+                        -- the setting itself. It's greyed out only while that switch above it is off: a
+                        -- setting for the other party style or a hidden frame can still be set, ready.
+                        if parent and not placed[parent] and parent.frame then place(parent) end
+                        note(why, row.indent)
+                        place(row, not usable, half(row))
                     end
                 end
             end
@@ -461,6 +524,104 @@ local function layoutSearch(q)
     end
     content.none:SetShown(#Opt.borrowed == 0)
     return content, y
+end
+
+-- Words that mean the same: typing any of them (or the start of one, 3 letters on) searches for all of
+-- them, so "threat" and "aggro" find the same settings, and "color" finds "colour".
+Opt.SYNONYMS = {
+    { "threat", "aggro" }, { "health", "hp" }, { "power", "mana", "rage", "energy" },
+    { "dispel", "cleanse", "decurse" }, { "buff", "hot" }, { "debuff", "dot" }, { "absorb", "shield" },
+    { "cast bar", "castbar", "casting" }, { "colour", "color" }, { "opacity", "alpha", "transparent", "see-through" },
+    { "spacing", "gap", "padding" }, { "numbers", "values" }, { "pet", "minion" },
+}
+function Opt.searchTerms(q)
+    -- (only when what's typed is one of the words, or from 3 letters the start of one: "health colour"
+    -- stays as typed rather than turning into "anything with hp or color")
+    local terms, seen = { q }, { [q] = true }
+    for _, set in ipairs(Opt.SYNONYMS) do
+        local hit = false
+        for _, w in ipairs(set) do
+            if w == q or (#q >= 3 and w:find(q, 1, true) == 1) then hit = true; break end
+        end
+        if hit then
+            for _, w in ipairs(set) do if not seen[w] then seen[w] = true; terms[#terms + 1] = w end end
+        end
+    end
+    return terms
+end
+
+-- Words people search for that aren't in a setting's name (by setting key), so "kick" finds Cast bar and
+-- "oom" Healer mana. Only ever whole settings: section headings aren't searched (too broad).
+Opt.SEARCH_WORDS = {
+    enabled = "enable disable turn off addon", combatNumbers = "floating combat text fct damage numbers",
+    minimapButton = "minimap icon", scale = "size bigger smaller", font = "text typeface",
+    frameTint = "border color gold class", portraitStyle = "class icon face picture",
+    barTexture = "hp health statusbar", powerTexture = "mana rage energy focus power statusbar",
+    hpAlpha = "hp transparent see-through alpha", mpAlpha = "mana rage energy transparent see-through alpha",
+    textMode = "hp mana values text", textFormat = "percent percentage values text",
+    colorMode = "hp color class reaction", rpHealthColor = "hp color class", petColor = "hp color",
+    npcColor = "hp color mob enemy", healthFade = "hp red low health gradient color",
+    healPrediction = "heal prediction hots", absorbs = "shield absorb", damageTrail = "hit lost red hp",
+    damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost",
+    threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
+    dispelGlow = "cleanse decurse magic curse poison disease debuff", dispelWho = "cleanse decurse debuff",
+    rpDispelStyle = "cleanse decurse debuff", rpDispelIcon = "cleanse decurse magic curse poison disease debuff",
+    auraBuffs = "hots auras", auraDebuffs = "dots auras", auraMine = "dots my debuffs", auraMineBig = "dots my debuffs",
+    auraTimer = "cooldown duration timer countdown swipe", auraPos = "auras buffs debuffs",
+    castShow = "castbar casting spell interrupt kick", castText = "castbar spell", castIcon = "castbar spell",
+    partyGap = "gap padding", rpGap = "gap padding", rangeFade = "range distance alpha", rangeAlpha = "range distance alpha fade",
+    partyTooltip = "mouseover hover", partyStyle = "raid frames compact grid tiles portrait", partySort = "order role sort",
+    partyLayout = "horizontal vertical", rpPets = "pet minion", partyPets = "pet minion", rpPetPos = "pets", rpPetHeight = "pets",
+    missingBuffs = "buff reminder fortitude intellect mark blessing", healerMana = "healer oom",
+    druidMana = "bear cat form", druidBars = "bear cat form mana", comboPoints = "rogue cp",
+    petHappy = "hunter loyalty feed", weaponEnchants = "poison oil sharpening stone imbue enchant",
+    buffBars = "timer bars", rpShieldStyle = "absorb", rpShieldEdge = "absorb",
+    rpDefensives = "cooldowns wall divine ice block barkskin", rpSelf = "me player", rpSolo = "alone",
+    clickTooltip = "click casting bindings", clickAllFrames = "click casting bindings",
+}
+
+-- Why a search result isn't in use now (nil: it is); the row to show above it that would bring it in (a
+-- switch it sits under, or the frame's own Show), if there is one; and whether it can still be changed
+-- as it is (true, unless it sits under a switch that's off).
+Opt.predNotes, Opt.predParts = {}, {}
+local function firstFailing(row)
+    for _, r in ipairs({ row, row.section and row.section.header }) do
+        for _, pred in ipairs(r and r.preds or {}) do
+            local ok, v = pcall(pred)
+            if not (ok and v) then return pred end
+        end
+    end
+end
+-- (a condition made of others says why through the first of them that fails, else its own note)
+local function noteFor(pred)
+    for _, part in ipairs(Opt.predParts[pred] or {}) do
+        local ok, v = pcall(part)
+        if not (ok and v) then
+            local n = noteFor(part)
+            if n then return n end
+        end
+    end
+    return Opt.predNotes[pred]
+end
+function Opt.whyOff(page, row, pageOff)
+    if pageOff then
+        for _, r in ipairs(page.rows) do
+            if r.keys and r.keys.frameShown then return "The " .. page.name:lower() .. " frame is turned off.", r, true end
+        end
+        return "The " .. page.name:lower() .. " frame is turned off.", nil, true
+    end
+    local bad = firstFailing(row)
+    if not bad then return nil end
+    local parent = row.parentRow
+    if parent and bad == row.enabledIf then
+        -- (the switch it needs isn't in use either: say why that is)
+        local parentWhy = Opt.whyOff(page, parent, false)
+        if parentWhy then return parentWhy, parent, false end
+        local label = parent.search or "the setting above"
+        if parent.kind == "switch" then return "Needs " .. label .. " turned on.", parent, false end
+        return "Depends on " .. label .. ".", parent, false
+    end
+    return noteFor(bad) or "Not used with your current choices.", nil, true
 end
 
 function Opt.layout()
@@ -920,6 +1081,12 @@ local function buildSettings()
         local current
         local L, CX, CW = Opt.LABEL_X, Opt.CONTROL_X, Opt.CONTROL_W
         local function add(row)
+            -- (what the search looks through: the name, and the setting's own search words)
+            local find = row.search
+            for k in pairs(row.keys or {}) do
+                if Opt.SEARCH_WORDS[k] then find = (find or "") .. " " .. Opt.SEARCH_WORDS[k] end
+            end
+            row.find = find and find:lower()
             row.section = current
             row.preds = {}
             row.height = row.height or Opt.ROW_H
@@ -1008,8 +1175,9 @@ local function buildSettings()
             current = sec
             return header      -- (so a whole section can be shown only sometimes: B.showIf)
         end
+        -- (kind and keys: what the search's "not in use" notes say about a row, Opt.whyOff)
         function B.check(key, text, tip, default)
-            return add({ search = text, tip = tip, make = function(f, row)
+            return add({ search = text, tip = tip, kind = "switch", keys = { [key] = true }, make = function(f, row)
                 label(f, row, text, tip)
                 local cb = Opt.newCheck(f)
                 cb:SetPoint("LEFT", CX, 0)
@@ -1021,14 +1189,18 @@ local function buildSettings()
         end
         -- Two checkboxes on one row: a and b are { key, label, tip, default } (b may be nil).
         function B.pair(a, b)
-            return add({ search = a[2] .. (b and (" / " .. b[2]) or ""), tip = (a[3] or "") .. " " .. (b and b[3] or ""), make = function(f, row)
+            return add({ search = a[2] .. (b and (" / " .. b[2]) or ""), tip = (a[3] or "") .. " " .. (b and b[3] or ""),
+                -- (the search can show just the half that matches, by its name or its search words)
+                halves = b and { a[2] .. " " .. (Opt.SEARCH_WORDS[a[1]] or ""), b[2] .. " " .. (Opt.SEARCH_WORDS[b[1]] or "") } or nil,
+                kind = "switch", keys = { [a[1]] = true, [b and b[1] or a[1]] = true }, make = function(f, row)
                 row.controls, row.texts = {}, {}
                 local boxes = {}
+                -- (the first switch where the other rows' names start, so it lines up with them; the second
+                -- at the controls' column, with the other rows' controls)
+                local firstX = L + 20 + 18 * (row.indent or 0)
                 for i, d in ipairs({ a, b }) do
                     local cb = Opt.newCheck(f)
-                    -- (the first switch where the other rows' names start, so it lines up with them; the second
-                    -- at the controls' column, with the other rows' controls)
-                    cb:SetPoint("LEFT", i == 1 and (L + 20 + 18 * (row.indent or 0)) or CX, 0)
+                    cb:SetPoint("LEFT", i == 1 and firstX or CX, 0)
                     local fs = Opt.text(f, 12)
                     fs:SetPoint("LEFT", cb, "RIGHT", 10, 0)
                     fs:SetText(d[2])
@@ -1036,10 +1208,19 @@ local function buildSettings()
                     Opt.tip(cb, d[2], d[3])
                     row.controls[#row.controls + 1] = cb
                     row.texts[#row.texts + 1] = fs
-                    boxes[#boxes + 1] = { cb, d }
+                    boxes[#boxes + 1] = { cb, d, fs }
                 end
                 row.refresh = function()
                     for _, x in ipairs(boxes) do x[1]:SetChecked(get(x[2][1], x[2][4]) and true or false) end
+                end
+                -- Both halves (which = nil), or just one, moved to the left (a search matching only it).
+                row.only = function(which)
+                    for i, x in ipairs(boxes) do
+                        local show = not which or which == i
+                        x[1]:SetShown(show); x[3]:SetShown(show)
+                        x[1]:ClearAllPoints()
+                        x[1]:SetPoint("LEFT", (i == 1 or which) and firstX or CX, 0)
+                    end
                 end
             end })
         end
@@ -1078,7 +1259,7 @@ local function buildSettings()
                 v = math.floor((v - lo) / step + 0.5) * step + lo
                 return math.max(lo, math.min(hi, v))
             end
-            return add({ search = text, tip = tip, make = function(f, row)
+            return add({ search = text, tip = tip, keys = { [key] = true }, make = function(f, row)
                 label(f, row, text, tip)
                 local s = CreateFrame("Slider", nil, f, "BackdropTemplate")
                 s:SetOrientation("HORIZONTAL")
@@ -1147,7 +1328,7 @@ local function buildSettings()
         -- choices: { { value, label }, ... }, or a function returning that (read each time it opens).
         function B.dropdown(key, text, tip, default, choices)
             local function list() return (type(choices) == "function" and choices() or choices) or {} end
-            return add({ search = text, tip = tip, make = function(f, row)
+            return add({ search = text, tip = tip, keys = { [key] = true }, make = function(f, row)
                 label(f, row, text, tip)
                 local b = CreateFrame("Button", nil, f, "BackdropTemplate")
                 b:SetSize(CW, 26)
@@ -1194,7 +1375,7 @@ local function buildSettings()
         function B.auraDetails()
             return B.dropdown("auraGrowth", "Rows grow", "To the right: the first icon at the left end. To the left: the first icon at the right end, with the row filling leftwards.", "right",
                 { { "right", "To the right" }, { "left", "To the left" } }),
-            B.slider("auraGap", "Gap", "Space between the icons.", 2, 0, 10, 1, function(v) return string.format("%d px", math.floor(v + 0.5)) end),
+            B.slider("auraGap", "Icon spacing", "Space between the icons.", 2, 0, 10, 1, function(v) return string.format("%d px", math.floor(v + 0.5)) end),
             B.slider("auraStack", "Stack count size", "How big the stack count is, as a share of the icon.", 50, 30, 90, 5,
                 function(v) return string.format("%d%%", math.floor(v + 0.5)) end)
         end
@@ -1209,6 +1390,7 @@ local function buildSettings()
             B.under(fade, fadeOn, style)
             B.showIf(fadeOn, style)
             local function custom() return fadeOn() and getSetting(read, "fadeStyle") == "custom" end
+            Opt.predNotes[custom] = "Needs Fade to red on, with Fade colours set to Custom."
             local pctText = function(v) v = math.floor(v + 0.5); return v <= 0 and "Off" or string.format("%d%%", v) end
             local inits = { B.check("fadeBlend", "Blend between stops", "On: the colour blends from one stop to the next. Off: the bar changes colour right at each stop.", true) }
             local names = { "First", "Second", "Third" }
@@ -1314,19 +1496,19 @@ local function buildSettings()
         B.dropdown("frameTint", "Frame colour", "Colours the frame art on every frame. Class colour: your class on the player and pet frames, the class of whoever the others show (NPCs stay gold; each party member in their own). The player's resting glow takes the colour too.", "default",
             { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
         B.showIf(function() return getSetting("player", "frameTint") == "custom" end,
-            B.swatch("Custom colour", function() return Extras.tintColor("player") or { 1, 1, 1 } end,
+            B.swatch("Custom frame colour", function() return Extras.tintColor("player") or { 1, 1, 1 } end,
                 function(r, g, b) setAll(nil, "frameColor", { r, g, b }) end, "The colour for every frame's art. Click to change it."))
         B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
             { { "picture", "Picture" }, { "class", "Class icon (players)" } })
 
         B.section("Health and power", false)
-        B.dropdown("barTexture", "Health texture", "Every frame's health bar fill (and cast bar and heal / shield overlays).", "default", textureChoices)
-        B.dropdown("powerTexture", "Power texture", "Every frame's mana, rage or energy fill.", "default", textureChoices)
+        B.dropdown("barTexture", "Health bar texture", "Every frame's health bar fill (and cast bar and heal / shield overlays).", "default", textureChoices)
+        B.dropdown("powerTexture", "Power bar texture", "Every frame's mana, rage or energy fill.", "default", textureChoices)
         B.dropdown("font", "Font", "For the names and bar numbers on every frame.", "default", fontList)
         local numbers = B.dropdown("textMode", "Numbers", "When the bars show their numbers, on every frame.", "always",
             { { "always", "Always" }, { "mouseover", "On mouseover" }, { "off", "Never" } })
         B.under(numbers, function() return getSetting("player", "textMode") ~= "off" end,
-            B.dropdown("textFormat", "Style", "Totals, percentages, or both.", "value",
+            B.dropdown("textFormat", "Number format", "Totals, percentages, or both.", "value",
                 { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
 
         local colour = B.dropdown("colorMode", "Health colour", "Every frame's health colour at once (the pet and the party's raid-style tiles follow as closely as their own choices allow). Each frame's page can then differ.", "smart", COLOR_MODES)
@@ -1366,7 +1548,14 @@ local function buildSettings()
         local function on(k) return function() return get(k) and true or false end end
         local raid = function() return get("partyStyle") == "raid" end
         local portrait = function() return not raid() end
-        local function both(a, b) return function() return a() and b() end end
+        -- (the search's notes for settings of the style not in use)
+        Opt.predNotes[raid] = "Raid style only (Style and layout > Style)."
+        Opt.predNotes[portrait] = "Portrait frames only (Style and layout > Style)."
+        local function both(a, b)
+            local fn = function() return a() and b() end
+            Opt.predParts[fn] = { a, b }
+            return fn
+        end
         local px = function(v) return string.format("%d px", math.floor(v + 0.5)) end
         local whole = function(v) return string.format("%d", math.floor(v + 0.5)) end
         local pct = function(v) return string.format("%d%%", math.floor(v + 0.5)) end
@@ -1436,13 +1625,13 @@ local function buildSettings()
 
         -- Health and power ----------------------------------------------------------------
         B.section("Health and power", false)
-        B.dropdown("barTexture", "Health texture", "The health bar's fill (and the incoming heal and shield overlays). SharedMedia textures are listed too.", "default", textureChoices)
-        B.dropdown("powerTexture", "Power texture", "The mana, rage or energy bar's fill, coloured by power type. Follows the health texture until you pick one.", "default", textureChoices)
+        B.dropdown("barTexture", "Health bar texture", "The health bar's fill (and the incoming heal and shield overlays). SharedMedia textures are listed too.", "default", textureChoices)
+        B.dropdown("powerTexture", "Power bar texture", "The mana, rage or energy bar's fill, coloured by power type. Chosen separately from the health bar texture.", "default", textureChoices)
         B.dropdown("font", "Font", "For the names and the numbers. SharedMedia fonts are listed too.", "default", fontList)
         local numbers = B.dropdown("textMode", "Numbers", "When the health and mana numbers show. On mouseover: while the mouse is over the member.",
             defaultFor("party", "textMode"), { { "always", "Always" }, { "mouseover", "On mouseover" }, { "off", "Never" } })
         B.under(numbers, function() return get("textMode") ~= "off" end,
-            B.dropdown("textFormat", "Style", "Totals, percentages, or both.",
+            B.dropdown("textFormat", "Number format", "Totals, percentages, or both.",
                 defaultFor("party", "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
         -- (colours: each style has its own)
         -- (party members are players: no reaction or NPC choices. An older "class for players, reaction
@@ -1455,12 +1644,12 @@ local function buildSettings()
             B.dropdown("colorMode", "Health colour", "Default: the bar as the game draws it. Class colour: each member in their class's colour. Dark: a flat dark bar. Custom: a colour of your own. By health: green to yellow to red as health drops.", "class",
                 { { "plain", "Default" }, { "class", "Class colour" }, { "dark", "Dark" }, { "custom", "Custom" }, { "gradient", "By health" } }))
         B.showIf(both(portrait, function() return get("colorMode") == "custom" end),
-            swatch("healthColorRGB", "Custom colour", "The health colour for every member. Click to change it.", { 0.15, 0.75, 0.25 }))
+            swatch("healthColorRGB", "Custom health colour", "The health colour for every member. Click to change it.", { 0.15, 0.75, 0.25 }))
         B.showIf(raid,
             B.dropdown("rpHealthColor", "Health colour", "Default: Blizzard's raid-frame green. Class colour; Dark: dark bars with the missing part in their class colour; a colour of your own; or green to yellow to red as health drops.", "class",
                 { { "default", "Default" }, { "class", "Class colour" }, { "dark", "Dark" }, { "custom", "Custom" }, { "gradient", "By health" } }))
         B.showIf(both(raid, function() return get("rpHealthColor") == "custom" end),
-            swatch("rpHealthCustom", "Custom colour", "The health colour for every tile. Click to change it.", { 0.15, 0.75, 0.25 }))
+            swatch("rpHealthCustom", "Custom health colour", "The health colour for every tile. Click to change it.", { 0.15, 0.75, 0.25 }))
         B.showIf(both(raid, function() local m = get("rpHealthColor"); return m ~= "dark" and m ~= "gradient" end),
             B.slider("rpMissingDark", "Missing health shade", "How much darker the missing part of the bar is than the health.", defaultFor("party", "rpMissingDark"), 0, 100, 5, pct))
         local fadeFrom = #B.page.rows
@@ -1474,9 +1663,9 @@ local function buildSettings()
                    { "absorbs", "Shields and heal absorbs", "Damage shields past the end of the health, and healing absorbs eating back into it.", true }),
             B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true }))
         B.showIf(raid,
-            B.pair({ "rpPowerTank", "Power: tanks", "A slim power bar along the bottom of tanks' tiles.", true },
-                   { "rpPowerHealer", "Power: healers", "A slim mana bar along the bottom of healers' tiles.", true }),
-            B.pair({ "rpPowerDPS", "Power: damage", "A slim power bar along the bottom of damage dealers' tiles (and anyone with no role).", false }),
+            B.pair({ "rpPowerTank", "Tank power bars", "A slim power bar along the bottom of tanks' tiles.", true },
+                   { "rpPowerHealer", "Healer power bars", "A slim mana bar along the bottom of healers' tiles.", true }),
+            B.pair({ "rpPowerDPS", "Damage power bars", "A slim power bar along the bottom of damage dealers' tiles (and anyone with no role).", false }),
             B.dropdown("rpShieldStyle", "Shield look", "Shields (absorbs) as Blizzard's stripes, or a plain white overlay.", "striped", { { "striped", "Striped" }, { "plain", "Plain" } }),
             B.pair({ "rpShieldEdge", "Shields from the right", "Shields drawn from the right edge over the health, so a member at full health still shows theirs. Off: straight after the health.", false }),
             swatch("rpDeadColor", "Dead colour", "The tile's colour while a member is dead or a ghost.", { 0.3, 0.1, 0.1 }),
@@ -1500,9 +1689,11 @@ local function buildSettings()
             B.slider("rpAuraSize", "Icon size", "Their debuffs (bottom left) and your heals over time on them (bottom right). New sizes show on new icons; /reload for all of them.", defaultFor("party", "rpAuraSize"), 10, 24, 1, px))
         -- (the portrait frames' buffs and debuffs, as on the other frames)
         local function anyAuras() return portrait() and (get("auraBuffs") or get("auraDebuffs")) and true or false end
+        Opt.predParts[anyAuras] = { portrait }
+        Opt.predNotes[anyAuras] = "Needs Buffs or Debuffs turned on."
         local buffs = B.check("auraBuffs", "Buffs", "Each member's buffs, as icons by their frame.", defaultFor("party", "auraBuffs"))
         local buffOpts = {
-            B.dropdown("auraStyle", "Style", "Retail: only the buffs you put on them (your heals over time, shields).\nEverything: all their buffs.", defaultFor("party", "auraStyle"),
+            B.dropdown("auraStyle", "Buffs shown", "Retail: only the buffs you put on them (your heals over time, shields).\nEverything: all their buffs.", defaultFor("party", "auraStyle"),
                 { { "retail", "Retail" }, { "all", "Everything" } }),
             B.slider("auraSize", "Size", "How big the buff icons are.", defaultFor("party", "auraSize"), 12, 40, 1, px),
         }
@@ -1548,7 +1739,11 @@ local function buildSettings()
     local function framePage(B, unit)
         local function get(k) return getSetting(unit, k) end
         local function isOn(k) return function() return get(k) and true or false end end
-        local function both(a, b) return function() return a() and b() end end
+        local function both(a, b)
+            local fn = function() return a() and b() end
+            Opt.predParts[fn] = { a, b }
+            return fn
+        end
         local px = function(v) return string.format("%d px", math.floor(v + 0.5)) end
         local whole = function(v) return string.format("%d", math.floor(v + 0.5)) end
         local myClass = select(2, UnitClass("player"))
@@ -1571,7 +1766,7 @@ local function buildSettings()
             .. ((isPlayer or isPet) and "Class colour is your class's colour." or "Class colour is the class of whoever the frame shows (NPCs stay gold).")
             .. (isPlayer and " The resting glow takes the colour too." or ""), "default",
             { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
-        local custom = B.swatch("Custom colour", function() return Extras.tintColor(unit) or { 1, 1, 1 } end,
+        local custom = B.swatch("Custom frame colour", function() return Extras.tintColor(unit) or { 1, 1, 1 } end,
             function(r, g, b) setSetting(unit, "frameColor", { r, g, b }) end, "The colour for the frame art. Click to change it.")
         B.under(tint, function() return get("frameTint") == "custom" end, custom)
         if isPlayer then
@@ -1590,13 +1785,13 @@ local function buildSettings()
 
         -- Health and power ----------------------------------------------------------------
         B.section("Health and power", false)
-        B.dropdown("barTexture", "Health texture", "The health bar's fill (the cast bar and the incoming heal and shield overlays use it too). SharedMedia textures are listed too.", "default", textureChoices)
-        B.dropdown("powerTexture", "Power texture", "The mana, rage or energy bar's fill, coloured by power type. Follows the health texture until you pick one.", "default", textureChoices)
+        B.dropdown("barTexture", "Health bar texture", "The health bar's fill (the cast bar and the incoming heal and shield overlays use it too). SharedMedia textures are listed too.", "default", textureChoices)
+        B.dropdown("powerTexture", "Power bar texture", "The mana, rage or energy bar's fill, coloured by power type. Chosen separately from the health bar texture.", "default", textureChoices)
         B.dropdown("font", "Font", "For the name and the numbers on the bars. SharedMedia fonts are listed too.", "default", fontList)
         local numbers = B.dropdown("textMode", "Numbers", "When the bars show their numbers. On mouseover, only the bar under the cursor shows its number.",
             defaultFor(unit, "textMode"), { { "always", "Always" }, { "mouseover", "On mouseover" }, { "off", "Never" } })
         B.under(numbers, function() return get("textMode") ~= "off" end,
-            B.dropdown("textFormat", "Style", "Totals, percentages, or both.",
+            B.dropdown("textFormat", "Number format", "Totals, percentages, or both.",
                 defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
         if isPet then   -- (the pet's own reaction colour flips around, so these two)
             B.dropdown("petColor", "Health colour", "Default: the bar as the game draws it (green). Or the same as your player frame's (your class colour, if that's what the player frame uses).", "player",
@@ -1642,13 +1837,14 @@ local function buildSettings()
         -- Buffs and debuffs ---------------------------------------------------------------
         B.section("Buffs and debuffs", false)
         local function anyAuras() return (get("auraBuffs") or get("auraDebuffs")) and true or false end
+        Opt.predNotes[anyAuras] = "Needs Buffs or Debuffs turned on."
         local dispel = B.check("dispelGlow", "Dispel glow", "When the unit has a debuff you can dispel, the frame takes its colour (magic blue, curse purple, disease brown, poison green) and pulses, like the resting glow.", defaultFor(unit, "dispelGlow"))
         B.under(dispel, isOn("dispelGlow"),
             B.dropdown("dispelWho", "Glow for", "Debuffs you can dispel yourself, or any debuff someone could dispel (magic, curse, disease, poison).", "mine",
                 { { "mine", "Ones I can dispel" }, { "all", "Any dispellable" } }))
         local buffs = B.check("auraBuffs", "Buffs", "The unit's buffs, as icons by the frame.", defaultFor(unit, "auraBuffs"))
         B.under(buffs, isOn("auraBuffs"),
-            B.dropdown("auraStyle", "Style", "Retail: on a friend, only the buffs you put on them (your heals over time, shields); on an enemy, all their buffs.\nEverything: all their buffs.", defaultFor(unit, "auraStyle"),
+            B.dropdown("auraStyle", "Buffs shown", "Retail: on a friend, only the buffs you put on them (your heals over time, shields); on an enemy, all their buffs.\nEverything: all their buffs.", defaultFor(unit, "auraStyle"),
                 { { "retail", "Retail" }, { "all", "Everything" } }),
             B.slider("auraSize", "Size", "How big the buff icons are.", defaultFor(unit, "auraSize"), 12, 40, 1, px))
         local debuffs = B.check("auraDebuffs", "Debuffs", "The unit's debuffs, as icons by the frame, the ones that matter most first.", defaultFor(unit, "auraDebuffs"))
@@ -1697,7 +1893,7 @@ local function buildSettings()
                        { "castIcon", "Spell icon", "At the bar's left end.", true }))
             local threat = B.check("threatOn", "Threat", "Your threat on hostile mobs: a glow round the frame and / or your threat %, both in your threat colour.", true)
             B.under(threat, function() return get("threatShow") ~= "off" end,
-                B.dropdown("threatShow", "Show", "A glow round the frame, your threat %, or both.", "both",
+                B.dropdown("threatShow", "Display", "A glow round the frame, your threat %, or both.", "both",
                     { { "both", "Glow and number" }, { "glow", "Glow only" }, { "number", "Number only" } }))
             B.under(threat, function() local m = get("threatShow"); return m == "both" or m == "number" end,
                 B.dropdown("threatStyle", "Number style", "Your threat %. About 110% pulls aggro in melee and 130% at range. While you have aggro, it's your threat compared with the next highest in your group.\n\nJust the number: beside the raid marker on the portrait.\nIn a box: a small box above the end of the name.", "text",

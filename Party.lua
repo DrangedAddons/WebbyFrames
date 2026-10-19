@@ -1695,7 +1695,7 @@ function RP.layout()
     local pw, ph = w, RP.snap(math.min(h, tonumber(get("rpPetHeight")) or 24), px)
     RP.dim = { w = w, h = h, gap = gap, pw = pw, ph = ph, across = across }
     local tex = resolveTexture(get("barTexture")) or RP.FILL
-    local ptex = resolveTexture(get("powerTexture")) or RP.POWER_FILL     -- (the party's Power texture, both styles)
+    local ptex = resolveTexture(get("powerTexture")) or RP.POWER_FILL     -- (the party's Power bar texture, both styles)
     local font = resolveFont(get("font"))
     local stepX, stepY = across and (w + gap) or 0, across and 0 or (h + gap)
     for i = 1, RP.MAX do
