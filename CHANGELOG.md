@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.15.2
+- A Reload UI button in the settings window's title bar.
+- Click casting page tidied: its columns fit (Also target was cut off), the bindings sit on cards like the other pages, and the keybind headings only show once you have a keybind.
+- The scroll bar only shows when a page is long enough to scroll.
+- The Click casting description no longer starts cut off on one line.
+
 ## 1.15.1
 Settings search, smarter
 - It finds settings that are switched off or hidden too, with a short note saying why ("Needs Pets turned on.", "Raid style only.", "The focus frame is turned off.") and the switch they need right above them. Only settings under a switch that's off stay greyed; ones for the other party style or a hidden frame can still be set.

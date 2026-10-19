@@ -364,8 +364,8 @@ local function makeRows(page)
         local f = CreateFrame("Frame", nil, page.content)
         f:SetHeight(row.height)
         row.frame = f
-        if row.section then
-            -- (the rows of a section sit on its card)
+        if row.section or row.card then
+            -- (the rows of a section sit on its card; a page's own rows can ask for one too: row.card)
             local card = Opt.rect(f, "BACKGROUND", THEME.raised, 0.35)
             card:SetPoint("TOPLEFT", 6, 0)
             card:SetPoint("BOTTOMRIGHT", -6, 0)
@@ -659,6 +659,8 @@ function Opt.layout()
     -- (the plain scroll frame doesn't keep its position inside the new height by itself)
     local max = math.max(0, y + 10 - Opt.scroll:GetHeight())
     if Opt.scroll:GetVerticalScroll() > max then Opt.scroll:SetVerticalScroll(max) end
+    -- the scroll bar only when there's something to scroll (the mouse wheel does nothing either way then)
+    if Opt.scrollBar then Opt.scrollBar:SetShown(max > 0) end
     local searching = #q >= 2
     for id, b in pairs(Opt.navButtons or {}) do b.selected:SetShown(not searching and id == Opt.current) end
     Opt.layoutNav()
@@ -855,6 +857,13 @@ function Opt.buildWindow()
     close:SetPoint("RIGHT", w, "TOPRIGHT", -14, -BAR_H / 2)
     close:SetScript("OnClick", function() w:Hide() end)
     Opt.makeSearch(w, close)
+    -- Reload UI, between the name and the search (for the options that need a /reload)
+    local reload = Opt.newButton(w, 104, 28, "Reload UI")
+    reload:SetPoint("RIGHT", Opt.searchBox, "LEFT", -10, 0)
+    reload:SetScript("OnClick", function()
+        if C_UI and C_UI.Reload then C_UI.Reload() else ReloadUI() end
+    end)
+    Opt.tip(reload, "Reload UI", "Reloads the interface (the same as /reload), for the options that need it, like turning Webby Frames or its party frames on or off.")
 
     -- the page list
     local NAV_W, GAP = 172, 10
@@ -939,6 +948,8 @@ function Opt.buildWindow()
     pcall(function()
         local bar = scroll.ScrollBar or _G["WebbyFramesOptionsScrollScrollBar"]
         if not bar then return end
+        Opt.scrollBar = bar          -- (shown only while the page is longer than the window: Opt.layout)
+        scroll.scrollBarHideable = true   -- (and the template's own range check agrees: it hides it at no range too)
         for _, r in ipairs({ bar:GetRegions() }) do if r.SetAlpha then r:SetAlpha(0) end end
         for _, k in ipairs({ "ScrollUpButton", "ScrollDownButton" }) do
             local btn = bar[k] or (bar:GetName() and _G[bar:GetName() .. k])
@@ -1125,7 +1136,7 @@ local function buildSettings()
             return add({ height = small and 22 or 44, make = function(f)
                 local fs = Opt.text(f, small and 11 or 17, small and THEME.dim or THEME.text)
                 fs:SetPoint("BOTTOMLEFT", L, small and 4 or 14)
-                fs:SetPoint("RIGHT", -L, 0)
+                fs:SetWidth(Opt.CONTENT_W - 2 * L)      -- (set, not from the row's edge: see the click page's text)
                 fs:SetJustifyH("LEFT")
                 fs:SetText(text)
                 if not small then

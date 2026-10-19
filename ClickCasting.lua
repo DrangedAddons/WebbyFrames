@@ -447,9 +447,10 @@ ns.pages[#ns.pages + 1] = function(builders, Opt)
         __newindex = function(_, k, v) if WebbyFramesDB then WebbyFramesDB[k] = v and true or false end; Click.apply() end,
     })
     local B = builders(Opt.newPage("click", "Click casting"), opts)
-    -- columns: the binding's name (or its key), What it does, Rank, Cast on, Also target
-    local X = { name = 16, action = 122, rank = 316, on = 400, also = 516 }
-    local W = { name = 100, action = 190, rank = 80, on = 112 }
+    -- columns: the binding's name (or its key), What it does, Rank, Cast on, Also target. Fitted inside the
+    -- cards (6 px in from each side of the page), with 8 px between, so the last heading isn't cut off.
+    local X = { name = 22, action = 120, rank = 296, on = 380, also = 496 }
+    local W = { name = 92, action = 168, rank = 76, on = 108 }
     local ON = { { "member", "The member" }, { "target", "Their target" }, { "targettarget", "Their target's target" } }
 
     -- a dropdown-looking button (text, arrow, optional icon)
@@ -492,7 +493,7 @@ ns.pages[#ns.pages + 1] = function(builders, Opt)
             local rank = drop(f, X.rank, W.rank)
             local on = drop(f, X.on, W.on)
             local also = Opt.newCheck(f)
-            also:SetPoint("LEFT", X.also + 8, 0)
+            also:SetPoint("LEFT", X.also + 20, 0)      -- (under the middle of its heading)
             Opt.tip(also, "Also target", "Clicking it targets the member as well as casting.")
             Opt.tip(action, "Does", "What it does on a party member: target them, open their menu, or cast a spell on them.")
             Opt.tip(rank, "Rank", "Which rank of the spell: Highest (follows you as you learn new ranks), Highest -1 (cheaper on mana, and follows too), or a fixed rank. For spells you know in two ranks or more.")
@@ -551,7 +552,10 @@ ns.pages[#ns.pages + 1] = function(builders, Opt)
     B.custom(54, function(f)
         local fs = Opt.text(f, 11, Opt.THEME.dim)
         fs:SetPoint("TOPLEFT", X.name, -8)
-        fs:SetPoint("RIGHT", f, "RIGHT", -16, 0)
+        -- (a set width, not one from the row's right edge: the row has no width yet when this is made, so
+        -- the text would sit on one line, cut off, until the next redraw)
+        fs:SetWidth(Opt.CONTENT_W - X.name - 16)
+        pcall(fs.SetWordWrap, fs, true)
         fs:SetJustifyH("LEFT")
         fs:SetJustifyV("TOP")
         fs:SetText("What a click on a party member does: target them, open their menu, or cast a spell on them. Pick a modifier, then set each mouse button. Hover keys work while your mouse is over a member. Saved for this class; changes in combat apply when it ends.")
@@ -580,19 +584,22 @@ ns.pages[#ns.pages + 1] = function(builders, Opt)
     end)
 
     -- column headings
+    -- (the headings and binding rows sit on a card, like the other pages' sections: row.card)
     local function headings(first)
-        return B.custom(20, function(f)
+        local r = B.custom(26, function(f)
             local function col(x, text)
                 local fs = Opt.text(f, 10, Opt.THEME.accent)
-                fs:SetPoint("LEFT", x, 0)
+                fs:SetPoint("LEFT", x, -2)
                 fs:SetText(text:upper())
             end
             col(X.name, first); col(X.action, "Does"); col(X.rank, "Rank"); col(X.on, "Cast on"); col(X.also, "Also target")
         end)
+        r.card = true
+        return r
     end
     headings("Mouse")
     for _, btn in ipairs(Click.BUTTONS) do
-        bindingRow(function() return Click.tab .. btn[1] end, function(f)
+        local row = bindingRow(function() return Click.tab .. btn[1] end, function(f)
             local label = Opt.text(f, 12)
             label:SetPoint("LEFT", X.name, 0)
             label:SetWidth(W.name)
@@ -603,12 +610,20 @@ ns.pages[#ns.pages + 1] = function(builders, Opt)
                 label:SetText(word .. btn[2])
             end
         end)
+        row.card = true
     end
 
     -- Custom keybinds: none to start with; "+ Add a keybind" takes the next key you press and gives it a
     -- row like the mouse buttons' (what it does, rank, cast on, also target), with a button to change the
     -- key and one to remove the row. They work while your mouse is over a member.
-    headings("Keybind")
+    -- (a gap between the two cards; the keybind headings only once there's a keybind under them)
+    B.custom(10, function() end)
+    local function anyKey()
+        local t = Click.bindings()
+        for i = 1, Click.HOVER_SLOTS do if t["hoverkey" .. i] then return true end end
+        return false
+    end
+    B.showIf(anyKey, headings("Keybind"))
     local function freeSlot()
         local t = Click.bindings()
         for i = 1, Click.HOVER_SLOTS do if not t["hoverkey" .. i] then return i end end
@@ -655,7 +670,7 @@ ns.pages[#ns.pages + 1] = function(builders, Opt)
             end)
             -- remove the keybind (and what it did)
             local del = Opt.newX(f, 22)
-            del:SetPoint("LEFT", X.also + 50, 0)
+            del:SetPoint("LEFT", X.also + 60, 0)
             Opt.tip(del, "Remove", "Remove this keybind.")
             del:SetScript("OnClick", function()
                 if InCombatLockdown() then return end
@@ -666,10 +681,11 @@ ns.pages[#ns.pages + 1] = function(builders, Opt)
             end)
             return show
         end)
+        row.card = true
         B.showIf(function() return Click.bindings()["hoverkey" .. i] ~= nil end, row)
     end
     -- + Add a keybind
-    B.custom(Opt.ROW_H + 4, function(f, r)
+    local addRow = B.custom(Opt.ROW_H + 8, function(f, r)
         local b = CreateFrame("Button", nil, f, "BackdropTemplate")
         b:SetSize(W.name + W.action + 6, 26)
         b:SetPoint("LEFT", X.name, 0)
@@ -692,6 +708,7 @@ ns.pages[#ns.pages + 1] = function(builders, Opt)
         r.refresh = idle
         r.controls = {}
     end)
+    addRow.card = true
 
     -- reset, and the options
     B.custom(44, function(f, r)
