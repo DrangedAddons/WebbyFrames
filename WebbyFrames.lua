@@ -1289,7 +1289,8 @@ end
 
 -- Fits one of the cost bars to the power bar: its fill, mask and length, its end on the fill's end.
 local function fitCostBar(f, bar, side)
-    local tex = f.mpCurrent or PLAIN_FILL
+    -- (Cost texture, or the power bar's own fill)
+    local tex = resolveTexture(getSetting("player", "costTexture")) or f.mpCurrent or PLAIN_FILL
     if bar.tex ~= tex then
         bar.tex = tex
         if not pcall(bar.SetStatusBarTexture, bar, tex) or not bar:GetStatusBarTexture() then bar:SetStatusBarTexture(PLAIN_FILL) end
@@ -1357,7 +1358,8 @@ local function updateManaTrail(f, maxP, curP, token)
         t:Hide()
         return
     end
-    local tex = f.mpCurrent or PLAIN_FILL
+    -- (Trail texture, or the power bar's own fill)
+    local tex = resolveTexture(getSetting("player", "costTrailTexture")) or f.mpCurrent or PLAIN_FILL
     if t.tex ~= tex then
         t.tex = tex
         if not pcall(t.SetStatusBarTexture, t, tex) or not t:GetStatusBarTexture() then t:SetStatusBarTexture(PLAIN_FILL) end

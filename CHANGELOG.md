@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.3
+- Spell costs: pick the textures too. Cost texture for the cast preview and Trail texture for the trail (your power bar's own fill to start with; SharedMedia textures listed too).
+
 ## 1.16.2
 - Spell costs: pick the colours yourself. Cost colour for the cast preview (when Shading is set lighter) and Trail colour for the trail of what was just used; both white to start with (player page, Health and power).
 

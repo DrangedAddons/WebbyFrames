@@ -562,7 +562,7 @@ Opt.SEARCH_WORDS = {
     colorMode = "hp color class reaction", rpHealthColor = "hp color class", petColor = "hp color",
     npcColor = "hp color mob enemy", healthFade = "hp red low health gradient color",
     healPrediction = "heal prediction hots", absorbs = "shield absorb", damageTrail = "hit lost red hp",
-    damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost",
+    damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
     threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
     dispelGlow = "cleanse decurse magic curse poison disease debuff", dispelWho = "cleanse decurse debuff",
     rpDispelStyle = "cleanse decurse debuff", rpDispelIcon = "cleanse decurse magic curse poison disease debuff",
@@ -1848,10 +1848,16 @@ local function buildSettings()
             -- the colours they light up in (white to start with)
             local function colourOf(key) return function() local c = get(key); return type(c) == "table" and c or { 1, 1, 1 } end end
             local function shade() return tonumber(get("costShade")) or 55 end
+            -- and their textures (the power bar's own fill to start with)
+            local shown = function() return get("costPredict") and shade() ~= 0 end
+            B.under(cost, shown,
+                B.dropdown("costTexture", "Cost texture", "The fill the cost shows in while you cast. Default: your power bar's own. SharedMedia textures are listed too.", "default", textureChoices))
             B.under(cost, function() return get("costPredict") and shade() > 0 end,
                 B.swatch("Cost colour", colourOf("costColor"), function(r, g, b) setSetting(unit, "costColor", { r, g, b }) end,
                     "The colour the cost lights up in while you cast (with Shading set lighter). Click to change it."))
-            B.under(cost, function() return get("costPredict") and shade() ~= 0 end,
+            B.under(cost, shown,
+                B.dropdown("costTrailTexture", "Trail texture", "The fill of the trail left by what a spell just used. Default: your power bar's own. SharedMedia textures are listed too.", "default", textureChoices))
+            B.under(cost, shown,
                 B.swatch("Trail colour", colourOf("costTrailColor"), function(r, g, b) setSetting(unit, "costTrailColor", { r, g, b }) end,
                     "The colour of the trail left by what a spell just used. Click to change it."))
             if myClass == "DRUID" then
