@@ -32,10 +32,11 @@ local function hasCorner(unit) return unit == "player" end
 local OWN_CLASS = { player = true, pet = true }
 
 local COLOR_MODES = {
+    { "plain",    "Default" },          -- (the bar as the game draws it: green)
     { "smart",    "Class for players, reaction for NPCs" },
     { "class",    "Class colour (players only)" },
     { "reaction", "By reaction" },
-    { "plain",    "Plain green" },
+    { "dark",     "Dark" },
 }
 
 local DEFAULT_POS = {
@@ -51,15 +52,27 @@ local DEFAULT_POS = {
 
 -- per-frame defaults that differ from DEFAULT_SETTINGS (the small frame is too narrow for long numbers)
 local UNIT_DEFAULTS = {
-    player = { combatNumbers = true, dispelGlow = true },
+    player = { combatNumbers = true },
     target = { auraBuffs = true, auraDebuffs = true, combatNumbers = true },
     focus  = { auraBuffs = true, auraDebuffs = true, combatNumbers = true },
     targettarget = { textMode = "off", textFormat = "percent" },
     pet = { textMode = "off", textFormat = "percent" },
     focustarget = { textMode = "off", textFormat = "percent" },
     -- party: health as a percentage, and their debuffs (small, one row under each member)
-    party = { textMode = "always", textFormat = "percent", auraBuffs = true, auraDebuffs = true, auraSize = 16, auraPerRow = 6, auraMax = 6,
-              auraStyle = "retail", dispelGlow = true, auraPos = "side", partyGap = 6 },
+    party = { colorMode = "class", textMode = "always", textFormat = "percent", auraBuffs = true, auraDebuffs = true, auraSize = 16, auraPerRow = 6, auraMax = 6,
+              auraStyle = "retail", dispelGlow = true, auraPos = "side", partyGap = 6,
+              -- raid style (RaidParty.lua): tiles, their size and gap, you among them, power bars, health text
+              partyStyle = "portrait", rpWidth = 96, rpHeight = 48, rpGap = 3, rpSelf = true,
+              rpPowerTank = true, rpPowerHealer = true, rpPowerDPS = false,
+              rpAuraSize = 14, rpDefSize = 20, rpDefensives = true,
+              rpHealthColor = "class", rpHealthCustom = { 0.15, 0.75, 0.25 }, rpMissingDark = 75,
+              rpDispelStyle = "gradient", rpDispelIcon = true,
+              rpNameColor = "white", rpNameMax = 0, rpNamePos = "topleft",
+              rpHoverEdge = true, rpPets = false, rpSolo = false, rpAFK = true,
+              rpDeadColor = { 0.3, 0.1, 0.1 }, rpOfflineColor = { 0.35, 0.35, 0.35 },
+              rpShieldStyle = "striped", rpShieldEdge = false,
+              -- both styles: fading out of range, missing buffs, the healer mana list, tooltips
+              rangeAlpha = 0.45, missingBuffs = true, healerMana = false, partyTooltip = "always" },
 }
 
 local DEFAULT_SETTINGS = {
@@ -78,10 +91,6 @@ local DEFAULT_SETTINGS = {
     auraBuffs = false, auraDebuffs = false, auraMine = false,
     auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below", auraTimer = "both",   -- auraDebuffSize follows auraSize until set
     auraGap = 2, auraGrowth = "right", auraStack = 50,      -- gap between icons, row direction, stack count size (% of icon)
-    -- locked (no longer options): the font's own size and colour, numbers centred on the bar
-    nameSize = 0, nameColor = "default",
-    textColor = "default",
-    textSize = 0, textAnchor = "center",
     portraitStyle = "picture",   -- "picture" or "class" (class icon for players)
     -- cast bar (target and focus): Blizzard's own bar drives one built into our frame
     castShow = true, castText = true, castIcon = true,
@@ -96,17 +105,21 @@ local DEFAULT_SETTINGS = {
     partyLayout = "vertical", partySort = "group", partyPets = true,
     -- buffs and debuffs: "all" (every buff) or "retail" (the party's default: only your own buffs);
     -- dispelGlow: the party frame glows in the dispel colour when you can dispel something on it
-    auraStyle = "all", dispelGlow = false, auraMineBig = false,   -- (auraMineBig: your own debuffs first, bigger)
-    smoothBars = true, healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
+    auraStyle = "all", dispelGlow = true, dispelWho = "mine", auraMineBig = false,   -- (auraMineBig: your own debuffs first, bigger)
+    healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
     combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus), one General switch
     -- icons and extras
     comboPoints = true,
     druidMana = true,        -- player: a druid's mana in a slim bar under the frame while in a form
+    -- player: weapon enchants before your buffs, your buffs as timer bars (PlayerExtras.lua)
+    weaponEnchants = true, buffBars = false, buffBarsWho = "mine", buffBarsMax = 8, buffBarsWidth = 180,
+    hpAlpha = 1, mpAlpha = 1,   -- how solid the health and power fills are
+    druidBars = "form",      -- player, druids in a form: "form" (the frame's bar: form power; slim bar: mana) or "mana" (the other way round)
     restTint = false,        -- player: the resting Zzz takes the frame colour
     costPredict = true,      -- player: while casting, the spell's cost shows on the power bar
     costShade = 55,          -- player: how much lighter (above 0) or darker (below 0) the cost shows
     cornerStyle = "retail",  -- player: the corner accent's art, Retail's or Forever's own
-    petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (green)
+    petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (Default: as drawn)
     petHappy = "corner",     -- hunter pet happiness: "corner" (over the corner accent), "badge" (in the level circle) or "off"
 }
 
@@ -221,13 +234,20 @@ local frames = {}            -- unit -> frame
 -- the party frames, slot 1 - 4 (slot 1 is frames.party); see "Party frames"
 local Party = { members = {}, SLOTS = 4 }   -- (filled in by Party.lua)
 ns.Party = Party
+-- buffs and debuffs (Auras.lua fills it in); groups, in the order they show: buffs, your own debuffs
+-- (only with "bigger own debuffs"), the rest
+local AuraKit = { GROUPS = { "buffs", "debuffsMine", "debuffs" } }
+ns.AuraKit = AuraKit
+local function updateAuras(f) return AuraKit.update(f) end
 -- the unit events a small frame (and a party slot, again whenever it's given another unit) listens to
 Party.UNIT_EVENTS = { "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
     "UNIT_NAME_UPDATE", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA",
     "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", "UNIT_COMBAT" }
 local activeLayout = "Default"
 local pendingApply = false
-local Opt                    -- the settings window; filled in below, after the functions that refresh it
+-- the settings window (Options.lua fills it in)
+local Opt = { pages = {}, order = {}, ROW_H = 28, LABEL_X = 16, CONTROL_X = 300, CONTROL_W = 240, CONTENT_W = 580, MENU_ROWS = 14 }
+ns.Opt = Opt
 
 ---------------------------------------------------------------------------
 -- Saved settings (per Edit Mode layout)
@@ -298,6 +318,18 @@ end
 ---------------------------------------------------------------------------
 -- Helpers
 ---------------------------------------------------------------------------
+-- Whether a value is hidden from addons (a "secret" in combat): it may only go to setters, never be
+-- compared or worked with. (A client without secrets has nothing hidden.)
+local function isSecret(v)
+    return issecretvalue ~= nil and issecretvalue(v) or false
+end
+-- An API's answer when it's usable (no error, not hidden), else nil. For tests in the hot paths, in
+-- place of a throwaway pcall(function() ... end) each time.
+local function plain(fn, ...)
+    local ok, v = pcall(fn, ...)
+    if ok and not isSecret(v) then return v end
+end
+
 local atlasCache = {}
 local atlasProbe
 local function hasAtlas(name)
@@ -320,20 +352,16 @@ end
 
 
 local function percentOf(kind, u, token)
-    local pct
-    pcall(function()
-        local scale = CurveConstants and CurveConstants.ScaleTo100
-        if kind == "hp" and UnitHealthPercent then pct = UnitHealthPercent(u, false, scale)
-        elseif kind == "mp" and UnitPowerPercent then pct = UnitPowerPercent(u, token, false, scale) end
-        if scale == nil and pct then pct = pct * 100 end
-    end)
-    if pct == nil then
-        pcall(function()
-            if kind == "hp" then pct = UnitHealth(u) / UnitHealthMax(u) * 100
-            else pct = UnitPower(u) / UnitPowerMax(u) * 100 end
-        end)
-    end
-    return pct
+    local scale = CurveConstants and CurveConstants.ScaleTo100
+    local ok, pct
+    if kind == "hp" and UnitHealthPercent then ok, pct = pcall(UnitHealthPercent, u, false, scale)
+    elseif kind == "mp" and UnitPowerPercent then ok, pct = pcall(UnitPowerPercent, u, token, false, scale) end
+    if ok and isSecret(pct) then return pct end              -- (hidden: straight to the text)
+    if ok and pct ~= nil then return scale == nil and pct * 100 or pct end
+    -- older clients: worked out, when the numbers aren't hidden
+    local cur = plain(kind == "hp" and UnitHealth or UnitPower, u)
+    local max = plain(kind == "hp" and UnitHealthMax or UnitPowerMax, u)
+    if cur and max and max > 0 then return cur / max * 100 end
 end
 
 -- Writes "12.3K", "85%" or "12.3K (85%)" depending on the unit's text format. Power other than mana
@@ -345,25 +373,15 @@ local function setBarText(fs, f, kind)
     local cur
     if kind == "hp" then cur = UnitHealth(u) else cur = UnitPower(u) end
     local token = select(2, UnitPowerType(u))
-    if kind == "mp" then
-        local mana = false
-        pcall(function() mana = (token == "MANA") end)
-        if not mana then fmt = "value" end
-    end
+    if kind == "mp" and (isSecret(token) or token ~= "MANA") then fmt = "value" end
     local pct = (fmt ~= "value") and percentOf(kind, u, token) or nil
-    local ok = pcall(function()
-        local valueText = AbbreviateLargeNumbers(cur)
-        if fmt == "value" then
-            fs:SetText(valueText)
-        elseif fmt == "percent" then
-            fs:SetFormattedText("%d%%", pct)
-        else
-            fs:SetFormattedText("%s (%d%%)", valueText, pct)
-        end
-    end)
-    if not ok then
-        if not pcall(function() fs:SetFormattedText("%d", cur) end) then fs:SetText("") end
-    end
+    local hasPct = isSecret(pct) or pct ~= nil
+    local okA, valueText = pcall(AbbreviateLargeNumbers, cur)
+    local ok
+    if fmt == "value" then ok = okA and pcall(fs.SetText, fs, valueText)
+    elseif fmt == "percent" then ok = hasPct and pcall(fs.SetFormattedText, fs, "%d%%", pct)
+    else ok = okA and hasPct and pcall(fs.SetFormattedText, fs, "%s (%d%%)", valueText, pct) end
+    if not ok and not pcall(fs.SetFormattedText, fs, "%d", cur) then fs:SetText("") end
 end
 
 local CIRCLE_FALLBACK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
@@ -438,34 +456,35 @@ local function healthColor(f)
     local u, base = f.wfUnit, f.baseUnit
     local r, g, b
 
-    local tapped
-    pcall(function() tapped = (not UnitPlayerControlled(u)) and UnitIsTapDenied(u) end)
-    if tapped then return 0.5, 0.5, 0.5 end
+    if not plain(UnitPlayerControlled, u) and plain(UnitIsTapDenied, u) then return 0.5, 0.5, 0.5 end
 
     -- the pet's own selection colour flips around (neutral / friendly / controlled), so its bar is either
-    -- the player frame's colour (as set on the player page: your class colour, say) or plain green
+    -- the player frame's colour (as set on the player page: your class colour, say) or Default: the bar
+    -- as the game draws it
     if base == "pet" then
-        if getSetting("pet", "petColor") == "player" then
-            r, g, b = healthColor(PLAYER_AS_FRAME)
-            if r then return r, g, b end
-        end
-        return 0.1, 0.8, 0.1
+        if getSetting("pet", "petColor") == "player" then return healthColor(PLAYER_AS_FRAME) end
+        return nil
     end
 
     local mode = getSetting(base, "colorMode")
+    if mode == "dark" then return 0.2, 0.2, 0.22 end      -- Dark: a flat dark bar (EllesmereUI's dark mode)
+    if mode == "custom" then                                -- Custom: one colour of your own
+        local c = getSetting(base, "healthColorRGB")
+        if type(c) == "table" then return c[1] or 0.15, c[2] or 0.75, c[3] or 0.25 end
+        return 0.15, 0.75, 0.25
+    end
+    if mode == "gradient" then return 0.15, 0.85, 0.25 end  -- By health: green when full (applyHealthFade does the rest)
     -- friendly pets and guardians (on any frame, e.g. targeting your pet): their selection colour
     -- flips between friendly, neutral and "controlled" blue, so they are always green
     if mode ~= "plain" and mode ~= "class" then
-        local friendlyPet
-        pcall(function() friendlyPet = UnitPlayerControlled(u) and not UnitIsPlayer(u) and not UnitCanAttack("player", u) end)
-        if friendlyPet then return 0.1, 0.8, 0.1 end
+        if plain(UnitPlayerControlled, u) and plain(UnitIsPlayer, u) == false and plain(UnitCanAttack, "player", u) == false then
+            return 0.1, 0.8, 0.1
+        end
         -- hostile NPCs can have their own colour instead of reaction red (green, say, so the fade to red
         -- has somewhere to go); neutral ones keep their yellow
         local npc = getSetting(base, "npcColor")
         if npc == "green" or npc == "custom" then
-            local hostileNPC
-            pcall(function() hostileNPC = (not UnitIsPlayer(u)) and UnitReaction(u, "player") <= 3 end)
-            if hostileNPC then
+            if plain(UnitIsPlayer, u) == false and (plain(UnitReaction, u, "player") or 9) <= 3 then
                 local c = npc == "custom" and getSetting(base, "npcColorRGB")
                 if type(c) == "table" then return c[1] or 0.1, c[2] or 0.8, c[3] or 0.1 end
                 return 0.1, 0.8, 0.1
@@ -480,13 +499,9 @@ end
 
 -- Dead / ghost / offline, or nil. Status flags are plain booleans, but are still only read inside pcall.
 local function unitStatus(u)
-    local s
-    pcall(function()
-        if UnitIsPlayer(u) and UnitIsConnected(u) == false then s = "Offline"
-        elseif UnitIsGhost(u) then s = "Ghost"
-        elseif UnitIsDead(u) then s = "Dead" end
-    end)
-    return s
+    if plain(UnitIsPlayer, u) and plain(UnitIsConnected, u) == false then return "Offline" end
+    if plain(UnitIsGhost, u) then return "Ghost" end
+    if plain(UnitIsDead, u) then return "Dead" end
 end
 
 ---------------------------------------------------------------------------
@@ -753,31 +768,41 @@ end
 -- Returns true when the fade painted the bar.
 local function applyHealthFade(f, r, g, b)
     -- on: the health colour chosen above (class, reaction or plain green) fades to red as health drops
-    if not getSetting(f.baseUnit, "healthFade") then return false end
+    -- (Health colour "By health" is this fade too, along a fixed green - yellow - red)
+    local byHealth = getSetting(f.baseUnit, "colorMode") == "gradient"
+    if not getSetting(f.baseUnit, "healthFade") and not byHealth then return false end
     if not (UnitHealthPercent and UnitExists(f.wfUnit)) then return false end
     -- a mob someone else has tagged stays plain grey: its health is no business of yours
-    local tapped
-    pcall(function() tapped = (not UnitPlayerControlled(f.wfUnit)) and UnitIsTapDenied(f.wfUnit) end)
-    if tapped then return false end
+    if not plain(UnitPlayerControlled, f.wfUnit) and plain(UnitIsTapDenied, f.wfUnit) then return false end
     local curve
-    if getSetting(f.baseUnit, "fadeStyle") == "custom" then
+    if byHealth then
+        if fadeCurves.byHealth == nil then
+            fadeCurves.byHealth = false
+            pcall(function()
+                local c = C_CurveUtil.CreateColorCurve()
+                pcall(function() c:SetType(Enum.LuaCurveType.Linear) end)
+                c:AddPoint(0, CreateColor(0.9, 0.12, 0.1, 1))
+                c:AddPoint(0.5, CreateColor(0.95, 0.82, 0.1, 1))
+                c:AddPoint(1, CreateColor(0.15, 0.85, 0.25, 1))
+                fadeCurves.byHealth = c
+            end)
+        end
+        curve = fadeCurves.byHealth or nil
+    elseif getSetting(f.baseUnit, "fadeStyle") == "custom" then
         curve = getCustomFadeCurve(f.baseUnit, r or 0.1, g or 0.8, b or 0.1)
     else
         curve = getFadeCurve(r or 0.1, g or 0.8, b or 0.1)
     end
     if not curve then return false end
-    local ok = pcall(function()
-        local color = UnitHealthPercent(f.wfUnit, true, curve)
-        local cr, cg, cb = color:GetRGB()
-        f.hp:SetStatusBarColor(cr, cg, cb, 1)
-    end)
+    local ok, color = pcall(UnitHealthPercent, f.wfUnit, true, curve)
+    if ok and color then ok = pcall(f.hp.SetStatusBarColor, f.hp, color:GetRGB()) end
     -- (the bar is on its tintable fill while fading, see updateHealthColor: no greying needed)
     return ok
 end
 
 local function updateHealthColor(f)
-    local r, g, b
-    pcall(function() r, g, b = healthColor(f) end)
+    local ok, r, g, b = pcall(healthColor, f)
+    if not ok then r, g, b = nil, nil, nil end
     local tex = f.hp:GetStatusBarTexture()
     -- the tintable fill for a colour or a fade (tinting the green fill meant greying it first, which
     -- dulled every colour); the plain green fill otherwise
@@ -790,7 +815,7 @@ local function updateHealthColor(f)
             if f.hpMaskOn then f.hp:GetStatusBarTexture():AddMaskTexture(f.hpMask) end
             useClip(f.hp, true)
         end
-        pcall(function() f.hp:GetStatusBarTexture():SetDesaturated(false) end)
+        if tex then tex:SetDesaturated(false) end
         if r then f.hp:SetStatusBarColor(r, g, b, 1) else f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) end
         applyHealthFade(f, r, g, b)
         return
@@ -804,10 +829,10 @@ local function updateHealthColor(f)
         tex = f.hp:GetStatusBarTexture()
     end
     if r then
-        pcall(function() tex:SetDesaturated(want == f.hpAtlas) end)   -- plain art needs desaturating to tint cleanly
+        if tex then tex:SetDesaturated(want == f.hpAtlas) end   -- plain art needs desaturating to tint cleanly
         f.hp:SetStatusBarColor(r, g, b, 1)
     else
-        pcall(function() tex:SetDesaturated(false) end)
+        if tex then tex:SetDesaturated(false) end
         -- the tintable fill (fading) starts out green; the plain green fill as drawn
         if want == f.hpStatusAtlas then f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) else f.hp:SetStatusBarColor(1, 1, 1, 1) end
     end
@@ -850,11 +875,15 @@ local function styleOverlay(f, bar)
     if bar.tex ~= tex then
         bar.tex = tex
         if not pcall(bar.SetStatusBarTexture, bar, tex) or not bar:GetStatusBarTexture() then bar:SetStatusBarTexture(PLAIN_FILL) end
-        bar.masked = nil
+        bar.masked, bar.grey = nil, nil
     end
     local c = bar.color
     bar:SetStatusBarColor(c[1], c[2], c[3], c[4])
-    pcall(function() bar:GetStatusBarTexture():SetDesaturated(not f.customTex) end)
+    local grey = not f.customTex
+    if bar.grey ~= grey then
+        local tx = bar:GetStatusBarTexture()
+        if tx then tx:SetDesaturated(grey); bar.grey = grey end
+    end
     if f.hpMaskOn and not bar.masked then
         bar.masked = true
         pcall(function() bar:GetStatusBarTexture():AddMaskTexture(f.hpMask) end)
@@ -862,9 +891,8 @@ local function styleOverlay(f, bar)
 end
 
 local function value(fn, u)
-    local v
-    pcall(function() v = fn(u) end)
-    return v
+    local ok, v = pcall(fn, u)
+    if ok then return v end
 end
 
 -- Blizzard's heal prediction calculator (12.x, as EllesmereUI uses it): splits incoming heals into
@@ -884,6 +912,11 @@ local function healCalculator(f)
                 end
                 if calc.SetHealAbsorbMode and E.UnitHealAbsorbMode then
                     calc:SetHealAbsorbMode(E.UnitHealAbsorbMode.ReducedByIncomingHeals)
+                end
+                -- shields clamped to the missing health: its second answer is then "more shield than
+                -- missing health" (the overshield), which lights the glow at the bar's end
+                if calc.SetDamageAbsorbClampMode and E.UnitDamageAbsorbClampMode then
+                    calc:SetDamageAbsorbClampMode(E.UnitDamageAbsorbClampMode.MissingHealth)
                 end
                 f.healCalc = calc
             end)
@@ -907,8 +940,17 @@ local function updatePrediction(f)
         f.otherHealBar = newOverlay(f, 0.05, 0.6, 0.2, 0.5)    -- everyone else's: darker green
         f.absorbBar = newOverlay(f, 0.7, 0.9, 1, 0.7)          -- shields: pale blue
         f.healAbsorbBar = newOverlay(f, 0.9, 0.1, 0.1, 0.6, true)   -- heal absorbs: red, eating back in
+        -- the overshield: Blizzard's glow at the bar's end while shields are more than the missing health
+        f.overGlow = f.hp:CreateTexture(nil, "OVERLAY", nil, 7)
+        f.overGlow:SetTexture("Interface\\RaidFrame\\Shield-Overshield")
+        f.overGlow:SetBlendMode("ADD")
+        f.overGlow:SetWidth(12)
+        f.overGlow:SetPoint("TOPRIGHT", f.hp, "TOPRIGHT", 6, 2)
+        f.overGlow:SetPoint("BOTTOMRIGHT", f.hp, "BOTTOMRIGHT", 6, -2)
+        f.overGlow:SetAlpha(0)
     end
-    for _, bar in ipairs({ f.healBar, f.otherHealBar, f.absorbBar, f.healAbsorbBar }) do styleOverlay(f, bar) end
+    f.predBars = f.predBars or { f.healBar, f.otherHealBar, f.absorbBar, f.healAbsorbBar }
+    for _, bar in ipairs(f.predBars) do styleOverlay(f, bar) end
     local u = f.wfUnit
     local fill = f.hp:GetStatusBarTexture()
     local healTex = f.healBar:GetStatusBarTexture()
@@ -945,20 +987,26 @@ local function updatePrediction(f)
 
     local max = value(UnitHealthMax, u)
     local dead = unitStatus(u) ~= nil
-    for _, bar in ipairs({ f.healBar, f.otherHealBar, f.absorbBar, f.healAbsorbBar }) do
+    for _, bar in ipairs(f.predBars) do
         if max then pcall(bar.SetMinMaxValues, bar, 0, max) end
     end
     -- incoming heals: through the calculator when the client has it (yours and others' apart), else
     -- the older all-in-one total on the first bar
     local mine, others
+    f.overGlow:SetAlpha(0)          -- (lit again below while there's an overshield)
     if wantHeals and not dead then
         local calc = healCalculator(f)
-        local ok = calc and pcall(function()
-            UnitGetDetailedHealPrediction(u, "player", calc)
-            local _, m, o = calc:GetIncomingHeals()
-            mine, others = m, o
-        end)
-        if not ok then mine, others = value(UnitGetIncomingHeals, u), nil end
+        local ok = calc and pcall(UnitGetDetailedHealPrediction, u, "player", calc)
+        local _, m, o
+        if ok then
+            -- (overshield: the answer may be hidden, so it goes straight to the glow's alpha)
+            local okA, _, over = pcall(calc.GetDamageAbsorbs, calc)
+            if okA and wantAbsorbs and (isSecret(over) or over ~= nil) and f.overGlow.SetAlphaFromBoolean then
+                pcall(f.overGlow.SetAlphaFromBoolean, f.overGlow, over, 0.9, 0)
+            end
+            ok, _, m, o = pcall(calc.GetIncomingHeals, calc)
+        end
+        if ok then mine, others = m, o else mine, others = value(UnitGetIncomingHeals, u), nil end
     end
     local absorb = (wantAbsorbs and not dead) and value(UnitGetTotalAbsorbs, u) or nil
     local healAbsorb = (wantAbsorbs and not dead) and value(UnitGetTotalHealAbsorbs, u) or nil
@@ -976,9 +1024,16 @@ end
 local TRAIL_WAIT, TRAIL_MAXWAIT = 0.4, 1.0     -- seconds after the last hit; at most this long under steady damage
 
 local function createDamageTrail(f)
-    local t = CreateFrame("StatusBar", nil, f)
+    -- (inside a frame that clips it to the bar past the health fill's end, so it never shows behind a
+    -- see-through fill: Health bar opacity; anchored by updateDamageTrail, which follows the fill)
+    local clip = CreateFrame("Frame", nil, f)
+    clip:SetClipsChildren(true)
+    clip:SetFrameLevel(f.hp:GetFrameLevel())
+    clip:SetAllPoints(f.hp)
+    local t = CreateFrame("StatusBar", nil, clip)
     t:SetAllPoints(f.hp)
-    t:SetFrameLevel(f.hp:GetFrameLevel())
+    t:SetFrameLevel(clip:GetFrameLevel())
+    t.clip = clip
     f.hp:SetFrameLevel(t:GetFrameLevel() + 1)       -- (the health fill draws over it)
     t:SetStatusBarTexture(PLAIN_FILL)
     t.color = { 1, 0.15, 0.1, 0.9 }
@@ -1130,15 +1185,22 @@ local function updateDamageTrail(f, status)
         return
     end
     styleOverlay(f, t)
+    -- the clip starts where the health fill ends (re-anchored when the fill texture changes)
+    local fill = f.hp:GetStatusBarTexture()
+    if fill and t.clipFill ~= fill then
+        t.clipFill = fill
+        t.clip:ClearAllPoints()
+        t.clip:SetPoint("TOPLEFT", fill, "TOPRIGHT")
+        t.clip:SetPoint("BOTTOMRIGHT", f.hp, "BOTTOMRIGHT")
+    end
     local u = f.wfUnit
     local max = value(UnitHealthMax, u)
     if max then pcall(t.SetMinMaxValues, t, 0, max) end
     local now = value(UnitHealth, u)
     -- someone else in the frame (new target), or dead / offline: straight to the new health, no trail
-    local who
-    pcall(function() who = UnitGUID(u) end)
+    local _, who = pcall(UnitGUID, u)
     local fresh = false
-    pcall(function() fresh = (who ~= t.who) end)
+    if not isSecret(who) and not isSecret(t.who) then fresh = (who ~= t.who) end
     t.who = who
     if fresh or status then
         t.pending = false
@@ -1162,12 +1224,14 @@ local function updateHealth(f)
     if not UnitExists(u) then return end
     local status = unitStatus(u)
     updateHealthColor(f)
+    local hpTex = f.hp:GetStatusBarTexture()
+    if hpTex then hpTex:SetAlpha(tonumber(getSetting(f.baseUnit, "hpAlpha")) or 1) end
     f.hp:SetMinMaxValues(0, UnitHealthMax(u))
     if status == "Offline" then
         -- offline: a full grey bar, as the default UI does
         setBarValue(f, f.hp, UnitHealthMax(u))
         f.hp:SetStatusBarColor(0.5, 0.5, 0.5, 1)
-        pcall(function() f.hp:GetStatusBarTexture():SetDesaturated(true) end)
+        if hpTex then hpTex:SetDesaturated(true); hpTex:SetAlpha(tonumber(getSetting(f.baseUnit, "hpAlpha")) or 1) end
     else
         setBarValue(f, f.hp, UnitHealth(u))
     end
@@ -1284,11 +1348,17 @@ local function updatePower(f)
     local u = f.wfUnit
     if not UnitExists(u) then return end
     local _, token = UnitPowerType(u)
+    -- a druid in a form, with Druid bars "Mana first": the frame's bar keeps showing mana, and the slim
+    -- bar under it the form's rage or energy
+    local formToken = token
+    local swap = f.altMana and getSetting("player", "druidMana") and getSetting("player", "druidBars") == "mana"
+        and not isSecret(token) and token ~= "MANA" and select(2, UnitClass("player")) == "DRUID"
+    local MANA = Enum.PowerType and Enum.PowerType.Mana or 0
+    if swap then token = "MANA" end
     local fill, tinted = f.powerTex, true
     if not fill then
         -- the bundled pre-shaped fill for this power type and frame, drawn untinted
-        local kind
-        pcall(function() kind = POWER_FILE[token] end)
+        local kind = (not isSecret(token) and token) and POWER_FILE[token] or nil
         local base = f.small and BAR_FILE.small or (f.layoutLeft and BAR_FILE.player or BAR_FILE.target)
         fill, tinted = base .. (kind or "Mana"), false
     end
@@ -1303,31 +1373,39 @@ local function updatePower(f)
     if tinted then
         -- a custom texture is plain, so colour it by power type
         pr, pg, pb = 0.1, 0.3, 0.9
-        pcall(function()
-            local c = PowerBarColor and (PowerBarColor[token] or PowerBarColor[0])
-            if c and c.r then pr, pg, pb = c.r, c.g, c.b end
-        end)
+        local c = PowerBarColor and ((not isSecret(token) and token and PowerBarColor[token]) or PowerBarColor[0])
+        if c and c.r then pr, pg, pb = c.r, c.g, c.b end
     end
-    pcall(function() f.mp:GetStatusBarTexture():SetDesaturated(false) end)
+    local mpTex = f.mp:GetStatusBarTexture()
+    if mpTex then mpTex:SetDesaturated(false) end
+    -- (the opacity after the colour: a bar's colour sets its fill's alpha too)
     f.mp:SetStatusBarColor(pr, pg, pb, 1)
-    f.mp:SetMinMaxValues(0, UnitPowerMax(u))
-    setBarValue(f, f.mp, UnitPower(u))
-    if f.textMode ~= "off" then setBarText(f.mpText, f, "mp") end
+    if mpTex then mpTex:SetAlpha(tonumber(getSetting(f.baseUnit, "mpAlpha")) or 1) end
+    if swap then
+        f.mp:SetMinMaxValues(0, UnitPowerMax(u, MANA))
+        setBarValue(f, f.mp, UnitPower(u, MANA))
+        if f.textMode ~= "off" then pcall(f.mpText.SetText, f.mpText, AbbreviateLargeNumbers(UnitPower(u, MANA))) end
+    else
+        f.mp:SetMinMaxValues(0, UnitPowerMax(u))
+        setBarValue(f, f.mp, UnitPower(u))
+        if f.textMode ~= "off" then setBarText(f.mpText, f, "mp") end
+    end
     if f.costBar then pcall(updateCostPrediction, f) end
     -- a druid in bear or cat form: their mana in the slim bar under the frame
     local am = f.altMana
     if am then
-        local show = false
-        pcall(function()
-            show = getSetting("player", "druidMana") and select(2, UnitClass("player")) == "DRUID" and token ~= "MANA"
-        end)
+        local show = getSetting("player", "druidMana") and select(2, UnitClass("player")) == "DRUID"
+            and not isSecret(formToken) and formToken ~= "MANA"
         am:SetShown(show and true or false)
         if show then
+            -- (the slim bar: mana, or with Mana first the form's own power, in its own fill)
+            local file = BAR_FILE.player .. (swap and (POWER_FILE[formToken] or "Rage") or "Mana")
+            if am.file ~= file then am.file = file; am.bar:SetStatusBarTexture(file) end
+            local kind = swap and nil or MANA
             pcall(function()
-                local mana = Enum.PowerType and Enum.PowerType.Mana or 0
-                am.bar:SetMinMaxValues(0, UnitPowerMax("player", mana))
-                setBarValue(f, am.bar, UnitPower("player", mana))
-                am.text:SetText(AbbreviateLargeNumbers(UnitPower("player", mana)))
+                am.bar:SetMinMaxValues(0, kind and UnitPowerMax("player", kind) or UnitPowerMax("player"))
+                setBarValue(f, am.bar, kind and UnitPower("player", kind) or UnitPower("player"))
+                am.text:SetText(AbbreviateLargeNumbers(kind and UnitPower("player", kind) or UnitPower("player")))
             end)
             am.text:SetShown((f.textMode or getSetting("player", "textMode")) ~= "off")
         end
@@ -2175,498 +2253,8 @@ local function adoptCastbar(f, barName)
 end
 
 ---------------------------------------------------------------------------
--- Buffs and debuffs: where the block sits, and the timer option.
+-- Buffs and debuffs: Auras.lua (AuraKit)
 ---------------------------------------------------------------------------
-local AURA_GAP = 2       -- default gap between icons
-
--- Where the aura block starts: below the frame art (default), just above its name, or wherever it was
--- dragged in Edit Mode ("custom": auraX / auraY from the frame's top left; it starts where "below" is).
-local function auraAnchor(f, pos)
-    if pos == "custom" then
-        local cx, cy = getSetting(f.baseUnit, "auraX"), getSetting(f.baseUnit, "auraY")
-        if type(cx) == "number" and type(cy) == "number" then return "TOPLEFT", "TOPLEFT", cx, cy end
-        pos = "below"
-    end
-    if f.small then
-        if pos == "above" then return "BOTTOMLEFT", "TOPLEFT", 4, 2 end
-        -- right of the frame: two rows beside its art (the party's default, like Retail's party frames)
-        if pos == "side" then return "TOPLEFT", "TOPRIGHT", -4, -5 end
-        return "TOPLEFT", "BOTTOMLEFT", 4, 0
-    end
-    -- tucked under the frame art's bottom edge, from its left edge (on the player frame, just right of the level circle)
-    local x = f.layoutLeft and 55 or 22
-    -- above: sitting right on the frame art's top edge, over the name and lined up with its left end
-    if pos == "above" then return "BOTTOMLEFT", "TOPLEFT", f.layoutLeft and 87 or 23, -15 end
-    -- With a cast bar they lock onto its bottom (always, cast or not, so the icons don't jump about),
-    -- lined up with its left line.
-    if f.castbar and getSetting(f.baseUnit, "castShow") then
-        -- just below the cast box (its bottom line's soft shadow included)
-        return "TOPLEFT", "TOPLEFT", CAST_BOX.x1 + 1.5, CAST_BOX.top - castBoxHeight() - 1
-    end
-    return "TOPLEFT", "TOPLEFT", x, -87
-end
-
--- The "Time left" option as two switches: the dark sweep and the countdown numbers.
-local function auraTimerParts(base)
-    local mode = getSetting(base, "auraTimer")
-    return mode == "both" or mode == "swipe", mode == "both" or mode == "numbers"
-end
-
----------------------------------------------------------------------------
--- Buffs and debuffs through Blizzard's AuraContainer (12.1, on Forever too). In combat the aura data is
--- protected, so addons can't read it; the container tracks and filters the unit's auras itself and fills
--- buttons we've styled: we give each button its icon texture, cooldown swipe, stack count and dispel
--- border, and set the layout.
----------------------------------------------------------------------------
--- groups, in the order they show: buffs, your own debuffs (only with "bigger own debuffs"), the rest
-local AuraKit = { GROUPS = { "buffs", "debuffsMine", "debuffs" } }
-
--- Debuff edge colours by dispel type, as the container wants them (colour objects, "None" for none).
-function AuraKit.dispelColors()
-    if AuraKit.colorMap then return AuraKit.colorMap end
-    local map = {}
-    for name, c in pairs({ Magic = { 0.2, 0.6, 1 }, Curse = { 0.6, 0, 1 }, Disease = { 0.6, 0.4, 0 },
-                           Poison = { 0, 0.6, 0 }, None = { 0.8, 0, 0 } }) do
-        local dc = DebuffTypeColor and DebuffTypeColor[name == "None" and "none" or name]
-        map[name] = CreateColor(dc and dc.r or c[1], dc and dc.g or c[2], dc and dc.b or c[3], 1)
-    end
-    AuraKit.colorMap = map
-    return map
-end
-
--- Styles one aura button (the container calls this as it creates them); f is the unit frame.
-function AuraKit.styleButton(f, b)
-    -- (the game fills the icon's tooltip; the GameTooltip hook by moveTipToDefault moves it to the
-    -- default spot. The game's aura buttons don't take script hooks.)
-    b.webbyAura = true
-    -- 1px edge: black behind every icon; on debuffs a second, white edge layer on top that the
-    -- container tints by dispel type (see below)
-    b.webbyBack = b:CreateTexture(nil, "BACKGROUND", nil, 0)
-    b.webbyBack:SetAllPoints()
-    b.webbyBack:SetColorTexture(0, 0, 0, 1)
-    b.webbyEdge = b:CreateTexture(nil, "BACKGROUND", nil, 1)
-    b.webbyEdge:SetAllPoints()
-    b.webbyEdge:SetColorTexture(1, 1, 1, 1)
-    local icon = b:CreateTexture(nil, "ARTWORK")
-    icon:SetPoint("TOPLEFT", 1, -1)
-    icon:SetPoint("BOTTOMRIGHT", -1, 1)
-    icon:SetTexCoord(0.1, 0.9, 0.1, 0.9)
-    b:SetIcon(icon)
-    -- (the template gives it a sweep texture; a bare Cooldown has none, so it drew no sweep)
-    local cd = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
-    cd:SetAllPoints(icon)
-    pcall(cd.SetSwipeTexture, cd, "Interface\\Buttons\\WHITE8X8")
-    pcall(cd.SetDrawSwipe, cd, true)
-    pcall(cd.SetReverse, cd, true)
-    pcall(cd.SetDrawEdge, cd, false)
-    pcall(cd.SetSwipeColor, cd, 0, 0, 0, 0.6)
-    pcall(cd.SetDrawBling, cd, false)            -- no flash when the aura ends
-    pcall(b.SetDurationCooldown, b, cd)
-    b.webbyCD = cd
-    local top = CreateFrame("Frame", nil, b)
-    top:SetAllPoints()
-    top:SetFrameLevel(cd:GetFrameLevel() + 1)
-    local count = top:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
-    count:SetPoint("BOTTOMRIGHT", 1, 0)
-    pcall(b.SetApplicationCount, b, count)
-    b.webbyCount = count
-    -- Debuffs: the white edge layer, kept as it is (PreserveAsset) and tinted by the container per
-    -- dispel type, red when there's none; it only shows on harmful auras, so buffs keep the black edge.
-    -- (Blizzard's built-in Border style is a heavy old-style frame that didn't match the 1px edges.)
-    local styles = Enum.CustomAuraButtonDispelTypeTextureStyle
-    local ok = pcall(b.AddDispelTypeTexture, b, b.webbyEdge, {
-        style = styles and styles.PreserveAsset,
-        showWhenHarmful = true,
-        showWithoutDispelType = true,
-        customDispelColorMap = AuraKit.dispelColors(),
-    })
-    if not ok then b.webbyEdge:Hide() end
-    AuraKit.sizeButton(f, b)
-end
-
--- Size, sweep, countdown numbers and stack text to the frame's current options.
-function AuraKit.sizeButton(f, b)
-    local size = getSetting(f.baseUnit, b.webbyDebuff and "auraDebuffSize" or "auraSize")
-    if b.webbyMine then size = math.floor(size * 1.35 + 0.5) end     -- (your own debuffs, bigger)
-    b:SetSize(size, size)
-    local swipe, timers = auraTimerParts(f.baseUnit)
-    if b.webbyCD then
-        pcall(b.webbyCD.SetDrawSwipe, b.webbyCD, swipe)
-        pcall(b.webbyCD.SetHideCountdownNumbers, b.webbyCD, not timers)
-        pcall(function()
-            local fs = b.webbyCD:GetCountdownFontString()
-            fs:SetFont(fs:GetFont() or STANDARD_TEXT_FONT, math.max(8, math.floor(size * 0.45)), "OUTLINE")
-        end)
-    end
-    if b.webbyCount then
-        -- stack count: a share of the icon's size (Stack count size, 30 - 90%)
-        local share = (getSetting(f.baseUnit, "auraStack") or 50) / 100
-        pcall(function() b.webbyCount:SetFont(b.webbyCount:GetFont() or STANDARD_TEXT_FONT, math.max(7, math.floor(size * share)), "OUTLINE") end)
-    end
-end
-
--- One of Blizzard's aura orders (AuraContainerSortMethod: Default, UnitFrameDebuff, BigDefensive,
--- Expiration, Name ...), or nil on a client without it. (A global table, not under Enum.)
-function AuraKit.sortBy(name)
-    local E = rawget(_G, "AuraContainerSortMethod") or (Enum and Enum.AuraContainerSortMethod)
-    return E and E[name]
-end
-
--- The frame's container, made on first use; nil if the client doesn't have AuraContainer.
-function AuraKit.container(f)
-    if f.auraContainer ~= nil then return f.auraContainer or nil end
-    local ok, c = pcall(CreateFrame, "AuraContainer", nil, f.ov or f, "CustomAuraContainerTemplate")
-    if not (ok and c) then f.auraContainer = false; return nil end
-    local function initBuff(b) pcall(AuraKit.styleButton, f, b) end
-    local function initDebuff(b) b.webbyDebuff = true; pcall(AuraKit.styleButton, f, b) end
-    local function initMine(b) b.webbyDebuff, b.webbyMine = true, true; pcall(AuraKit.styleButton, f, b) end
-    local ok2 = pcall(function()
-        c:SetUnit(f.wfUnit)
-        c:AddAuraGroup("buffs", "HELPFUL", { initializeFrame = initBuff })
-        c:AddAuraGroup("debuffsMine", "HARMFUL|PLAYER", { initializeFrame = initMine })
-        c:AddAuraGroup("debuffs", "HARMFUL", { initializeFrame = initDebuff })
-        c:SetAuraGroupEnabled("debuffsMine", false)
-    end)
-    if not ok2 then c:Hide(); f.auraContainer = false; return nil end
-    f.auraContainer = c
-    return c
-end
-
-local updateAuras     -- (below; the mover calls it)
-
--- Dispel glow: when the unit has a debuff someone can dispel, the frame takes that debuff's colour
--- (magic blue, curse purple, disease brown, poison green) and pulses the way the player frame does
--- while resting: its border (portrait ring included) recoloured, with a glow on it and just round it;
--- on the player frame the resting / combat glow too, in that colour (updateIndicators). The debuff's
--- type is read from the unit's debuffs ten times a second. When the game hides it from addons (aura
--- data can be secret in combat), Blizzard's own dispel highlight stands in: an aura container whose one
--- "debuff you can dispel" button is a copy of the border, tinted by the game, pulsing the same.
--- (any frame with "Dispel glow" on: the party's and the player's default)
-local function copyBorder(t, f)
-    t:SetTexture(f.border:GetTexture())
-    t:SetTexCoord(f.border:GetTexCoord())
-end
--- the glow's copies of the frame's border art: { px past the border, blend mode }. A plain one, greyed
--- and tinted, takes the border over in the dispel colour; the added-light ones on it and just round it
--- make it glow.
-AuraKit.GLOW_LAYERS = { { 0, "BLEND" }, { 0, "ADD" }, { 3, "ADD" } }
-
--- dispel types, the one shown first when a unit has several
-AuraKit.DISPEL_ORDER = { "Magic", "Curse", "Disease", "Poison" }
-
--- The type of a debuff on `u` someone can dispel ("Magic", "Curse", "Disease", "Poison"), false for
--- none, nil when the game won't say.
-function AuraKit.dispelType(u)
-    local found = {}
-    local ok = pcall(function()
-        for i = 1, 40 do
-            local d = C_UnitAuras.GetAuraDataByIndex(u, i, "HARMFUL")
-            if not d then break end
-            local t = d.dispelName
-            if t and t ~= "" then found[t] = true end
-        end
-    end)
-    if not ok then return nil end
-    for _, t in ipairs(AuraKit.DISPEL_ORDER) do if found[t] then return t end end
-    return false
-end
-
--- A dispel type's colour (r, g, b).
-function AuraKit.dispelRGB(typ)
-    local c = AuraKit.dispelColors()[typ]
-    if c then return c:GetRGB() end
-    return 0.8, 0, 0
-end
-
--- The pulse, the resting glow's (Blizzard's PlayerFrame_OnUpdate): from 55/255 straight up to full over
--- half a second, then straight back down. From the clock, so every glow pulses together.
-function AuraKit.pulseAlpha()
-    local p = GetTime() % 1
-    local a = p < 0.5 and (55 + p * 400) / 255 or (255 - (p - 0.5) * 400) / 255
-    return math.max(0, math.min(1, a))
-end
-
--- Our glow over a frame: copies of its border art (all greyed, so the tint is the pure colour).
-function AuraKit.makeGlow(f)
-    local g = CreateFrame("Frame", nil, f.ov or f)
-    g:SetFrameLevel((f.ov or f):GetFrameLevel() + 3)
-    g.tex = {}
-    for _, layer in ipairs(AuraKit.GLOW_LAYERS) do
-        local grow, mode = layer[1], layer[2]
-        local t = g:CreateTexture(nil, "OVERLAY", nil, mode == "BLEND" and 6 or 7)
-        t:SetPoint("TOPLEFT", g, "TOPLEFT", -grow, grow)
-        t:SetPoint("BOTTOMRIGHT", g, "BOTTOMRIGHT", grow, -grow)
-        t:SetBlendMode(mode)
-        t:SetDesaturated(true)
-        g.tex[#g.tex + 1] = t
-    end
-    g:Hide()
-    f.dglow = g
-    return g
-end
-
--- Shows or hides a frame's glow for its debuff (f.dispelType) and tints it.
-function AuraKit.paintGlow(f)
-    local typ = f.dispelType
-    f.dispelRGB = nil
-    if type(typ) == "string" then f.dispelRGB = { AuraKit.dispelRGB(typ) } end
-    local g = f.dglow
-    if g then
-        if f.dispelRGB then
-            for _, t in ipairs(g.tex) do t:SetVertexColor(f.dispelRGB[1], f.dispelRGB[2], f.dispelRGB[3]) end
-            g:Show()
-        else
-            g:Hide()
-        end
-    end
-    pcall(updateIndicators, f)       -- (the player frame's resting / combat glow takes the colour)
-end
-
--- Ten times a second, every frame with the glow on: which debuff (if any); every frame of a pulse:
--- the glows' alpha.
-AuraKit.glowFrames = {}
-function AuraKit.startGlowPulse()
-    if AuraKit.glowDriver then return end
-    local d = CreateFrame("Frame")
-    d:SetScript("OnUpdate", function()
-        local now, a = GetTime(), AuraKit.pulseAlpha()
-        for _, f in ipairs(AuraKit.glowFrames) do
-            local on = f.dglowWant and f:IsVisible()
-            if not on then
-                if f.dispelType ~= nil then f.dispelType = nil; AuraKit.paintGlow(f) end
-            elseif not f.dispelNext or now >= f.dispelNext then
-                f.dispelNext = now + 0.1
-                local typ = AuraKit.dispelType(f.wfUnit)
-                if typ ~= f.dispelType then f.dispelType = typ; AuraKit.paintGlow(f) end
-            end
-            if f.dglow then f.dglow:SetAlpha(a) end
-            -- Blizzard's highlight only while the game won't tell us the debuff
-            if f.dispelBox then f.dispelBox:SetAlpha((on and f.dispelType == nil) and a or 0) end
-        end
-    end)
-    AuraKit.glowDriver = d
-end
-
-function AuraKit.dispelGlow(f)
-    local want = f.border and getSetting(f.baseUnit, "dispelGlow") and true or false
-    f.dglowWant = want
-    if not f.glowListed then
-        f.glowListed = true
-        AuraKit.glowFrames[#AuraKit.glowFrames + 1] = f
-        AuraKit.startGlowPulse()
-    end
-    local c = f.dispelBox
-    if not want then
-        if c then c:Hide() end
-        if f.dglow then f.dglow:Hide() end
-        return
-    end
-    -- our glow, over the frame's border art (the art can change with the layout)
-    local g = f.dglow or AuraKit.makeGlow(f)
-    g:ClearAllPoints()
-    g:SetAllPoints(f.border)
-    for _, t in ipairs(g.tex) do copyBorder(t, f) end
-    -- Blizzard's, the stand-in
-    if c == false then return end
-    if c == nil then
-        local ok, box = pcall(CreateFrame, "AuraContainer", nil, f.ov or f, "CustomAuraContainerTemplate")
-        if not (ok and box) then f.dispelBox = false; return end
-        local function init(b)
-            pcall(function()
-                local styles = Enum.CustomAuraButtonDispelTypeTextureStyle
-                for _, layer in ipairs(AuraKit.GLOW_LAYERS) do
-                    local grow, mode = layer[1], layer[2]
-                    local t = b:CreateTexture(nil, "OVERLAY", nil, mode == "BLEND" and 6 or 7)
-                    t:SetPoint("TOPLEFT", -grow, grow)
-                    t:SetPoint("BOTTOMRIGHT", grow, -grow)
-                    copyBorder(t, f)
-                    t:SetBlendMode(mode)
-                    t:SetDesaturated(true)
-                    b:AddDispelTypeTexture(t, {
-                        style = styles and styles.PreserveAsset,
-                        showWhenHarmful = true,
-                        showWithoutDispelType = false,
-                        customDispelColorMap = AuraKit.dispelColors(),
-                    })
-                end
-                b:EnableMouse(false)
-            end)
-            -- (made when a dispellable debuff first lands: the border's size now)
-            pcall(function() b:SetSize(f.border:GetSize()) end)
-        end
-        if not pcall(function()
-            box:SetUnit(f.wfUnit)
-            box:AddAuraGroup("dispel", "HARMFUL|RAID", { initializeFrame = init, maxFrameCount = 1 })
-        end) then box:Hide(); f.dispelBox = false; return end
-        box:SetFrameLevel((f.ov or f):GetFrameLevel() + 3)
-        box:SetAlpha(0)
-        f.dispelBox = box
-        c = box
-    end
-    pcall(function() if c:GetUnit() ~= f.wfUnit then c:SetUnit(f.wfUnit) end end)
-    local w, h = ART.smallBorder[2], ART.smallBorder[3]
-    pcall(function() w, h = f.border:GetSize() end)
-    c:ClearAllPoints()
-    c:SetPoint("TOPLEFT", f.border, "TOPLEFT")
-    pcall(c.SetSize, c, w, h)
-    c:Show()
-end
-
--- every unit frame
-function AuraKit.allFrames()
-    local list = {}
-    for _, unit in ipairs(UNITS) do if frames[unit] then list[#list + 1] = frames[unit] end end
-    for i = 2, Party.SLOTS do if Party.members[i] then list[#list + 1] = Party.members[i] end end   -- (party slots 2 - 4)
-    return list
-end
-
--- Custom position: in Edit Mode a box shows where the buffs and debuffs start (one row's size); drag it
--- and the block follows. The spot is saved as an offset from the frame's top left (per Edit Mode layout).
-function AuraKit.placeMover(f, w, h)
-    local on = AuraKit.editing and getSetting(f.baseUnit, "auraPos") == "custom"
-        and (getSetting(f.baseUnit, "auraBuffs") or getSetting(f.baseUnit, "auraDebuffs"))
-    if not on then
-        if f.auraMover then f.auraMover:Hide() end
-        return
-    end
-    local m = f.auraMover
-    if not m then
-        m = CreateFrame("Frame", nil, f.ov or f)
-        m:SetFrameLevel((f.ov or f):GetFrameLevel() + 10)
-        local bg = m:CreateTexture(nil, "BACKGROUND")
-        bg:SetAllPoints()
-        bg:SetColorTexture(0.2, 0.55, 1, 0.35)
-        local edge = m:CreateTexture(nil, "BORDER")
-        edge:SetPoint("TOPLEFT", -1, 1); edge:SetPoint("BOTTOMRIGHT", 1, -1)
-        edge:SetColorTexture(0.4, 0.75, 1, 0.9)
-        local inner = m:CreateTexture(nil, "BORDER", nil, 1)
-        inner:SetAllPoints()
-        inner:SetColorTexture(0.05, 0.15, 0.3, 0.6)
-        m.label = m:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        m.label:SetPoint("CENTER")
-        m.label:SetText("Buffs / debuffs")
-        m:SetMovable(true)
-        m:SetClampedToScreen(true)
-        m:EnableMouse(true)
-        m:RegisterForDrag("LeftButton")
-        m:SetScript("OnDragStart", function(self) self:StartMoving() end)
-        m:SetScript("OnDragStop", function(self)
-            self:StopMovingOrSizing()
-            local x = math.floor((self:GetLeft() - f:GetLeft()) * 2 + 0.5) / 2
-            local y = math.floor((self:GetTop() - f:GetTop()) * 2 + 0.5) / 2
-            local u = unitData(f.baseUnit, true)
-            u.auraX, u.auraY = x, y
-            for _, other in ipairs(AuraKit.allFrames()) do
-                if other.baseUnit == f.baseUnit then pcall(updateAuras, other) end
-            end
-        end)
-        m:SetScript("OnEnter", function(self)
-            defaultTip(self)
-            GameTooltip:SetText("Buffs and debuffs", 1, 1, 1)
-            GameTooltip:AddLine("Drag to move them. The first row starts here.", 1, 0.82, 0, true)
-            GameTooltip:Show()
-        end)
-        m:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        f.auraMover = m
-    end
-    local point, relPoint, x, y = auraAnchor(f, "custom")
-    m:ClearAllPoints()
-    m:SetPoint(point, f, relPoint, x, y)
-    m:SetSize(math.max(w, 40), math.max(h, 12))
-    m:Show()
-end
-
--- Edit Mode on / off: show or hide the boxes.
--- (and the containers' own preview: full rows of sample icons, so you can see how the buffs and debuffs
--- will sit, party frames included, without anyone having any)
-function AuraKit.setEditing(on)
-    AuraKit.editing = on and true or nil
-    for _, f in ipairs(AuraKit.allFrames()) do
-        pcall(updateAuras, f)
-        local c = f.auraContainer
-        if c then pcall(c.SetEditModePreviewEnabled, c, on and true or false) end
-    end
-end
-
-function updateAuras(f)       -- (the local declared above)
-    local c = AuraKit.container(f)
-    if not c then return end          -- (a client without Blizzard's aura container: no auras)
-    local base = f.baseUnit
-    local showB = getSetting(base, "auraBuffs") and true or false
-    local showD = getSetting(base, "auraDebuffs") and true or false
-    local perRow, max = getSetting(base, "auraPerRow"), getSetting(base, "auraMax")
-    -- rows are as wide as perRow of the bigger icons, so neither group spills past them
-    local size = math.max(showB and getSetting(base, "auraSize") or 0, showD and getSetting(base, "auraDebuffSize") or 0)
-    if size == 0 then size = getSetting(base, "auraSize") end
-    local pos = getSetting(base, "auraPos")
-    if pos == "side" and not f.small then pos = "below" end      -- (only the small frames have room beside them)
-    -- beside the frame there's room for two rows: buffs and debuffs a row's worth each at most, so
-    -- together they never spill past the frame (the ones that matter come first)
-    if pos == "side" then max = math.min(max, perRow) end
-    local up = (pos == "above")
-    local gap = getSetting(base, "auraGap")
-    gap = (type(gap) == "number" and gap >= 0) and gap or AURA_GAP
-    local leftward = getSetting(base, "auraGrowth") == "left"
-    pcall(function() if c:GetUnit() ~= f.wfUnit then c:SetUnit(f.wfUnit) end end)
-    local hostile = false
-    pcall(function() hostile = UnitCanAttack("player", f.wfUnit) and true or false end)
-    -- Debuffs. "Only mine": just yours. "Bigger own debuffs": yours first, bigger (their own group), then
-    -- everyone else's.
-    local onlyMine = getSetting(base, "auraMine") and true or false
-    local big = getSetting(base, "auraMineBig") and not OWN_CLASS[base] and true or false
-    pcall(c.SetAuraGroupEnabled, c, "debuffsMine", showD and big)
-    pcall(c.SetAuraGroupEnabled, c, "debuffs", showD and not (big and onlyMine))
-    pcall(c.SetAuraGroupFilterString, c, "debuffs", big and "HARMFUL|!PLAYER" or (onlyMine and "HARMFUL|PLAYER" or "HARMFUL"))
-    -- Buffs. Retail style: on a friend, only the buffs you put on them (your heals over time, shields);
-    -- on an enemy, all of them. Everything: all of them.
-    local retail = getSetting(base, "auraStyle") == "retail" and not hostile
-    pcall(c.SetAuraGroupEnabled, c, "buffs", showB)
-    pcall(c.SetAuraGroupFilterString, c, "buffs", retail and "HELPFUL|PLAYER" or "HELPFUL")
-    -- Debuffs in Blizzard's own unit frame order (the ones that matter first: boss, crowd control,
-    -- priority), on every frame; nothing is left out, only the order changes.
-    local order = AuraKit.sortBy("UnitFrameDebuff")
-    if order and not f.auraSorted then
-        f.auraSorted = true
-        pcall(c.SetAuraGroupSortMethod, c, "debuffs", order)
-        pcall(c.SetAuraGroupSortMethod, c, "debuffsMine", order)
-    end
-    pcall(AuraKit.dispelGlow, f)
-    for _, g in ipairs(AuraKit.GROUPS) do
-        pcall(c.SetAuraGroupMaxFrameCount, c, g, max)
-        pcall(c.SetAuraGroupLayout, c, g, { elementSpacing = gap, lineSpacing = gap, groupSpacing = gap, groupLineSpacing = gap })
-    end
-    -- flow: rows of perRow icons, growing right (or filling from the right, growing left) and down (up
-    -- when above the frame); the block keeps the same spot either way
-    pcall(function()
-        local A = AnchorUtil
-        c:SetFlowLayoutAxis(A.FlowLayoutAxis.Horizontal)
-        local side = leftward and "RIGHT" or "LEFT"
-        c:SetFlowLayoutAnchorPoint((up and "BOTTOM" or "TOP") .. side)
-        local across = leftward and (A.FlowDirection.Left or -1) or A.FlowDirection.Right
-        c:SetFlowLayoutGrowthDirection(across, up and A.FlowDirection.Up or A.FlowDirection.Down)
-        c:SetFlowLayoutMaximumLineSize(perRow * (size + gap))
-    end)
-    local point, relPoint, x, y = auraAnchor(f, pos)
-    c:ClearAllPoints()
-    c:SetPoint(point, f, relPoint, x, y)
-    -- one row's size, so the first row sits exactly on the anchor (more rows grow on past it)
-    pcall(c.SetSize, c, perRow * (size + gap), size)
-    AuraKit.placeMover(f, perRow * (size + gap) - gap, size)
-    -- resize the buttons made so far (new ones are sized as they're made)
-    for _, g in ipairs(AuraKit.GROUPS) do
-        local n = 0
-        pcall(function() n = c:GetAuraGroupFrameCount(g) end)
-        for i = 1, n do
-            local b
-            pcall(function() b = c:GetAuraGroupFrame(g, i) end)
-            if b then pcall(AuraKit.sizeButton, f, b) end
-        end
-    end
-    c:SetShown(showB or showD)
-    f.auraBox = c
-    f.auraHeight = 0
-end
-
 
 ---------------------------------------------------------------------------
 -- Combat numbers: damage and healing the unit takes pop up over its portrait and fade, like Blizzard's
@@ -3359,10 +2947,16 @@ local function frameOn(unit)
     return ALWAYS_SHOWN[unit] or getSetting(unit, "frameShown") ~= false
 end
 
+-- The portrait party frames: on, and not swapped for the raid-style tiles (RaidParty.lua).
+function Party.portraitsOn()
+    return frameOn("party") and getSetting("party", "partyStyle") ~= "raid"
+end
+
 local function applyShown(f)
     local unit = f.baseUnit
     if ALWAYS_SHOWN[unit] then return end
     local on = frameOn(unit)
+    if unit == "party" then on = Party.portraitsOn() end
     if on == (f.wfOff ~= true) then return end
     f.wfOff = not on
     if on then
@@ -3443,6 +3037,7 @@ local function applyUnit(f)
     pcall(updateAuras, f)
     pcall(placeCastbar, f)
     pcall(Extras.tint, f)
+    if unit == "pet" then pcall(Extras.happiness, f) end      -- (its spot or off: straight away)
     if f.updateRest then pcall(f.updateRest) end
     -- textures: health (also the cast bar and the heal / shield overlays) and power, each the frame's
     -- default fill or a chosen one
@@ -3489,10 +3084,13 @@ local function setSetting(unit, key, value)
     end
     -- the pet's bar can follow the player frame's colour
     if unit == "player" and frames.pet then pcall(updateHealth, frames.pet) end
+    if unit == "player" and ns.PlayerExtras then pcall(ns.PlayerExtras.apply) end
     -- the party: who goes in which slot (order, you), and the pet / target mini frames
     if unit == "party" then
         pcall(Party.arrange)
         for i = 1, Party.SLOTS do if Party.members[i] and Party.minis then pcall(Party.minis, Party.members[i]) end end
+        if ns.RaidParty then pcall(ns.RaidParty.apply) end
+        if Party.testing then pcall(Party.paintSamples) end    -- (the portrait sample party, repainted)
     end
     touchOptions()
 end
@@ -3524,42 +3122,47 @@ local function newUnitButton(unit, w, h, wf)
 end
 
 -- Unit tooltip on hover, and the per-bar "show on mouseover" numbers.
+-- (whether the cursor is over a bar; cx, cy: the cursor, in screen pixels)
+local function cursorOver(bar, cx, cy)
+    local sc = bar:GetEffectiveScale()
+    local l, b, w, h = bar:GetRect()
+    if not (l and sc and sc > 0) then return false end
+    local x, y = cx / sc, cy / sc
+    return x >= l and x <= l + w and y >= b and y <= b + h
+end
+
 local function addHover(f)
+    -- Numbers on mouseover: which bar the cursor is on, every frame while it's over this one (a child
+    -- that only runs while shown, so nothing runs otherwise).
+    local watch = CreateFrame("Frame", nil, f)
+    watch:Hide()
+    watch:SetScript("OnUpdate", function()
+        local cx, cy = GetCursorPosition()
+        local hp, mp = cursorOver(f.hp, cx, cy), cursorOver(f.mp, cx, cy)
+        if not hp and not mp then
+            -- (a second opinion, the frame's own; there's no global MouseIsOver on Forever)
+            hp = f.hp:IsMouseOver() and true or false
+            mp = f.mp:IsMouseOver() and true or false
+        end
+        if hp ~= f.hoverHP or mp ~= f.hoverMP then
+            f.hoverHP, f.hoverMP = hp, mp
+            refreshText(f)
+        end
+    end)
     f:HookScript("OnEnter", function(self)
         self.hover = true
+        watch:SetShown(self.textMode == "mouseover")
+        if self.baseUnit == "party" and Party.tipAllowed and not Party.tipAllowed() then return end
         pcall(function()
             defaultTip(self)
             if GameTooltip:SetUnit(self.wfUnit) ~= false then GameTooltip:Show() end
         end)
+        if ns.Click then pcall(ns.Click.addTooltip, self) end      -- (your click casting, under it)
     end)
     f:HookScript("OnLeave", function(self)
         self.hover = false; self.hoverHP = false; self.hoverMP = false; refreshText(self)
+        watch:Hide()
         if GameTooltip:IsOwned(self) then GameTooltip:Hide() end
-    end)
-    -- numbers appear only on the bar under the cursor, and only when that option is on
-    f:HookScript("OnUpdate", function(self)
-        if not self.hover or self.textMode ~= "mouseover" then return end
-        local hp, mp = false, false
-        pcall(function()
-            local cx, cy = GetCursorPosition()
-            local function over(bar)
-                local sc = bar:GetEffectiveScale()
-                local l, b, w, h = bar:GetRect()
-                if not (l and sc and sc > 0) then return false end
-                local x, y = cx / sc, cy / sc
-                return x >= l and x <= l + w and y >= b and y <= b + h
-            end
-            hp = over(self.hp)
-            mp = over(self.mp)
-            if not hp and not mp then
-                hp = MouseIsOver(self.hp) and true or false
-                mp = MouseIsOver(self.mp) and true or false
-            end
-        end)
-        if hp ~= self.hoverHP or mp ~= self.hoverMP then
-            self.hoverHP, self.hoverMP = hp, mp
-            refreshText(self)
-        end
     end)
 end
 
@@ -3749,7 +3352,7 @@ local function createFrame(unit)
             updateLeader(self)
             pcall(Extras.raid, self)
             if event == "GROUP_ROSTER_UPDATE" then rebuildThreatRoster() end
-        elseif event == "UNIT_AURA" then safely(updateAuras, self)
+        elseif event == "UNIT_AURA" then pcall(AuraKit.auraChanged, self)   -- (the aura containers redraw on their own)
         elseif event == "UNIT_COMBAT" then
             local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
             -- the spell landed (or missed): its next combat event after the cast
@@ -3881,7 +3484,7 @@ local function createSmallFrame(unit, wf, index)
             -- a spell on its way has landed (see flyDamage)
             if event == "UNIT_HEALTH" then self.hitAt = GetTime(); if self.dmgFlying then landDamage(self) end end
         elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
-        elseif event == "UNIT_AURA" then safely(updateAuras, self)
+        elseif event == "UNIT_AURA" then pcall(AuraKit.auraChanged, self)   -- (the aura containers redraw on their own)
         elseif event == "UNIT_COMBAT" then
             local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
             -- the spell landed (or missed): its next combat event after the cast
@@ -3920,10 +3523,11 @@ end
 -- they show the player's data as a stand-in, to give you something to move.
 local function sampleFrames()
     local list = {}
-    for _, unit in ipairs({ "target", "targettarget", "focus", "focustarget", "pet", "party" }) do
+    for _, unit in ipairs({ "target", "targettarget", "focus", "focustarget", "pet" }) do
         if frames[unit] and frameOn(unit) then list[#list + 1] = frames[unit] end   -- (frames turned off stay hidden)
     end
-    if frameOn("party") then
+    if Party.portraitsOn() then
+        if frames.party then list[#list + 1] = frames.party end
         for i = 2, Party.SLOTS do if Party.members[i] then list[#list + 1] = Party.members[i] end end
     end
     return list
@@ -3931,6 +3535,7 @@ end
 
 local function enterSample()
     if InCombatLockdown() then return end
+    if Party.stopSamples then pcall(Party.stopSamples) end    -- (Edit Mode has its own stand-ins)
     for _, f in ipairs(sampleFrames()) do
         Party.unwatch(f)
         f.wfUnit = "player"
@@ -4211,6 +3816,11 @@ function copySettings(from, to)
     if InCombatLockdown() then print("|cff33ccffWebby Frames:|r can't copy in combat."); return end
     for _, key in ipairs(COPY_KEYS) do
         local v = getSetting(from, key)
+        -- (the party's own names for the same choices: its members are players, each in their own class)
+        if to == "party" then
+            if key == "colorMode" and (v == "smart" or v == "reaction") then v = "class" end
+            if key == "frameTint" and v == "class" then v = "theirclass" end
+        end
         if v ~= nil then unitData(to, true)[key] = v end
     end
     local f = frames[to]
@@ -4389,1023 +3999,14 @@ local function openEditMode()
 end
 
 ---------------------------------------------------------------------------
--- Settings window (/webby): a window of its own, with the pages on the left (General, All frames, one
--- per frame) and the page's options on the right in collapsible sections. Being an ordinary frame, it
--- can stay open while you play, target things or use Edit Mode. Esc > Options > AddOns > Webby Frames
--- only describes the addon and has a button that opens this window.
+-- Settings window: Options.lua (built at login: Opt.build)
 ---------------------------------------------------------------------------
-Opt = { pages = {}, order = {}, ROW_H = 28, LABEL_X = 16, CONTROL_X = 300, CONTROL_W = 240, CONTENT_W = 580, MENU_ROWS = 14 }
-
 local function addonVersion()
     local v
     pcall(function() v = C_AddOns.GetAddOnMetadata("WebbyFrames", "Version") end)
     return v or "?"
 end
 
-function Opt.tip(frame, title, tip)
-    if not tip then return end
-    frame:SetScript("OnEnter", function(self)
-        defaultTip(self)
-        GameTooltip:SetText(title or "", 1, 1, 1)
-        GameTooltip:AddLine(tip, 1, 0.82, 0, true)
-        GameTooltip:Show()
-    end)
-    frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
-end
-
--- A plain check box made from textures (nothing depends on a template this client may not have).
-function Opt.newCheck(parent)
-    local cb = CreateFrame("CheckButton", nil, parent)
-    cb:SetSize(26, 26)
-    cb:SetNormalTexture("Interface\\Buttons\\UI-CheckBox-Up")
-    cb:SetPushedTexture("Interface\\Buttons\\UI-CheckBox-Down")
-    cb:SetHighlightTexture("Interface\\Buttons\\UI-CheckBox-Highlight", "ADD")
-    cb:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
-    pcall(cb.SetDisabledCheckedTexture, cb, "Interface\\Buttons\\UI-CheckBox-Check-Disabled")
-    return cb
-end
-
-function Opt.dark(frame, edge)
-    frame:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-    frame:SetBackdropColor(0, 0, 0, 0.6)
-    frame:SetBackdropBorderColor(edge or 0.4, edge or 0.4, edge or 0.4, 1)
-end
-
--- The open dropdown's list (one, shared by every dropdown). Long lists scroll with the mouse wheel;
--- a click anywhere else closes it.
-function Opt.closeMenu() if Opt.menu then Opt.menu:Hide() end end
-
-function Opt.openMenu(owner, choices, current, pick)
-    local m = Opt.menu
-    if not m then
-        m = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
-        Opt.menu = m
-        m:SetFrameStrata("FULLSCREEN_DIALOG")
-        m:SetClampedToScreen(true)
-        m:EnableMouse(true)
-        m:EnableMouseWheel(true)
-        m:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 14,
-            insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-        m:SetBackdropColor(0.06, 0.06, 0.06, 0.97)
-        m.buttons = {}
-        for i = 1, Opt.MENU_ROWS do
-            local b = CreateFrame("Button", nil, m)
-            b:SetHeight(20)
-            b:SetPoint("TOPLEFT", 6, -6 - (i - 1) * 20)
-            b:SetPoint("RIGHT", m, "RIGHT", -6, 0)
-            b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-            b.check = b:CreateTexture(nil, "ARTWORK")
-            b.check:SetSize(16, 16)
-            b.check:SetPoint("LEFT", 2, 0)
-            b.check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
-            b.text = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            b.text:SetPoint("LEFT", 22, 0)
-            b.text:SetPoint("RIGHT", -4, 0)
-            b.text:SetJustifyH("LEFT")
-            pcall(b.text.SetWordWrap, b.text, false)
-            b:SetScript("OnClick", function(self)
-                m:Hide()
-                if self.value ~= nil and m.pick then m.pick(self.value) end
-            end)
-            m.buttons[i] = b
-        end
-        m.more = m:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        m.more:SetPoint("BOTTOMRIGHT", -8, 4)
-        function m:Fill()
-            local n = #self.choices
-            for i, b in ipairs(self.buttons) do
-                local c = self.choices[self.offset + i]
-                b:SetShown(c ~= nil)
-                if c then
-                    b.value = c[1]
-                    b.text:SetText(c[2] or tostring(c[1]))
-                    b.check:SetShown(c[1] == self.current)
-                end
-            end
-            local more = n > Opt.MENU_ROWS
-            self.more:SetText(more and string.format("%d-%d of %d, scroll for more", self.offset + 1, math.min(n, self.offset + Opt.MENU_ROWS), n) or "")
-            self:SetHeight(math.min(n, Opt.MENU_ROWS) * 20 + 12 + (more and 14 or 0))
-        end
-        m:SetScript("OnMouseWheel", function(self, delta)
-            self.offset = math.max(0, math.min(#self.choices - Opt.MENU_ROWS, self.offset - delta * 3))
-            self:Fill()
-        end)
-        pcall(m.RegisterEvent, m, "GLOBAL_MOUSE_DOWN")
-        m:SetScript("OnEvent", function(self)
-            if self:IsShown() and not self:IsMouseOver() and not (self.owner and self.owner:IsMouseOver()) then self:Hide() end
-        end)
-    end
-    m.owner, m.choices, m.current, m.pick = owner, choices or {}, current, pick
-    m.offset = 0
-    for i, c in ipairs(m.choices) do
-        if c[1] == current then m.offset = math.max(0, math.min(#m.choices - Opt.MENU_ROWS, i - math.floor(Opt.MENU_ROWS / 2))) end
-    end
-    m:ClearAllPoints()
-    m:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", 0, -2)
-    m:SetWidth(math.max(owner:GetWidth(), 240))
-    m:Fill()
-    m:Show()
-    m:Raise()
-end
-
--- Greys a row out (and stops its controls taking clicks) while what it depends on is off.
-function Opt.setRowEnabled(row, on)
-    if row.enabled == on then return end
-    row.enabled = on
-    for _, c in ipairs(row.controls or {}) do
-        if c.SetEnabled then pcall(c.SetEnabled, c, on)
-        elseif on and c.Enable then pcall(c.Enable, c)
-        elseif c.Disable then pcall(c.Disable, c) end
-        if c.EnableMouse then pcall(c.EnableMouse, c, on) end
-    end
-    for _, t in ipairs(row.texts or {}) do
-        if on then t:SetTextColor(1, 1, 1) else t:SetTextColor(0.5, 0.5, 0.5) end
-    end
-end
-
-function Opt.newPage(id, name)
-    local page = { id = id, name = name, rows = {} }
-    Opt.pages[id] = page
-    Opt.order[#Opt.order + 1] = id
-    return page
-end
-
--- Redraws the shown page: which rows show (closed sections and B.showIf hide them), where they sit,
--- which are greyed out (B.under) and what each control shows. Cheap enough to run on every change.
-local layoutErrorShown = false
-function Opt.layout()
-    local w = Opt.window
-    if not (w and w:IsShown()) then return end
-    local page = Opt.pages[Opt.current]
-    if not page then return end
-    if not page.content then
-        page.content = CreateFrame("Frame", nil, Opt.scroll)
-        page.content:SetSize(Opt.CONTENT_W, 10)
-        for _, row in ipairs(page.rows) do
-            local f = CreateFrame("Frame", nil, page.content)
-            f:SetHeight(row.height)
-            row.frame = f
-            local ok, err = pcall(row.make, f, row)
-            if not ok and not layoutErrorShown then
-                layoutErrorShown = true
-                print("|cffff9900Webby Frames:|r an options row couldn't be drawn: " .. tostring(err))
-            end
-        end
-    end
-    for _, p in pairs(Opt.pages) do
-        if p.content then p.content:SetShown(p == page) end
-    end
-    if Opt.scroll:GetScrollChild() ~= page.content then
-        Opt.scroll:SetScrollChild(page.content)
-        Opt.scroll:SetVerticalScroll(0)
-    end
-    local y = 6
-    for _, row in ipairs(page.rows) do
-        local shown = not row.section or row.section.expanded
-        if shown then
-            for _, pred in ipairs(row.preds) do
-                local ok, v = pcall(pred)
-                if not (ok and v) then shown = false; break end
-            end
-        end
-        row.frame:SetShown(shown)
-        if shown then
-            row.frame:ClearAllPoints()
-            row.frame:SetPoint("TOPLEFT", page.content, "TOPLEFT", 0, -y)
-            row.frame:SetPoint("RIGHT", page.content, "RIGHT")
-            y = y + row.height
-            local on = true
-            if row.enabledIf then
-                local ok, v = pcall(row.enabledIf)
-                on = ok and v and true or false
-            end
-            if row.parentRow and row.parentRow.enabled == false then on = false end
-            Opt.setRowEnabled(row, on)
-            if row.refresh then
-                row.updating = true
-                pcall(row.refresh)
-                row.updating = false
-            end
-        end
-    end
-    page.content:SetHeight(y + 10)
-    -- (the plain scroll frame doesn't keep its position inside the new height by itself)
-    local max = math.max(0, y + 10 - Opt.scroll:GetHeight())
-    if Opt.scroll:GetVerticalScroll() > max then Opt.scroll:SetVerticalScroll(max) end
-    for id, b in pairs(Opt.navButtons or {}) do b.selected:SetShown(id == Opt.current) end
-    Opt.layoutNav()
-end
-
--- The page list: General, All frames, and under All frames the frame pages, folded away until its +
--- is clicked. Frames turned off on the General page aren't listed.
-function Opt.layoutNav()
-    if not Opt.navButtons then return end
-    -- the page on show was a frame just turned off: go to All frames instead
-    local cur = Opt.current
-    if cur and UNIT_LABEL[cur] and not frameOn(cur) then
-        Opt.current = "all"
-        Opt.changed()
-    end
-    local i = 0
-    for _, id in ipairs(Opt.order) do
-        local b = Opt.navButtons[id]
-        local isFrame = UNIT_LABEL[id] ~= nil      -- (General, All frames and Click casting are top-level)
-        local shown = not isFrame or (Opt.framesOpen and frameOn(id))
-        if b then
-            b:SetShown(shown and true or false)
-            if shown then
-                b:ClearAllPoints()
-                b:SetPoint("TOPLEFT", 4, -6 - i * 24)
-                b:SetPoint("RIGHT", b:GetParent(), "RIGHT", -4, 0)
-                i = i + 1
-            end
-        end
-    end
-    local all = Opt.navButtons.all
-    if all and all.toggle then
-        local t = Opt.framesOpen and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up"
-        all.toggle:SetNormalTexture(t)
-    end
-end
-
--- After a change: redraw once, on the next frame (several settings can change in one click).
--- While a mouse button is down (a slider drag), wait until it is released so the drag isn't reset.
-function Opt.changed()
-    if Opt.pendingLayout then return end
-    Opt.pendingLayout = true
-    local function run()
-        local down = IsMouseButtonDown and (IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton"))
-        if down then C_Timer.After(0.05, run); return end
-        Opt.pendingLayout = false
-        Opt.layout()
-    end
-    C_Timer.After(0, run)
-end
-
-function Opt.select(id)
-    if not Opt.pages[id] then id = "general" end
-    -- a frame turned off has no page to show
-    if UNIT_LABEL[id] and not frameOn(id) then id = "all" end
-    Opt.current = id
-    Opt.closeMenu()
-    Opt.layout()
-end
-
-function Opt.buildWindow()
-    if Opt.window then return Opt.window end
-    local w = CreateFrame("Frame", "WebbyFramesOptions", UIParent, "BackdropTemplate")
-    Opt.window = w
-    w:Hide()
-    w:SetSize(820, 600)
-    local pos = DB and DB.optionsPos
-    if type(pos) == "table" and pos[1] then w:SetPoint(pos[1], UIParent, pos[2] or pos[1], pos[3] or 0, pos[4] or 0)
-    else w:SetPoint("CENTER") end
-    w:SetFrameStrata("HIGH")
-    w:SetToplevel(true)
-    w:SetClampedToScreen(true)
-    w:SetMovable(true)
-    w:EnableMouse(true)
-    w:RegisterForDrag("LeftButton")
-    w:SetScript("OnDragStart", w.StartMoving)
-    w:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        local p, _, rp, x, y = self:GetPoint()
-        if DB then DB.optionsPos = { p, rp, x, y } end
-    end)
-    w:SetBackdrop({ bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark", edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 32, insets = { left = 11, right = 12, top = 12, bottom = 11 } })
-    tinsert(UISpecialFrames, "WebbyFramesOptions")     -- (Esc closes it)
-
-    local title = w:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", 22, -18)
-    title:SetText("Webby Frames  |cff808080v" .. addonVersion() .. "|r")
-    local close = CreateFrame("Button", nil, w, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", -6, -6)
-
-    -- the page list
-    local nav = CreateFrame("Frame", nil, w, "BackdropTemplate")
-    nav:SetPoint("TOPLEFT", 16, -44)
-    nav:SetPoint("BOTTOMLEFT", 16, 16)
-    nav:SetWidth(160)
-    Opt.dark(nav, 0.25)
-    Opt.navButtons = {}
-    for i, id in ipairs(Opt.order) do
-        local page = Opt.pages[id]
-        local b = CreateFrame("Button", nil, nav)
-        b:SetHeight(22)
-        b:SetPoint("TOPLEFT", 4, -6 - (i - 1) * 24)
-        b:SetPoint("RIGHT", nav, "RIGHT", -4, 0)
-        b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-        b.selected = b:CreateTexture(nil, "BACKGROUND")
-        b.selected:SetAllPoints()
-        b.selected:SetColorTexture(1, 0.82, 0, 0.18)
-        b.selected:Hide()
-        local fs = b:CreateFontString(nil, "OVERLAY", (not UNIT_LABEL[id]) and "GameFontNormal" or "GameFontHighlight")
-        fs:SetPoint("LEFT", (not UNIT_LABEL[id]) and 8 or 18, 0)
-        fs:SetText(page.name)
-        b:SetScript("OnClick", function() Opt.select(id) end)
-        if id == "all" then
-            -- the + / - that shows or folds away the frame pages under it
-            local t = CreateFrame("Button", nil, b)
-            t:SetSize(16, 16)
-            t:SetPoint("RIGHT", -4, 0)
-            t:SetHighlightTexture("Interface\\Buttons\\UI-PlusButton-Hilight", "ADD")
-            t:SetScript("OnClick", function()
-                Opt.framesOpen = not Opt.framesOpen
-                if DB then DB.optionsFramesOpen = Opt.framesOpen end
-                Opt.layoutNav()
-            end)
-            b.toggle = t
-        end
-        Opt.navButtons[id] = b
-    end
-    Opt.framesOpen = DB and DB.optionsFramesOpen and true or false
-    Opt.layoutNav()
-
-    -- the page itself, scrolling
-    local area = CreateFrame("Frame", nil, w, "BackdropTemplate")
-    area:SetPoint("TOPLEFT", nav, "TOPRIGHT", 8, 0)
-    area:SetPoint("BOTTOMRIGHT", -16, 16)
-    Opt.dark(area, 0.25)
-    local ok, scroll = pcall(CreateFrame, "ScrollFrame", "WebbyFramesOptionsScroll", area, "UIPanelScrollFrameTemplate")
-    if not ok then
-        scroll = CreateFrame("ScrollFrame", nil, area)
-        scroll:EnableMouseWheel(true)
-        scroll:SetScript("OnMouseWheel", function(self, delta)
-            local child = self:GetScrollChild()
-            local max = math.max(0, (child and child:GetHeight() or 0) - self:GetHeight())
-            self:SetVerticalScroll(math.max(0, math.min(max, self:GetVerticalScroll() - delta * 40)))
-        end)
-    end
-    scroll:SetPoint("TOPLEFT", 4, -4)
-    scroll:SetPoint("BOTTOMRIGHT", -26, 4)
-    Opt.scroll = scroll
-    Opt.CONTENT_W = 820 - 16 - 160 - 8 - 16 - 4 - 26
-
-    w:SetScript("OnShow", function() Opt.layout() end)
-    w:SetScript("OnHide", function() Opt.closeMenu(); GameTooltip:Hide() end)
-    return w
-end
-
-function openSettings(unit)
-    local ok, err = pcall(Opt.buildWindow)
-    if not ok then
-        print("|cffff9900Webby Frames:|r the settings window couldn't be made: " .. tostring(err))
-        return
-    end
-    pcall(function()
-        if SettingsPanel and SettingsPanel:IsShown() then HideUIPanel(SettingsPanel) end
-    end)
-    Opt.window:Show()
-    Opt.window:Raise()
-    Opt.select((unit and Opt.pages[unit]) and unit or Opt.current or "general")
-end
-
-function Opt.toggle()
-    if Opt.window and Opt.window:IsShown() then Opt.window:Hide() else openSettings() end
-end
-
--- Esc > Options > AddOns > Webby Frames: what the addon is, and a button to the settings window.
-function Opt.buildAddOnsPage()
-    local p = CreateFrame("Frame")
-    p.name = "Webby Frames"
-    local title = p:CreateFontString(nil, "ARTWORK", "GameFontNormalHuge")
-    title:SetPoint("TOPLEFT", 16, -16)
-    title:SetText("Webby Frames")
-    local sub = p:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-    sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
-    sub:SetText("|cff808080v" .. addonVersion() .. "  -  by Webby, Lexible and Dranged|r")
-    local desc = p:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    desc:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -16)
-    desc:SetWidth(560)
-    desc:SetJustifyH("LEFT")
-    desc:SetText("Retail-style player, target, target of target, focus, focus target and pet frames for WoW Forever, drawn from Blizzard's own unit frame art.\n\n"
-        .. "Health and power bars with your choice of textures, fonts and colours, buffs and debuffs, cast bars, threat, incoming heals and shields, "
-        .. "spell cost and damage previews, and combat numbers on the portraits.\n\n"
-        .. "Move the frames in Edit Mode. Every other option is in the Webby Frames settings window.")
-    local open = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
-    open:SetSize(240, 28)
-    open:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 0, -20)
-    open:SetText("Open Webby Frames settings")
-    open:SetScript("OnClick", function() openSettings() end)
-    local edit = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
-    edit:SetSize(160, 28)
-    edit:SetPoint("LEFT", open, "RIGHT", 10, 0)
-    edit:SetText("Open Edit Mode")
-    edit:SetScript("OnClick", openEditMode)
-    local hint = p:CreateFontString(nil, "ARTWORK", "GameFontDisable")
-    hint:SetPoint("TOPLEFT", open, "BOTTOMLEFT", 0, -12)
-    hint:SetText("You can also type /webby, or click the Webby Frames minimap button.")
-    if Settings and Settings.RegisterCanvasLayoutCategory then
-        Settings.RegisterAddOnCategory(Settings.RegisterCanvasLayoutCategory(p, "Webby Frames"))
-    elseif InterfaceOptions_AddCategory then
-        InterfaceOptions_AddCategory(p)
-    end
-end
-
--- The minimap button (LibDBIcon, so minimap button collectors can take it): click for the settings,
--- right-click for Edit Mode. Its position and whether it shows are kept in WebbyFramesDB.minimap.
-function Opt.setupMinimap()
-    local LDB = LibStub and LibStub("LibDataBroker-1.1", true)
-    local DBI = LibStub and LibStub("LibDBIcon-1.0", true)
-    if not (LDB and DBI) then return end
-    if type(DB.minimap) ~= "table" then DB.minimap = { hide = false } end
-    local launcher = LDB:NewDataObject("WebbyFrames", {
-        type = "launcher",
-        text = "Webby Frames",
-        icon = "Interface\\Icons\\Spell_Nature_Web",
-        OnClick = function(_, button)
-            if button == "RightButton" then openEditMode() else Opt.toggle() end
-        end,
-        OnTooltipShow = function(tt)
-            if tt == GameTooltip then pcall(moveTipToDefault, tt:GetOwner()) end
-            tt:AddLine("Webby Frames")
-            tt:AddLine("|cffffd100Click|r to open the settings", 1, 1, 1)
-            tt:AddLine("|cffffd100Right-click|r to open Edit Mode", 1, 1, 1)
-            tt:AddLine("|cffffd100Drag|r to move this button", 1, 1, 1)
-        end,
-    })
-    DBI:Register("WebbyFrames", launcher, DB.minimap)
-    Opt.DBI = DBI
-end
-
-function Opt.setMinimapShown(on)
-    if type(DB.minimap) ~= "table" then DB.minimap = {} end
-    DB.minimap.hide = not on
-    if Opt.DBI then
-        if on then Opt.DBI:Show("WebbyFrames") else Opt.DBI:Hide("WebbyFrames") end
-    end
-end
-
-local function buildSettings()
-    -- Small builders; every setting reads and writes through a proxy table. Each adds a row to the
-    -- page; the rows are only made when the page is first shown. B.section starts a collapsible
-    -- section: the rows added after it only show while it is open.
-    local function builders(page, proxy)
-        local B = {}
-        local current
-        local L, CX, CW = Opt.LABEL_X, Opt.CONTROL_X, Opt.CONTROL_W
-        local function add(row)
-            row.section = current
-            row.preds = {}
-            row.height = row.height or Opt.ROW_H
-            page.rows[#page.rows + 1] = row
-            return row
-        end
-        local function get(key, default)
-            local v = proxy[key]
-            if v == nil then v = default end
-            return v
-        end
-        -- (switches and dropdowns can have options that depend on them: redraw the page after)
-        local function set(key, v, redraw)
-            proxy[key] = v
-            if redraw then Opt.changed() end
-        end
-        local function label(f, row, text, tip)
-            local fs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-            fs:SetPoint("LEFT", L + 20 + 18 * (row.indent or 0), 0)
-            fs:SetPoint("RIGHT", f, "LEFT", CX - 10, 0)
-            fs:SetJustifyH("LEFT")
-            pcall(fs.SetWordWrap, fs, false)
-            fs:SetText(text)
-            row.texts = { fs }
-            f:EnableMouse(true)
-            Opt.tip(f, text, tip)
-            return fs
-        end
-        function B.header(text)
-            current = nil
-            local small = text:find("^|cff808080") ~= nil
-            return add({ height = small and 22 or 36, make = function(f)
-                local fs = f:CreateFontString(nil, "OVERLAY", small and "GameFontHighlightSmall" or "GameFontHighlightLarge")
-                fs:SetPoint("BOTTOMLEFT", L, small and 4 or 8)
-                fs:SetPoint("RIGHT", -L, 0)
-                fs:SetJustifyH("LEFT")
-                fs:SetText(text)
-            end })
-        end
-        function B.section(text, open)
-            local sec = { expanded = open and true or false }
-            current = nil
-            add({ height = 32, make = function(f, row)
-                local b = CreateFrame("Button", nil, f, "BackdropTemplate")
-                b:SetPoint("TOPLEFT", 6, -4)
-                b:SetPoint("BOTTOMRIGHT", -6, 2)
-                b:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8" })
-                b:SetBackdropColor(1, 1, 1, 0.07)
-                b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-                local icon = b:CreateTexture(nil, "ARTWORK")
-                icon:SetSize(16, 16)
-                icon:SetPoint("LEFT", 8, 0)
-                local fs = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-                fs:SetPoint("LEFT", icon, "RIGHT", 8, 0)
-                fs:SetText(text)
-                b:SetScript("OnClick", function()
-                    sec.expanded = not sec.expanded
-                    pcall(PlaySound, SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or 856)
-                    Opt.layout()
-                end)
-                row.refresh = function()
-                    icon:SetTexture(sec.expanded and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up")
-                end
-            end })
-            current = sec
-        end
-        function B.check(key, text, tip, default)
-            return add({ make = function(f, row)
-                label(f, row, text, tip)
-                local cb = Opt.newCheck(f)
-                cb:SetPoint("LEFT", CX, 0)
-                cb:SetScript("OnClick", function(self) set(key, self:GetChecked() and true or false, true) end)
-                Opt.tip(cb, text, tip)
-                row.controls = { cb }
-                row.refresh = function() cb:SetChecked(get(key, default) and true or false) end
-            end })
-        end
-        -- Two checkboxes on one row: a and b are { key, label, tip, default } (b may be nil).
-        function B.pair(a, b)
-            return add({ make = function(f, row)
-                row.controls, row.texts = {}, {}
-                local boxes = {}
-                for i, d in ipairs({ a, b }) do
-                    local cb = Opt.newCheck(f)
-                    cb:SetPoint("LEFT", i == 1 and (L + 18 * (row.indent or 0)) or (CX - 10), 0)
-                    local fs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-                    fs:SetPoint("LEFT", cb, "RIGHT", 4, 0)
-                    fs:SetText(d[2])
-                    cb:SetScript("OnClick", function(self) set(d[1], self:GetChecked() and true or false, true) end)
-                    Opt.tip(cb, d[2], d[3])
-                    row.controls[#row.controls + 1] = cb
-                    row.texts[#row.texts + 1] = fs
-                    boxes[#boxes + 1] = { cb, d }
-                end
-                row.refresh = function()
-                    for _, x in ipairs(boxes) do x[1]:SetChecked(get(x[2][1], x[2][4]) and true or false) end
-                end
-            end })
-        end
-        -- A colour row: label and a swatch of the colour, which opens the colour picker when clicked.
-        -- getc() -> { r, g, b }; setc(r, g, b).
-        function B.swatch(text, getc, setc, tip)
-            return add({ make = function(f, row)
-                label(f, row, text, tip)
-                local b = CreateFrame("Button", nil, f, "BackdropTemplate")
-                b:SetSize(22, 22)
-                b:SetPoint("LEFT", CX + 2, 0)
-                Opt.dark(b, 0.6)
-                b:SetBackdropColor(0, 0, 0, 1)
-                local tex = b:CreateTexture(nil, "ARTWORK")
-                tex:SetPoint("TOPLEFT", 3, -3)
-                tex:SetPoint("BOTTOMRIGHT", -3, 3)
-                b:SetScript("OnClick", function()
-                    local c = getc() or { 1, 1, 1 }
-                    Extras.openPicker({ c[1] or 1, c[2] or 1, c[3] or 1 }, function(r, g, bl)
-                        setc(r, g, bl)
-                        tex:SetColorTexture(r, g, bl, 1)
-                    end)
-                end)
-                Opt.tip(b, text, tip)
-                row.controls = { b }
-                row.refresh = function()
-                    local c = getc() or { 1, 1, 1 }
-                    tex:SetColorTexture(c[1] or 1, c[2] or 1, c[3] or 1, 1)
-                end
-            end })
-        end
-        function B.slider(key, text, tip, default, lo, hi, step, fmt)
-            fmt = fmt or function(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end
-            local function snap(v)
-                v = math.floor((v - lo) / step + 0.5) * step + lo
-                return math.max(lo, math.min(hi, v))
-            end
-            return add({ make = function(f, row)
-                label(f, row, text, tip)
-                local s = CreateFrame("Slider", nil, f, "BackdropTemplate")
-                s:SetOrientation("HORIZONTAL")
-                s:SetSize(150, 17)
-                s:SetPoint("LEFT", CX + 22, 0)
-                s:SetBackdrop({ bgFile = "Interface\\Buttons\\UI-SliderBar-Background", edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
-                    tile = true, tileSize = 8, edgeSize = 8, insets = { left = 3, right = 3, top = 6, bottom = 6 } })
-                s:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
-                s:SetMinMaxValues(lo, hi)
-                s:SetValueStep(step)
-                pcall(s.SetObeyStepOnDrag, s, true)
-                local val = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                local function stepper(dir)
-                    local b = CreateFrame("Button", nil, f)
-                    b:SetSize(20, 20)
-                    local name = dir < 0 and "Prev" or "Next"
-                    b:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. name .. "Page-Up")
-                    b:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. name .. "Page-Down")
-                    b:SetDisabledTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. name .. "Page-Disabled")
-                    b:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
-                    b:SetScript("OnClick", function() s:SetValue(snap(s:GetValue() + dir * step)) end)
-                    return b
-                end
-                local prev, nxt = stepper(-1), stepper(1)
-                prev:SetPoint("RIGHT", s, "LEFT", -1, 0)
-                nxt:SetPoint("LEFT", s, "RIGHT", 1, 0)
-                val:SetPoint("LEFT", nxt, "RIGHT", 4, 0)
-                s:SetScript("OnValueChanged", function(_, v)
-                    v = snap(v)
-                    val:SetText(fmt(v))
-                    if not row.updating then set(key, v) end
-                end)
-                s:EnableMouseWheel(false)
-                Opt.tip(s, text, tip)
-                row.controls = { s, prev, nxt }
-                row.texts[#row.texts + 1] = val
-                row.refresh = function()
-                    local v = tonumber(get(key, default)) or default or lo
-                    s:SetValue(v)
-                    val:SetText(fmt(snap(v)))
-                end
-            end })
-        end
-        -- Indents controls under the one they depend on and greys them out while isOn() is false.
-        function B.under(parent, isOn, ...)
-            for _, r in ipairs({ ... }) do
-                if r and parent then
-                    r.indent = (parent.indent or 0) + 1
-                    r.enabledIf = isOn
-                    r.parentRow = parent
-                end
-            end
-        end
-        -- Shows controls only while isOn() is true (hidden rather than greyed).
-        function B.showIf(isOn, ...)
-            for _, r in ipairs({ ... }) do
-                if r then r.preds[#r.preds + 1] = isOn end
-            end
-        end
-        -- choices: { { value, label }, ... }, or a function returning that (read each time it opens).
-        function B.dropdown(key, text, tip, default, choices)
-            local function list() return (type(choices) == "function" and choices() or choices) or {} end
-            return add({ make = function(f, row)
-                label(f, row, text, tip)
-                local b = CreateFrame("Button", nil, f, "BackdropTemplate")
-                b:SetSize(CW, 24)
-                b:SetPoint("LEFT", CX, 0)
-                Opt.dark(b, 0.45)
-                b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-                local arrow = b:CreateTexture(nil, "ARTWORK")
-                arrow:SetSize(16, 16)
-                arrow:SetPoint("RIGHT", -4, 0)
-                arrow:SetTexture("Interface\\Buttons\\Arrow-Down-Up")
-                local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                fs:SetPoint("LEFT", 8, 0)
-                fs:SetPoint("RIGHT", arrow, "LEFT", -2, 0)
-                fs:SetJustifyH("LEFT")
-                pcall(fs.SetWordWrap, fs, false)
-                b:SetScript("OnClick", function(self)
-                    if Opt.menu and Opt.menu:IsShown() and Opt.menu.owner == self then Opt.closeMenu(); return end
-                    Opt.openMenu(self, list(), get(key, default), function(v) set(key, v, true) end)
-                end)
-                Opt.tip(b, text, tip)
-                row.controls = { b }
-                row.texts[#row.texts + 1] = fs
-                row.refresh = function()
-                    local cur = get(key, default)
-                    local shown = tostring(cur)
-                    for _, c in ipairs(list()) do
-                        if c[1] == cur then shown = c[2]; break end
-                    end
-                    fs:SetText(shown)
-                end
-            end })
-        end
-        function B.button(text, buttonText, onClick, tip)
-            return add({ make = function(f, row)
-                label(f, row, text, tip)
-                local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-                b:SetSize(180, 24)
-                b:SetPoint("LEFT", CX, 0)
-                b:SetText(buttonText)
-                b:SetScript("OnClick", function()
-                    onClick()
-                    Opt.changed()
-                end)
-                Opt.tip(b, text, tip)
-                row.controls = { b }
-            end })
-        end
-        -- Buff and debuff layout details (in the Buffs and debuffs section).
-        function B.auraDetails()
-            B.dropdown("auraGrowth", "Rows grow", "To the right: the first icon at the left end. To the left: the first icon at the right end, with the row filling leftwards.", "right",
-                { { "right", "To the right" }, { "left", "To the left" } })
-            B.slider("auraGap", "Gap", "Space between the icons.", 2, 0, 10, 1, function(v) return string.format("%d px", math.floor(v + 0.5)) end)
-            B.slider("auraStack", "Stack count size", "How big the stack count is, as a share of the icon.", 50, 30, 90, 5,
-                function(v) return string.format("%d%%", math.floor(v + 0.5)) end)
-        end
-        -- Fade to red with its style and custom stops. read: whose settings to show; set(unit, key, value).
-        -- Fade to red, with its colours and (only while those are your own) the three stops; each part
-        -- shows only while what it depends on is on. read: whose settings to show; set(unit, key, value).
-        function B.fade(read, set, tip)
-            local fade = B.check("healthFade", "Fade to red as health drops", tip, false)
-            local function fadeOn() return getSetting(read, "healthFade") and true or false end
-            local style = B.dropdown("fadeStyle", "Fade colours", "Automatic: the colour turns to red round the colour wheel (shamans, mages and warlocks each have their own route), fully red from 25% health.\n\nMy own: up to three colour stops, each at a health % you choose.", "auto",
-                { { "auto", "Automatic" }, { "custom", "My own" } })
-            B.under(fade, fadeOn, style)
-            B.showIf(fadeOn, style)
-            local function custom() return fadeOn() and getSetting(read, "fadeStyle") == "custom" end
-            local pctText = function(v) v = math.floor(v + 0.5); return v <= 0 and "Off" or string.format("%d%%", v) end
-            local inits = { B.check("fadeBlend", "Blend between stops", "On: the colour blends from one stop to the next. Off: the bar changes colour right at each stop.", true) }
-            local names = { "First", "Second", "Third" }
-            for i = 1, 3 do
-                inits[#inits + 1] = B.slider("fade" .. i .. "Pct", names[i] .. " stop at", "The health % at which the bar reaches this stop's colour. 0 turns the stop off.",
-                    DEFAULT_SETTINGS["fade" .. i .. "Pct"], 0, 100, 5, pctText)
-            end
-            B.under(style, custom, unpack(inits))
-            B.showIf(custom, unpack(inits))
-            -- (Blizzard's button rows error when made to depend on another setting, so the colour buttons
-            -- are only shown / hidden, not indented)
-            for i = 1, 3 do
-                local key = "fade" .. i .. "Color"
-                local sw = B.swatch(names[i] .. " stop colour", function()
-                    local c = getSetting(read, key)
-                    return type(c) == "table" and c or { 1, 1, 1 }
-                end, function(r, g, b) set(read, key, { r, g, b }) end,
-                    "The bar's colour at the " .. names[i]:lower() .. " stop. Click to change it.")
-                B.showIf(custom, sw)
-            end
-        end
-        return B
-    end
-
-    -- General ------------------------------------------------------------------
-    do
-        local general = setmetatable({}, {
-            -- addon-wide switches, both on unless turned off; "show_<unit>" is that frame's Show
-            __index = function(_, k)
-                if k == "enabled" or k == "combatNumbers" then return DB[k] ~= false end
-                if k == "minimapButton" then return not (type(DB.minimap) == "table" and DB.minimap.hide) end
-                local unit = k:match("^show_(.+)$")
-                if unit then return frameOn(unit) end
-            end,
-            __newindex = function(_, k, v)
-                if k == "enabled" or k == "combatNumbers" then DB[k] = v and true or false; return end
-                if k == "minimapButton" then Opt.setMinimapShown(v); return end
-                local unit = k:match("^show_(.+)$")
-                if unit then setSetting(unit, "frameShown", v and true or false) end
-            end,
-        })
-        local B = builders(Opt.newPage("general", "General"), general)
-        B.header("Webby Frames  |cff808080v" .. addonVersion() .. "  -  by Webby, Lexible and Dranged|r")
-        B.pair({ "enabled", "Enable Webby Frames", "Replaces Blizzard's player, target, target of target, focus, focus target and pet frames.\n\n|cffffd100Needs a /reload.|r", true },
-               { "combatNumbers", "Combat numbers", "Damage and healing popping up over the portraits. Turn this off if you prefer Blizzard's floating combat text (Esc > Options > Gameplay > Combat).\n\nShown on the player, target and focus frames.", true })
-        B.pair({ "minimapButton", "Minimap button", "A Webby Frames button on the minimap: click it for these options, right-click it for Edit Mode. Drag it round the minimap to move it.", true })
-
-        B.header("Frames")
-        -- which of the optional frames are used (player and target always are)
-        local function showItem(unit)
-            return { "show_" .. unit, UNIT_LABEL[unit], "Show the " .. UNIT_LABEL[unit]:lower() .. " frame. Turned off, it stays hidden, in Edit Mode too. (Changes made in combat apply when it ends.)", true }
-        end
-        B.pair(showItem("targettarget"), showItem("focus"))
-        B.pair(showItem("focustarget"), showItem("pet"))
-        B.pair({ "show_party", "Party", "Show the party frames (and hide Blizzard's). Turned off, Blizzard's party frames come back after a /reload.", true })
-        B.button("Position", "Open Edit Mode", openEditMode, "Drag the frames where you want them. They snap to each other and to the middle of the screen, and a frame dropped next to another moves with it.")
-        B.button("Start over", "Reset all frames", function()
-            for _, unit in ipairs(UNITS) do resetFrame(unit) end
-        end, "Puts every frame back to its default options and position, for the current Edit Mode layout.")
-
-        B.header("Profiles")
-        B.button("Share", "Export profile", function() Profiles.show("export") end,
-            "Every frame's options and position in this Edit Mode layout, as text you can copy and keep or share.")
-        B.button("Load", "Import profile", function() Profiles.show("import") end,
-            "Paste a profile exported here or on another character. It replaces this layout's options and positions.")
-
-        B.header("Pick a frame on the left for its own options.")
-        B.header("|cff808080Options are saved per Edit Mode layout.  /webby help lists the commands.|r")
-    end
-
-    -- one page per frame ---------------------------------------------------------
-    local fontList = function() local l = {}; for _, c in ipairs(fontChoices()) do l[#l + 1] = { c[1], c[2] } end; return l end
-
-    -- All frames: the options most people want the same everywhere, set on every frame at once. It shows
-    -- the player frame's choice; changing it sets every frame (each frame's page can still differ after).
-    do
-        local function setAll(_, k, v)
-            for _, unit in ipairs(UNITS) do
-                -- (the party has its own frame colours: gold or each member's class colour)
-                if not (unit == "party" and (k == "frameTint" or k == "frameColor")) then setSetting(unit, k, v) end
-            end
-        end
-        local proxy = setmetatable({}, {
-            __index = function(_, k) return getSetting("player", k) end,
-            __newindex = setAll,
-        })
-        local B = builders(Opt.newPage("all", "All frames"), proxy)
-        B.header("|cff808080Changes here apply to every frame. Each frame's own page can then differ.|r")
-
-        -- (the same sections, in the same order, as each frame's page)
-        B.section("Frame", false)
-        B.dropdown("frameTint", "Frame colour", "Colours the frame art on every frame. Class colour: your class on the player and pet frames, the class of whoever the others show (NPCs stay gold). The player's resting glow takes the colour too.", "default",
-            { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
-        B.showIf(function() return getSetting("player", "frameTint") == "custom" end,
-            B.swatch("Custom colour", function() return Extras.tintColor("player") or { 1, 1, 1 } end,
-                function(r, g, b) setAll(nil, "frameColor", { r, g, b }) end, "The colour for every frame's art. Click to change it."))
-        B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
-            { { "picture", "Picture" }, { "class", "Class icon (players)" } })
-
-        B.section("Bars", false)
-        B.dropdown("barTexture", "Health texture", "Every frame's health bar fill (and cast bar and heal / shield overlays).", "default", textureChoices)
-        B.dropdown("powerTexture", "Power texture", "Every frame's mana, rage or energy fill.", "default", textureChoices)
-        B.dropdown("font", "Font", "For the names and bar numbers on every frame.", "default", fontList)
-        local numbers = B.dropdown("textMode", "Numbers", "When the bars show their numbers, on every frame.", "always",
-            { { "always", "Always" }, { "mouseover", "On mouseover" }, { "off", "Never" } })
-        B.under(numbers, function() return getSetting("player", "textMode") ~= "off" end,
-            B.dropdown("textFormat", "Style", "Totals, percentages, or both.", "value",
-                { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
-
-        B.section("Health bar", false)
-        local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs on every frame, when Health colour is set by reaction. Green lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
-            { { "reaction", "Red" }, { "green", "Green" }, { "custom", "My own" } })
-        B.showIf(function() return getSetting("target", "npcColor") == "custom" end,
-            B.swatch("Custom NPC colour", function()
-                local c = getSetting("target", "npcColorRGB")
-                return type(c) == "table" and c or { 0.1, 0.8, 0.1 }
-            end, function(r, g, b) setAll(nil, "npcColorRGB", { r, g, b }) end, "The health colour for hostile NPCs on every frame. Click to change it."))
-        B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
-        B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
-               { "absorbs", "Shields and heal absorbs", "Damage shields and healing absorbs on the health bars.", true })
-        B.pair({ "damageTrail", "Show recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true })
-
-        B.section("Buffs and debuffs", false)
-        B.dropdown("auraTimer", "Time left", "How each icon shows the time it has left, on every frame.", "both",
-            { { "both", "Sweep and numbers" }, { "swipe", "Sweep" }, { "numbers", "Numbers" }, { "none", "Nothing" } })
-        B.auraDetails()
-    end
-
-    for _, unit in ipairs(UNITS) do
-        local proxy = setmetatable({}, {
-            __index = function(_, k) return getSetting(unit, k) end,
-            __newindex = function(_, k, v) setSetting(unit, k, v) end,
-        })
-        local B = builders(Opt.newPage(unit, UNIT_LABEL[unit]), proxy)
-
-        local px = function(v) return string.format("%d px", math.floor(v + 0.5)) end
-        local whole = function(v) return string.format("%d", math.floor(v + 0.5)) end
-        local function isOn(key) return function() return getSetting(unit, key) and true or false end end
-
-        -- the frame itself and the icons on its portrait
-        B.section("Frame", false)
-        local myClass = select(2, UnitClass("player"))
-        local nameItem = { "showName", "Show name", "The unit's name above its health bar.", true }
-        if unit == "player" then   -- (your own name always shows)
-            B.pair({ "restTint", "Zzz in frame colour", "The resting Zzz by the portrait takes the frame colour (it stays as drawn while the frame is gold).", false })
-        elseif unit == "target" and (myClass == "ROGUE" or myClass == "DRUID") then
-            B.pair(nameItem, { "comboPoints", "Combo points", "Your combo points in an arc round the target's portrait" .. (myClass == "DRUID" and ", while you're in cat form." or ".") .. " Drag them anywhere in Edit Mode.", true })
-        elseif not ALWAYS_SHOWN[unit] then
-            B.pair({ "frameShown", "Show this frame", "Turned off, the frame stays hidden, in Edit Mode too. Also on the General page.", true }, nameItem)
-        else
-            B.pair(nameItem)
-        end
-        B.slider("scale", "Scale", "How big the frame is.", defaultFor(unit, "scale"), 0.5, 2, 0.05)
-        if unit == "party" then
-            B.slider("partyGap", "Spacing", "The gap between party members. With buffs and debuffs below the frames, leave room for them (about 20 px a row).", defaultFor("party", "partyGap"), 0, 60, 1,
-                function(v) return string.format("%d px", math.floor(v + 0.5)) end)
-            B.dropdown("partyLayout", "Layout", "Stacked: one under the other. Side by side: in a row, leaving room for each member's buffs and debuffs beside them.", "vertical",
-                { { "vertical", "Stacked" }, { "horizontal", "Side by side" } })
-            B.dropdown("partySort", "Order", "As in your group, or by role: tanks, then healers, then damage. (A change in combat waits for it to end.)", "group",
-                { { "group", "As in your group" }, { "role", "By role" } })
-            B.pair({ "partyPets", "Pets", "Each member's pet, as a small party frame under theirs.", true },
-                   { "rangeFade", "Fade when out of range", "Members too far away for your spells fade out.", true })
-        end
-        if unit ~= "pet" then   -- (a pet has no class: it always shows its picture)
-            B.dropdown("portraitStyle", "Portrait", "The unit's picture, or for players their class icon (NPCs keep their picture).", "picture",
-                { { "picture", "Picture" }, { "class", "Class icon (players)" } })
-        end
-        if unit == "party" then
-            -- (each member in their own class colour, or all gold)
-            B.dropdown("frameTint", "Frame colour", "Colours each member's frame art: its border and portrait ring. Their class colour: each member in their own class's colour.", "default",
-                { { "default", "Gold" }, { "theirclass", "Their class colour" } })
-        else
-            B.dropdown("frameTint", "Frame colour", "Colours the frame art: its border, portrait ring, corner accent, level circle and cast bar border. "
-                .. ((unit == "player" or unit == "pet") and "Class colour is your class's colour." or "Class colour is the class of whoever the frame shows (NPCs stay gold).")
-                .. (unit == "player" and " The resting glow takes the colour too." or ""), "default",
-                { { "default", "Gold" }, { "class", "Class colour" }, { "custom", "Custom" } })
-        end
-        B.showIf(function() return unit ~= "party" and getSetting(unit, "frameTint") == "custom" end,
-            B.swatch("Custom colour", function() return Extras.tintColor(unit) or { 1, 1, 1 } end,
-                function(r, g, b) setSetting(unit, "frameColor", { r, g, b }) end, "The colour for the frame art. Click to change it."))
-        if unit == "player" then
-            B.dropdown("cornerStyle", "Corner accent", "The gold corner at the portrait's bottom right: Retail's pointed one, or Forever's older rounder one.", "retail",
-                { { "retail", "Retail" }, { "forever", "Forever" } })
-            B.pair({ "costPredict", "Show spell costs", "On your mana (or other power) bar: while you cast, the part the spell will use is shaded; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true },
-                   myClass == "DRUID" and { "druidMana", "Druid mana", "While you're in bear or cat form, your mana shows in a slim bar under the frame. Drag it anywhere in Edit Mode.", true } or nil)
-            B.showIf(function() return getSetting("player", "costPredict") and true or false end,
-                B.slider("costShade", "Spell cost shading", "How the cost shows on the bar while you cast: lighter (right) or darker (left), and by how much. The flash when a spell goes off always stays light.", 55, -100, 100, 5,
-                    function(v)
-                        v = math.floor(v + 0.5)
-                        if v == 0 then return "Off" end
-                        return string.format(v > 0 and "Lighter %d%%" or "Darker %d%%", math.abs(v))
-                    end))
-        end
-        if unit == "pet" then
-            B.dropdown("petHappy", "Pet happiness", "Hunters: your pet's mood, with its diet, damage and loyalty in the tooltip.\n\nCorner: at the portrait's bottom right, where your frame has its corner point and combat swords.\nLevel badge: at the portrait's bottom left, where your frame has its level circle (the tooltip gives the pet's level).", "corner",
-                { { "off", "Off" }, { "corner", "On the corner" }, { "badge", "Level badge" } })
-        end
-
-        -- how the bars are drawn and labelled
-        B.section("Bars", false)
-        B.dropdown("barTexture", "Health texture", "The health bar's fill (the cast bar and the incoming heal and shield overlays use it too). SharedMedia textures are listed too.", "default", textureChoices)
-        B.dropdown("powerTexture", "Power texture", "The mana, rage or energy bar's fill. A custom texture is coloured by power type. Follows the health texture until you pick one.", "default", textureChoices)
-        B.dropdown("font", "Font", "For the name and the numbers on the bars. SharedMedia fonts are listed too.", "default", fontList)
-        local numbers = B.dropdown("textMode", "Numbers", "When the bars show their numbers. On mouseover, only the bar under the cursor shows its number.",
-            defaultFor(unit, "textMode"), { { "always", "Always" }, { "mouseover", "On mouseover" }, { "off", "Never" } })
-        B.under(numbers, function() return getSetting(unit, "textMode") ~= "off" end,
-            B.dropdown("textFormat", "Style", "Totals, percentages, or both.",
-                defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
-
-        -- the health bar's colour and what's drawn on and past it
-        B.section("Health bar", false)
-        if unit == "pet" then   -- (the pet's own reaction colour flips around, so these two)
-            B.dropdown("petColor", "Health colour", "The same as your player frame's (your class colour, if that's what the player frame uses), or plain green.", "player",
-                { { "player", "Match the player frame" }, { "plain", "Plain green" } })
-        else
-            local colour = B.dropdown("colorMode", "Health colour", "How the health bar is coloured.", "smart", COLOR_MODES)
-            if unit ~= "player" then
-                local function byReaction() local m = getSetting(unit, "colorMode"); return m == "smart" or m == "reaction" end
-                local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs. Green (or your own colour) lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
-                    { { "reaction", "Red" }, { "green", "Green" }, { "custom", "My own" } })
-                B.under(colour, byReaction, npc)
-                B.showIf(byReaction, npc)
-                B.showIf(function() return byReaction() and getSetting(unit, "npcColor") == "custom" end,
-                    B.swatch("Custom NPC colour", function()
-                        local c = getSetting(unit, "npcColorRGB")
-                        return type(c) == "table" and c or { 0.1, 0.8, 0.1 }
-                    end, function(r, g, b) setSetting(unit, "npcColorRGB", { r, g, b }) end, "The health colour for hostile NPCs. Click to change it."))
-            end
-        end
-        B.fade(unit, setSetting, "As health drops, the health colour (whichever you picked above) shifts towards red, or through your own stops.")
-        B.pair({ "healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true },
-               { "absorbs", "Shields and heal absorbs", "Damage shields in pale blue past the end of its health, and healing absorbs eating back into it in red.", true })
-        B.pair({ "damageTrail", "Show recent damage", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true },
-               (unit == "target" or unit == "focus") and { "damagePredict", "Preview spell damage", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true } or nil)
-
-        B.section("Buffs and debuffs", false)
-        -- Retail style, the dispel glow and bigger own debuffs: choices on every frame (the party starts
-        -- Retail with the glow on, the rest as before)
-        B.dropdown("auraStyle", "Style", "Retail: on a friend, only the buffs you put on them (your heals over time, shields); on an enemy, all their buffs.\nEverything: all their buffs.\n\nDebuffs always all show, the ones that matter first.", defaultFor(unit, "auraStyle"),
-            { { "retail", "Retail" }, { "all", "Everything" } })
-        B.pair({ "dispelGlow", "Dispel glow", "When the unit has a debuff someone can dispel, the frame takes its colour (magic blue, curse purple, disease brown, poison green) and pulses, like the resting glow.", defaultFor(unit, "dispelGlow") },
-               (not OWN_CLASS[unit]) and { "auraMineBig", "Bigger own debuffs", "Your own debuffs (your damage over time and so on) first and bigger, so you can keep track of them.", false } or nil)
-        local buffs = B.check("auraBuffs", "Buffs", nil, defaultFor(unit, "auraBuffs"))
-        B.under(buffs, isOn("auraBuffs"),
-            B.slider("auraSize", "Size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, px))
-        local debuffs = B.check("auraDebuffs", "Debuffs", nil, defaultFor(unit, "auraDebuffs"))
-        B.under(debuffs, isOn("auraDebuffs"),
-            B.slider("auraDebuffSize", "Size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, px),
-            B.check("auraMine", "Only mine", "Only the debuffs you applied.", false))
-        -- (the small frames can also have them beside the frame: two rows, a row of buffs and of debuffs at most)
-        local small = unit == "targettarget" or unit == "focustarget" or unit == "pet" or unit == "party"
-        local positions = { { "below", "Below the frame" }, { "above", "Above the frame" }, { "custom", "Drag in Edit Mode" } }
-        if small then table.insert(positions, 1, { "side", "Right of the frame" }) end
-        B.dropdown("auraPos", "Position", "Where the icons sit."
-            .. (small and " Right of the frame: two rows beside it, at most a row of buffs and a row of debuffs (the ones that matter first), so nothing spills over the next frame." or "")
-            .. " With \"Drag in Edit Mode\", Edit Mode shows a blue box for them: drag it anywhere.", defaultFor(unit, "auraPos"), positions)
-        B.button("Move", "Open Edit Mode", openEditMode, "Drag the buffs and debuffs box (Position: Drag in Edit Mode).")
-        B.slider("auraPerRow", "Per row", "How many icons fit on a row before the next one starts.", defaultFor(unit, "auraPerRow"), 1, 16, 1, whole)
-        B.slider("auraMax", "Most shown", "How many buffs, and how many debuffs, can show at once.", defaultFor(unit, "auraMax"), 1, 32, 1, whole)
-        B.dropdown("auraTimer", "Time left", "How each icon shows the time it has left: a dark sweep across the icon, countdown numbers, or both.", "both",
-            { { "both", "Sweep and numbers" }, { "swipe", "Sweep" }, { "numbers", "Numbers" }, { "none", "Nothing" } })
-        B.auraDetails()
-
-        if hasCastAndThreat(unit) then
-            B.section("Cast bar and threat", false)
-            B.check("castShow", "Cast bar", "What the unit is casting, under its mana bar: yellow for a cast, green for a channel, grey when you can't interrupt it, red when interrupted.", true)
-            B.showIf(isOn("castShow"),
-                B.pair({ "castText", "Spell name", "The spell's name on the bar.", true },
-                       { "castIcon", "Spell icon", "At the bar's left end.", true }))
-            local threat = B.dropdown("threatShow", "Threat", "Your threat on hostile mobs: a glow round the frame and / or your threat %, both in your threat colour.", "both",
-                { { "both", "Glow and number" }, { "glow", "Glow only" }, { "number", "Number only" }, { "off", "Off" } })
-            B.under(threat, function() local m = getSetting(unit, "threatShow"); return m == "both" or m == "number" end,
-                B.dropdown("threatStyle", "Threat number", "Your threat %. About 110% pulls aggro in melee and 130% at range. While you have aggro, it's your threat compared with the next highest in your group.\n\nJust the number: beside the raid marker on the portrait.\nBox: a small box above the end of the name.", "text",
-                    { { "text", "Just the number" }, { "box", "In a box above the name" } }))
-            B.under(threat, function() return getSetting(unit, "threatShow") ~= "off" end,
-                B.dropdown("threatColors", "Threat colours", "The colour of the glow and the number.\nGreen to red: green when you're safe, turning red as you get closer to pulling aggro.\nBlizzard's: the game's own threat colours.", "gradient",
-                    { { "gradient", "Green to red" }, { "blizzard", "Blizzard's" } }))
-        end
-
-        B.section("Reset and copy", false)
-        if unit ~= "player" then
-            B.button("Copy", "Copy from player", function() copySettings("player", unit) end,
-                "Gives this frame the player frame's options. Its position doesn't change.")
-        end
-        B.button("Reset", "Reset this frame", function() resetFrame(unit) end,
-            "Puts this frame back to its default options and position, for the current Edit Mode layout.")
-    end
-
-    -- the modules' own pages (Click casting), after the frame pages
-    for _, build in ipairs(ns.pages) do
-        local ok, err = pcall(build, builders, Opt)
-        if not ok then print("|cffff9900Webby Frames:|r couldn't build a settings page: " .. tostring(err)) end
-    end
-end
-
--- Entry in the minimap addon compartment (needs the TOC fields below).
-function WebbyFrames_OnCompartmentClick() Opt.toggle() end
 
 ---------------------------------------------------------------------------
 -- Startup
@@ -5484,7 +4085,7 @@ init:SetScript("OnEvent", function(_, event)
     end
 
     DB = WebbyFramesDB
-    if not pcall(buildSettings) then
+    if not (Opt.build and pcall(Opt.build)) then
         print("|cffff9900Webby Frames:|r couldn't build the settings window; Edit Mode still works.")
     end
     pcall(Opt.buildAddOnsPage)
@@ -5498,6 +4099,7 @@ init:SetScript("OnEvent", function(_, event)
         else createFrame(unit) end
     end
     pcall(Party.init)
+    if ns.PlayerExtras then pcall(ns.PlayerExtras.init) end   -- (weapon enchants, buff timer bars)
     Extras.init()
     hideAllBlizzard()
     C_Timer.After(2, hideAllBlizzard)
@@ -5606,15 +4208,31 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         local f = frames.player
         if f then f.cornerStyle = nil; pcall(applyCorner, f) end
         print(p .. "corner accent (" .. tostring(style) .. ") nudged " .. x .. " right, " .. y .. " up. Try /webby corner 0.5 -0.5 and so on; /webby corner resets.")
+    elseif msg == "party" then
+        -- the party frames' sample party (raid style or portrait frames)
+        Party.toggleSamples()
     elseif msg == "glow" then
         -- what each frame's dispel glow is doing
         local p = "|cff33ccffWebby Frames:|r "
         print(p .. "glow pulse " .. (AuraKit.glowDriver and "running" or "not started") .. ", " .. #AuraKit.glowFrames .. " frames with the glow")
         for _, f in ipairs(AuraKit.glowFrames) do
             local typ = AuraKit.dispelType(f.wfUnit)
-            print(p .. tostring(f.wfUnit) .. ": " .. (f.dglowWant and "on" or "off")
-                .. ", dispellable debuff " .. (typ == nil and "unknown (the game won't say: Blizzard's highlight stands in)" or tostring(typ))
-                .. ", our glow " .. ((f.dglow and f.dglow:IsShown()) and "showing" or "hidden"))
+            print(p .. tostring(f.wfUnit) .. ": " .. (f.dglowWant and "on" or "off") .. (f:IsVisible() and "" or " (frame hidden)")
+                .. ", dispellable debuff " .. (typ == nil and "unknown (the game won't say)" or tostring(typ))
+                .. ", glow box " .. ((f.dispelBox and f.dispelBox:IsVisible()) and "up" or "not up")
+                .. ", Blizzard's " .. (f.dispelBox == false and "unavailable" or (f.dispelBox and string.format("alpha %.2f", f.dispelBox:GetAlpha()) or "not made")))
+            -- each debuff as the game reports it to us
+            local ok, err = pcall(function()
+                for i = 1, 40 do
+                    local d = C_UnitAuras.GetAuraDataByIndex(f.wfUnit, i, "HARMFUL")
+                    if not d then
+                        if i == 1 then print(p .. "   no debuffs reported") end
+                        break
+                    end
+                    print(p .. "   " .. tostring(d.name) .. ": dispel type " .. tostring(d.dispelName))
+                end
+            end)
+            if not ok then print(p .. "   couldn't read its debuffs: " .. tostring(err)) end
         end
     elseif msg == "pets" then
         -- what each party slot's pet bar is doing
@@ -5656,6 +4274,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         print("|cff33ccffWebby Frames|r commands:")
         print("  /webby - options   /webby edit - move the frames   /webby reset - reset every frame")
         print("  /webby test - preview heals, shields and a combat number on your frame")
+        print("  /webby party - a sample party on your party frames")
         print("  /webby threat - what the game reports for your target's threat")
         print("  /webby cost - what the spell cost bar saw on your last cast")
         print("  /webby corner x y - fine-tune where the corner accent sits (right / up, in pixels)")
@@ -5669,4 +4288,12 @@ end
 ns.getSetting, ns.frameOn, ns.applyUnit, ns.updateAll, ns.threatColor = getSetting, frameOn, applyUnit, updateAll, threatColor
 ns.AuraKit, ns.ART, ns.BAR_FILE, ns.POWER_FILE, ns.CIRCLE_FALLBACK = AuraKit, ART, BAR_FILE, POWER_FILE, CIRCLE_FALLBACK
 ns.hasAtlas, ns.newBar, ns.setArt, ns.setFileMask, ns.resolveFont = hasAtlas, newBar, setArt, setFileMask, resolveFont
-ns.defaultTip = defaultTip
+ns.defaultTip, ns.isSecret, ns.plain = defaultTip, isSecret, plain
+ns.unitData, ns.resolveTexture, ns.defaultFor, ns.updateIndicators = unitData, resolveTexture, defaultFor, updateIndicators
+-- (and for the settings window, Options.lua)
+ns.UNITS, ns.UNIT_LABEL, ns.frames, ns.Extras, ns.setSetting = UNITS, UNIT_LABEL, frames, Extras, setSetting
+ns.DEFAULT_SETTINGS, ns.ALWAYS_SHOWN, ns.OWN_CLASS, ns.COLOR_MODES = DEFAULT_SETTINGS, ALWAYS_SHOWN, OWN_CLASS, COLOR_MODES
+ns.hasCastAndThreat, ns.textureChoices, ns.fontChoices, ns.Profiles = hasCastAndThreat, textureChoices, fontChoices, Profiles
+ns.moveTipToDefault, ns.addonVersion = moveTipToDefault, addonVersion
+ns.CAST_BOX, ns.castBoxHeight, ns.setBarText = CAST_BOX, castBoxHeight, setBarText
+ns.resetFrame, ns.copySettings, ns.openSettings, ns.openEditMode = resetFrame, copySettings, openSettings, openEditMode

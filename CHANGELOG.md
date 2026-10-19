@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.13.0
+Click casting, reworked (the page laid out like NeoHeal's)
+- Pick a modifier (no modifier, Shift, Ctrl, Alt), then each mouse button's row: what it does, its rank, who it casts on, and Also target.
+- Rank: Highest (follows new ranks), Highest -1 (cheaper on mana, also follows) or a fixed rank, for any spell you know in two ranks or more.
+- Cast on: the member, their target or their target's target. Also target: target the member as well as casting, in one click.
+- The action picker is grouped (the basics, your class's best heals and dispels, then your spellbook by tab), with spell icons and a search box.
+- Custom keybinds: add your own (+ Add a keybind, then press the key), up to twelve, each with the same choices as a mouse button; they cast on whoever your mouse is over. Set by the game's secure handler, so they work in combat.
+- Resurrect: a choice that resurrects a dead member and does nothing on a living one.
+- Reset to class defaults: healers get their main heal on left click, a heal over time on right click, dispels on Shift, resurrect on Alt + left, and target / menu on Ctrl.
+- Your bindings show in party members' tooltips (hold a modifier for just its bindings), and can work on your own frames too (On every frame).
+
+New
+- Weapon enchants: your weapons' temporary enchants and imbues (poisons, oils, stones, Rockbiter, Windfury...) as icons just before your buffs, with the time left (player page).
+- Buffs as timer bars: your buffs (or only the ones you cast) as bars with icon, name and time left, in a block placed in Edit Mode (Webby Buff Bars).
+- Druid bars: in a form, the frame's bar can keep your mana and the slim bar show the form's rage or energy (Mana first).
+- Dark health bars: Health colour Dark on any frame.
+- Health and power bar opacity sliders on every frame. (The red recent-damage trail is clipped to past the end of the health, so it no longer shows through a see-through fill.)
+Raid-style party frames
+- Party page, Style: Raid style. The party as flat tiles, like Blizzard's raid-style party frames: class-coloured health with incoming heals and absorbs, a slim power bar, name, role, leader, raid marker, ready check / summon / resurrection in the middle, a white edge on your target, the threat colour on whoever has aggro, a pulsing tint for a debuff you can dispel, their debuffs and your heals over time, fading out of range.
+- Options: tile width, height and spacing, include yourself, power bars and their texture, health and mana numbers (the same Numbers and Style options as the other frames: always, on mouseover or never; totals, percentages or both), icon size; stacked or side by side and group or role order like the portrait frames. Placed in Edit Mode on its own; shown in a party, hidden in a raid.
+- Click casting works on the tiles too.
+- More for the raid-style tiles (ideas from EllesmereUI's party and raid frames, used with its author's permission): health colours (class, dark with the missing part in class colour, custom, or green to red by health) with a shade for the missing part; power bars per role (tanks, healers, damage); name colour, position and length; a light edge on mouseover; pets as small tiles beside their owners; show when solo; AFK and dead / offline colours; striped or plain shields, optionally from the right edge so full-health shields show.
+- The tiles' dispel highlight is now drawn by the game, so it works in combat too: a gradient, flat tint or edge in the debuff type's colour, pulsing, with the type's icon.
+- Big defensive cooldowns (Shield Wall, Divine Shield, Pain Suppression, Ice Block, Barkskin and more) as a large icon in the middle of the tile.
+- Both party styles: missing buffs (icons of buffs a member lacks that you can cast, a paladin blessing by role), a healer mana list placed in Edit Mode, tooltips always / out of combat / never, and how faded out-of-range members are.
+- Every frame: Dispel glow for debuffs you can dispel, or any dispellable one.
+- Sample party: five made-up members in every state (aggro, a heal coming in, a debuff you could dispel, dead, out of range), in Edit Mode, from the Party page's Preview button, or /webby party. The Preview button works for the portrait frames too: four made-up members with names, health, class portraits and a hunter's pet.
+- Also in this version (from 1.12.4):
+- Dispel glow: only for debuffs you can dispel, never on enemies, and on every frame by default (player, target, focus, their targets, pet, party). It now sits behind the frame's bars, icons, level and text instead of over them.
+- /webby glow lists each frame's debuffs as the game reports them.
+
 ## 1.12.3
 - Dispel glow, done like the resting glow: when you or a party member has a debuff someone can dispel, the frame takes its colour (magic blue, curse purple, disease brown, poison green), border and portrait ring included, and pulses like the resting glow. On your own frame the resting / combat glow takes the colour too. On by default for you and the party.
 - /webby glow: what each frame's dispel glow sees.
