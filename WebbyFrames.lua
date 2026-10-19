@@ -117,7 +117,8 @@ local DEFAULT_SETTINGS = {
     druidBars = "form",      -- player, druids in a form: "form" (the frame's bar: form power; slim bar: mana) or "mana" (the other way round)
     restTint = false,        -- player: the resting Zzz takes the frame colour
     costPredict = true,      -- player: while casting, the spell's cost shows on the power bar
-    manaTick = true,         -- player: a light at the mana fill's end, growing until the next mana tick
+    manaTick = true,         -- player: a light running along the mana bar: the five second rule and the regen ticks
+    manaTickRule = true, manaTickTicks = true, manaTickSparkle = true, manaTickSize = 100,
     costShade = 55,          -- player: how much lighter (above 0) or darker (below 0) the cost shows
     cornerStyle = "retail",  -- player: the corner accent's art, Retail's or Forever's own
     petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (Default: as drawn)
@@ -1399,15 +1400,23 @@ local function updateManaTrail(f, maxP, curP, token)
 end
 
 -- The mana tick, across the whole mana bar, as the classic "five second rule" addons show it:
---   - after you spend mana, the light travels the bar's length over 5 seconds, in soft white (no
---     regen from spirit until that's over);
---   - then, in blue, it sweeps the bar every 2 seconds, growing as it goes, a star sparkling in it,
---     and bursts at the end as the tick's mana lands (the game's regen clock keeps running even
---     while regen is paused, so the sweeps stay in step with it).
--- The ticks are seen as your mana going up on its own, the spending as it going down. Hidden at full
--- mana, and until a tick or a spend has been seen. (Your mana can be hidden from addons in combat:
--- then it carries on from the last tick seen.)
+--   - after you spend mana, the light travels the bar's length over 5 seconds (no regen from spirit
+--     until that's over): the rule, in its own colour (white to start with);
+--   - then it sweeps the bar every 2 seconds, growing as it goes, and bursts at the end as the tick's
+--     mana lands (the game's regen clock keeps running even while regen is paused, so the sweeps stay
+--     in step with it): the ticks, in theirs (blue).
+-- Either part can be turned off, and its size and the star sparkling in it chosen (player page, Mana
+-- tick). The ticks are seen as your mana going up on its own, the spending as it going down. Hidden at
+-- full mana, and until a tick or a spend has been seen. (Your mana can be hidden from addons in
+-- combat: then it carries on from the last tick seen.)
 local MANA_TICK, MANA_RULE = 2, 5
+-- (the sparkle's textures: the game's own; on ns so the options can list them, ns.MANA_SPARKLE_CHOICES)
+ns.MANA_SPARKLES = {
+    star = "Interface\\Cooldown\\star4", starburst = "Interface\\Cooldown\\starburst",
+    ring = "Interface\\Cooldown\\ping4", spark = "Interface\\CastingBar\\UI-CastingBar-Spark",
+    flare = "Interface\\Buttons\\UI-ActionButton-Border",
+}
+ns.MANA_SPARKLE_CHOICES = { { "star", "Star" }, { "starburst", "Starburst" }, { "ring", "Ring" }, { "spark", "Spark" }, { "flare", "Flare" } }
 local function updateManaTick(f, curP, maxP, isMana)
     local mt = f.manaTick
     if not (isMana and getSetting("player", "manaTick")) then
@@ -1422,43 +1431,69 @@ local function updateManaTick(f, curP, maxP, isMana)
         mt.glow:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
         mt.glow:SetBlendMode("ADD")
         mt.glow:SetPoint("CENTER")
-        mt.glow:SetVertexColor(0.55, 0.82, 1)
         mt.star = mt:CreateTexture(nil, "OVERLAY", nil, 1)
-        mt.star:SetTexture("Interface\\Cooldown\\star4")
         mt.star:SetBlendMode("ADD")
         mt.star:SetPoint("CENTER")
-        mt.star:SetVertexColor(0.8, 0.93, 1)
         mt:SetScript("OnUpdate", function(self)
+            local o = self.opts
             local now = GetTime()
             local h, w = f.mp:GetHeight() or 10, f.mp:GetWidth() or 100
-            local p, k, burst
-            if self.ruleUntil and now < self.ruleUntil then
-                -- the five second rule: steady across the bar, soft white, no sparkle
+            local p, k, burst, c
+            if o.rule and self.ruleUntil and now < self.ruleUntil then
+                -- the five second rule: steady across the bar, a soft light
                 p = 1 - (self.ruleUntil - now) / MANA_RULE
-                k, burst = 0.35, 0
-                self.glow:SetVertexColor(1, 1, 1)
-                self.star:SetVertexColor(1, 1, 1)
-            else
+                k, burst, c = 0.35, 0, o.ruleColor
+            elseif o.ticks and self.tickAt then
                 -- the regen ticks: sweeping every 2 seconds, swelling towards the tick, a burst as it lands
-                local since = now - (self.tickAt or now)
+                local since = now - self.tickAt
                 p = (since % MANA_TICK) / MANA_TICK
                 k = p * p
                 burst = math.max(0, 1 - since / 0.35)
-                self.glow:SetVertexColor(0.55, 0.82, 1)
-                self.star:SetVertexColor(0.8, 0.93, 1)
+                c = o.tickColor
+            else
+                self:Hide()          -- (the rule is over and the ticks are off)
+                return
             end
+            self.glow:SetVertexColor(c[1], c[2], c[3])
+            -- (the star a paler version of the colour)
+            self.star:SetVertexColor(0.5 + c[1] / 2, 0.5 + c[2] / 2, 0.5 + c[3] / 2)
             -- (a burst shows at the bar's end, where the sweep just finished)
             self:ClearAllPoints()
             self:SetPoint("CENTER", f.mp, "LEFT", (burst > 0 and 1 or p) * w, 0)
-            self.glow:SetSize(4 + 10 * k + 8 * burst, h * (0.9 + 1.1 * k + burst))
+            local z = o.size
+            self.glow:SetSize((4 + 10 * k + 8 * burst) * z, h * (0.9 + 1.1 * k + burst) * z)
             self.glow:SetAlpha(math.min(1, 0.15 + 0.85 * k + burst))
-            local s = h * (0.5 + 1.5 * k + 2.2 * burst)
-            self.star:SetSize(s, s)
-            self.star:SetAlpha(math.min(1, (k > 0.3 and 0.2 + 0.8 * k or 0) + burst))
-            pcall(self.star.SetRotation, self.star, now * 1.4)
+            if o.sparkle then
+                local s = h * (0.5 + 1.5 * k + 2.2 * burst) * z
+                self.star:SetSize(s, s)
+                self.star:SetAlpha(math.min(1, (k > 0.3 and 0.2 + 0.8 * k or 0) + burst))
+                pcall(self.star.SetRotation, self.star, now * 1.4)
+                self.star:Show()
+            else
+                self.star:Hide()
+            end
         end)
         f.manaTick = mt
     end
+    -- its options, read here (on every power change and option change), not every frame
+    local function colour(key, d)
+        local v = getSetting("player", key)
+        return type(v) == "table" and { v[1] or d[1], v[2] or d[2], v[3] or d[3] } or d
+    end
+    -- the sparkle's texture (Sparkle texture); a file this client doesn't have falls back to the star
+    local starTex = ns.MANA_SPARKLES[getSetting("player", "manaTickStar") or "star"] or ns.MANA_SPARKLES.star
+    if mt.starTex ~= starTex then
+        mt.starTex = starTex
+        if mt.star:SetTexture(starTex) == false then mt.star:SetTexture(ns.MANA_SPARKLES.star) end
+    end
+    mt.opts = {
+        rule = getSetting("player", "manaTickRule") ~= false,
+        ticks = getSetting("player", "manaTickTicks") ~= false,
+        sparkle = getSetting("player", "manaTickSparkle") ~= false,
+        size = (tonumber(getSetting("player", "manaTickSize")) or 100) / 100,
+        ruleColor = colour("manaTickRuleColor", { 1, 1, 1 }),
+        tickColor = colour("manaTickColor", { 0.55, 0.82, 1 }),
+    }
     local cur = (not isSecret(curP)) and tonumber(curP) or nil
     local max = (not isSecret(maxP)) and tonumber(maxP) or nil
     if cur and mt.last then
@@ -1467,9 +1502,10 @@ local function updateManaTick(f, curP, maxP, isMana)
     end
     if cur then mt.last = cur end
     local full = cur and max and cur >= max
-    mt:SetShown(((mt.tickAt ~= nil or mt.ruleUntil ~= nil) and not full) and true or false)
+    local o = mt.opts
+    local any = (o.ticks and mt.tickAt ~= nil) or (o.rule and mt.ruleUntil ~= nil and GetTime() < mt.ruleUntil)
+    mt:SetShown((any and not full) and true or false)
 end
-
 local function updatePower(f)
     local u = f.wfUnit
     if not UnitExists(u) then return end

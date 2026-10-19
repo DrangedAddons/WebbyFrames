@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.5
+- Mana tick options (player page): the five second rule and the regen ticks can each be turned off, each has its own colour, the light's size, the sparkle on or off, and the sparkle's shape (Star, Starburst, Ring, Spark, Flare).
+
 ## 1.16.4
 - Mana tick (player page): a light that runs along your mana bar. After you spend mana it crosses the bar over 5 seconds in white (the five second rule); then in blue it sweeps the bar every 2 seconds, growing as it goes and sparkling at the end as each mana tick lands. Shows while you're below full mana.
 

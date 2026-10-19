@@ -562,7 +562,8 @@ Opt.SEARCH_WORDS = {
     colorMode = "hp color class reaction", rpHealthColor = "hp color class", petColor = "hp color",
     npcColor = "hp color mob enemy", healthFade = "hp red low health gradient color",
     healPrediction = "heal prediction hots", absorbs = "shield absorb", damageTrail = "hit lost red hp",
-    damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", manaTick = "mp5 regen regeneration spark five second rule 5sr", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
+    damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", manaTick = "mp5 regen regeneration spark five second rule 5sr", manaTickRule = "mp5 5sr", manaTickTicks = "mp5 regen",
+    manaTickSize = "mana tick mp5 spark", manaTickSparkle = "mana tick mp5 star", manaTickStar = "mana tick mp5 star shape", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
     threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
     dispelGlow = "cleanse decurse magic curse poison disease debuff", dispelWho = "cleanse decurse debuff",
     rpDispelStyle = "cleanse decurse debuff", rpDispelIcon = "cleanse decurse magic curse poison disease debuff",
@@ -1860,7 +1861,25 @@ local function buildSettings()
             B.under(cost, shown,
                 B.swatch("Trail colour", colourOf("costTrailColor"), function(r, g, b) setSetting(unit, "costTrailColor", { r, g, b }) end,
                     "The colour of the trail left by what a spell just used. Click to change it."))
-            B.check("manaTick", "Mana tick", "A light that runs along your mana bar: after you spend mana, across it over 5 seconds in white (the five second rule); then in blue every 2 seconds, growing as it goes and sparkling at the end as each mana tick lands. Shows while you're below full mana.", true)
+            local tick = B.check("manaTick", "Mana tick", "A light that runs along your mana bar: after you spend mana, across it over 5 seconds (the five second rule); then every 2 seconds, growing as it goes and sparkling at the end as each mana tick lands. Shows while you're below full mana.", true)
+            local tickOn = isOn("manaTick")
+            local parts = B.pair({ "manaTickRule", "Five second rule", "After you spend mana, the light crosses the bar over 5 seconds: no regen from spirit until it gets there.", true },
+                                 { "manaTickTicks", "Regen ticks", "The light sweeps the bar every 2 seconds and sparkles at the end as each mana tick lands.", true })
+            B.under(tick, tickOn, parts)
+            local tickColour = function(key, d) return function() local c = get(key); return type(c) == "table" and c or d end end
+            B.under(tick, function() return tickOn() and get("manaTickRule") ~= false end,
+                B.swatch("Rule colour", tickColour("manaTickRuleColor", { 1, 1, 1 }), function(r, g, b) setSetting(unit, "manaTickRuleColor", { r, g, b }) end,
+                    "The light's colour during the five second rule. Click to change it."))
+            B.under(tick, function() return tickOn() and get("manaTickTicks") ~= false end,
+                B.swatch("Tick colour", tickColour("manaTickColor", { 0.55, 0.82, 1 }), function(r, g, b) setSetting(unit, "manaTickColor", { r, g, b }) end,
+                    "The light's colour as it sweeps for the regen ticks. Click to change it."))
+            B.under(tick, tickOn,
+                B.slider("manaTickSize", "Light size", "How big the light grows.", 100, 50, 200, 5,
+                    function(v) return string.format("%d%%", math.floor(v + 0.5)) end))
+            local sparkle = B.check("manaTickSparkle", "Sparkle", "A star turning in the light, bursting as each tick lands.", true)
+            B.under(tick, tickOn, sparkle)
+            B.under(sparkle, function() return tickOn() and get("manaTickSparkle") ~= false end,
+                B.dropdown("manaTickStar", "Sparkle texture", "The shape of the sparkle.", "star", ns.MANA_SPARKLE_CHOICES or { { "star", "Star" } }))
             if myClass == "DRUID" then
                 local druid = B.check("druidMana", "Druid mana", "While you're in bear or cat form, your mana shows in a slim bar under the frame. Drag it anywhere in Edit Mode.", true)
                 B.under(druid, isOn("druidMana"),
