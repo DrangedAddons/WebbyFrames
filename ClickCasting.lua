@@ -69,12 +69,16 @@ function Click.setOpt(binding, key, v)
     Click.apply()
 end
 
--- Addon-wide click casting options (not per class).
+-- Addon-wide click casting options (not per class). Click casting itself is on until turned off.
 function Click.option(key)
     if not WebbyFramesDB then return nil end
     local v = WebbyFramesDB[key]
-    if v == nil then return (key == "clickTooltip") end      -- (tooltips on, other frames off)
+    if v == nil then return (key == "clickTooltip" or key == "clickCasting") end
     return v
+end
+
+function Click.enabled()
+    return Click.option("clickCasting") ~= false
 end
 
 ---------------------------------------------------------------------------
@@ -263,6 +267,8 @@ end
 Click.OTHER_UNITS = { "player", "target", "targettarget", "focus", "focustarget", "pet" }
 function Click.frames()
     local list = {}
+    -- Party frames off: nothing of theirs to bind. Other frames stay on Click.otherFrames.
+    if ns.frameOn and not ns.frameOn("party") then return list end
     for slot = 1, Party.SLOTS do list[#list + 1] = Party.members[slot] end
     if ns.RaidParty then
         for _, t in ipairs(ns.RaidParty.tiles) do list[#list + 1] = t end
@@ -339,12 +345,37 @@ function Click.applyTo(f, known, ranks, onlyDefaults)
     end
     f.webbyKeyCount = #keys
     f:SetAttribute("webby-keys", #names > 0 and table.concat(names, ",") or nil)
-    Click.wrap(f)
+    if not onlyDefaults then Click.wrap(f) end
+end
+
+-- Every frame click casting may have written on, including party frames that are turned off now
+-- (Click.frames skips those, and they can still be holding a spell).
+function Click.boundFrames()
+    local list = {}
+    for slot = 1, Party.SLOTS do list[#list + 1] = Party.members[slot] end
+    if ns.RaidParty then
+        for _, t in ipairs(ns.RaidParty.tiles) do list[#list + 1] = t end
+        for _, p in ipairs(ns.RaidParty.petTiles) do list[#list + 1] = p end
+    end
+    for _, f in ipairs(Click.otherFrames()) do list[#list + 1] = f end
+    return list
+end
+
+-- Back to target and menu. No spellbook read. Out of combat only.
+function Click.restore()
+    if InCombatLockdown() then Click.pending = true; return end
+    Click.pending = nil
+    for _, f in ipairs(Click.boundFrames()) do
+        if f then Click.applyTo(f, nil, nil, true) end
+    end
+    Click.applied, Click.othersSet = nil, nil
 end
 
 -- Puts the bindings on every frame (out of combat). Smart choices and ranks turn into your spells here,
 -- so learning one (SPELLS_CHANGED) re-applies; so does a party change (bindings name the member's unit).
+-- Off: nothing. The calls from a group change still arrive and stop here.
 function Click.apply()
+    if not Click.enabled() then return end
     if InCombatLockdown() then Click.pending = true; return end
     Click.pending = nil
     local known, _, _, ranks = Click.knownSpells()
@@ -355,6 +386,7 @@ function Click.apply()
         for _, f in ipairs(Click.otherFrames()) do Click.applyTo(f, known, ranks, not all) end
         Click.othersSet = all or nil
     end
+    Click.applied = true
 end
 
 ---------------------------------------------------------------------------
@@ -384,7 +416,7 @@ end
 -- In the tooltip: your bindings under the member's own lines (hold a modifier: just that modifier's)
 ---------------------------------------------------------------------------
 function Click.addTooltip(f)
-    if not Click.option("clickTooltip") or not f then return end
+    if not Click.enabled() or not Click.option("clickTooltip") or not f then return end
     if f.baseUnit ~= "party" and not Click.option("clickAllFrames") then return end
     local held = (IsAltKeyDown() and "alt-" or "") .. (IsControlKeyDown() and "ctrl-" or "") .. (IsShiftKeyDown() and "shift-" or "")
     local known = Click.knownSpells()
@@ -402,17 +434,52 @@ function Click.addTooltip(f)
     if shown then GameTooltip:Show() end
 end
 
+-- "all": spell learned and combat ending. "regen": combat ending only, while a secure change waits.
+-- Anything else: nothing registered.
+function Click.listen(mode)
+    local ev = Click.ev
+    if not ev or mode == Click.evMode then return end
+    ev:UnregisterAllEvents()
+    if mode == "all" then
+        ev:RegisterEvent("SPELLS_CHANGED")
+        ev:RegisterEvent("PLAYER_REGEN_ENABLED")
+        Click.evMode = "all"
+    elseif mode == "regen" then
+        ev:RegisterEvent("PLAYER_REGEN_ENABLED")
+        Click.evMode = "regen"
+    else
+        Click.evMode = nil
+    end
+end
+
+-- On or off. The header already exists (a secure frame, made at login). Off, and nothing was ever
+-- applied: the frames keep the target and menu clicks they were created with.
+function Click.sync()
+    if Click.enabled() then
+        Click.listen("all")
+        Click.apply()
+    else
+        if Click.applied or Click.pending then Click.restore() end
+        Click.listen(Click.pending and "regen" or nil)
+    end
+end
+
 -- Started by Party.init once the party frames exist.
 function Click.init()
+    if Click.header then return end
     Click.header = CreateFrame("Frame", "WebbyFrames_ClickHeader", UIParent, "SecureHandlerBaseTemplate")
     local ev = CreateFrame("Frame")
-    ev:RegisterEvent("PLAYER_REGEN_ENABLED")
-    ev:RegisterEvent("SPELLS_CHANGED")
     ev:SetScript("OnEvent", function(_, event)
-        if event == "SPELLS_CHANGED" then Click.spellCache = nil end
-        if event == "SPELLS_CHANGED" or Click.pending then pcall(Click.apply) end
+        if event == "SPELLS_CHANGED" then
+            if not Click.enabled() then return end
+            Click.spellCache = nil
+            pcall(Click.apply)
+        elseif Click.pending then
+            pcall(Click.sync)
+        end
     end)
-    pcall(Click.apply)
+    Click.ev = ev
+    pcall(Click.sync)
 end
 
 -- Your class's starting bindings (Reset to class defaults). Healers: the main heal on left click, a heal
@@ -444,9 +511,13 @@ end
 ns.pages[#ns.pages + 1] = function(builders, Opt)
     local opts = setmetatable({}, {
         __index = function(_, k) return Click.option(k) end,
-        __newindex = function(_, k, v) if WebbyFramesDB then WebbyFramesDB[k] = v and true or false end; Click.apply() end,
+        __newindex = function(_, k, v)
+            if WebbyFramesDB then WebbyFramesDB[k] = v and true or false end
+            if k == "clickCasting" then Click.sync() else Click.apply() end
+        end,
     })
     local B = builders(Opt.newPage("click", "Click casting"), opts)
+    local castOn = B.check("clickCasting", "Click casting", "Mouse clicks and hover keys cast your spells. Turned off, clicks go back to targeting and the menu, and none of this keeps running.", true)
     -- columns: the binding's name (or its key), What it does, Rank, Cast on, Also target. Fitted inside the
     -- cards (6 px in from each side of the page), with 8 px between, so the last heading isn't cut off.
     local X = { name = 22, action = 120, rank = 296, on = 380, also = 496 }
@@ -723,4 +794,8 @@ ns.pages[#ns.pages + 1] = function(builders, Opt)
     B.section("Options", false)
     B.check("clickTooltip", "Bindings in tooltips", "Hovering a party member lists your bindings under their tooltip (hold a modifier to see just its bindings).", true)
     B.check("clickAllFrames", "On every frame", "Your bindings work on your player, target, focus, their targets and pet frames too, not just the party.", false)
+    -- The rest of the page is the bindings. Off, only the switch above stays.
+    for _, row in ipairs(B.page.rows) do
+        if row ~= castOn then row.preds[#row.preds + 1] = Click.enabled end
+    end
 end

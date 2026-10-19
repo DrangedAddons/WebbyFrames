@@ -427,8 +427,12 @@ pcall(function()
         local _, rel = tt:GetPoint(1)
         if rel == o then moveTipToDefault(o) end
     end
-    GameTooltip:HookScript("OnShow", function(tt) pcall(check, tt) end)
-    GameTooltip:HookScript("OnUpdate", function(tt) pcall(check, tt) end)
+    GameTooltip:HookScript("OnShow", check)
+    -- Blizzard re-anchors an aura tooltip beside the icon on later frames. Only ours get here.
+    GameTooltip:HookScript("OnUpdate", function(tt)
+        local o = tt:GetOwner()
+        if o and o.webbyAura then check(tt) end
+    end)
 end)
 
 ---------------------------------------------------------------------------
@@ -1081,8 +1085,14 @@ local function tooltipLines(spell)
 end
 
 -- The first damage in the tooltip: "X to Y ... damage" (the middle) or "X ... damage". nil if none.
+-- Cached by spell id. The same cast does not parse its tooltip twice.
 local function spellDamage(spell)
+    local cache = ns.spellDamageCache
+    if not cache then cache = {}; ns.spellDamageCache = cache end
+    local hit = cache[spell]
+    if hit ~= nil then return hit.amount, hit.line end
     local function num(s) return tonumber((s:gsub(",", ""))) end
+    local foundAmount, foundLine
     for _, text in ipairs(tooltipLines(spell)) do
         local ok, amount = pcall(function()
             local lower = text:lower()
@@ -1096,9 +1106,10 @@ local function spellDamage(spell)
             for a in before:gmatch("(%d[%d,]*)") do last = a end
             return last and num(last) or nil
         end)
-        if ok and amount and amount > 0 then return math.floor(amount + 0.5), text end
+        if ok and amount and amount > 0 then foundAmount, foundLine = math.floor(amount + 0.5), text; break end
     end
-    return nil
+    cache[spell] = { amount = foundAmount, line = foundLine }
+    return foundAmount, foundLine
 end
 
 local function updateDamagePrediction(f, spell)
@@ -1228,12 +1239,20 @@ local function updateDamageTrail(f, status)
 end
 
 
-local function updateHealth(f)
+local function updateHealth(f, lite)
     if f.previewing then return end            -- /webby test is showing made-up values
     local u = f.wfUnit
     if not UnitExists(u) then return end
     local status = unitStatus(u)
-    updateHealthColor(f)
+    -- Class and reaction colour do not follow the health number. Fade and "by health" do.
+    -- colorHold is cleared when the unit, faction or settings change (updateAll, setSetting).
+    if status ~= f.statusText then f.colorHold = nil end
+    local base = f.baseUnit
+    local liveColor = getSetting(base, "healthFade") or getSetting(base, "colorMode") == "gradient"
+    if liveColor or not f.colorHold then
+        updateHealthColor(f)
+        if not liveColor then f.colorHold = true end
+    end
     local hpTex = f.hp:GetStatusBarTexture()
     if hpTex then hpTex:SetAlpha(tonumber(getSetting(f.baseUnit, "hpAlpha")) or 1) end
     f.hp:SetMinMaxValues(0, UnitHealthMax(u))
@@ -1245,10 +1264,12 @@ local function updateHealth(f)
     else
         setBarValue(f, f.hp, UnitHealth(u))
     end
-    pcall(updatePrediction, f)
-    pcall(updateDamageTrail, f, status)
+    -- lite: the target-of-target poll. Prediction and the damage trail already return immediately
+    -- when their options are off; skip the call too. nil means the flags are not set yet (still do it).
+    if not lite or f.wantPred ~= false then pcall(updatePrediction, f) end
+    if not lite or f.wantTrail ~= false then pcall(updateDamageTrail, f, status) end
     -- the damage shading belongs to the unit it was cast at: gone if the frame now shows someone else
-    if f.dmgBar and f.dmgBar:IsShown() then
+    if not lite and f.dmgBar and f.dmgBar:IsShown() then
         pcall(function()
             if f.dmgWho ~= UnitGUID(u) then f.dmgFlying = nil; f.dmgBar:Hide() end
         end)
@@ -1269,24 +1290,48 @@ end
 --    past the end of the fill and fades out. A normal bar, its left end on the fill's end.
 -- Both have the power bar's max and the cost as their value, so no maths on the power itself.
 
--- The cost of a spell in your current power type, or nil; and what was found (kept for /webby cost).
-local function spellCost(spell, label)
+-- The cost of a spell in your current power type, or nil. Cached by spell and power type: a cast
+-- asks on every power tick. The /webby cost text is built when that command runs (ns.costReport).
+local function spellCost(spell)
+    if not spell then return nil end
+    local ptype = UnitPowerType("player")
+    if isSecret(ptype) then ptype = nil end
+    local cache = ns.spellCosts
+    if not cache then cache = {}; ns.spellCosts = cache end
+    local hit = ptype ~= nil and cache[spell]
+    if hit and hit.ptype == ptype then return hit.cost end
     local cost
-    local info = label .. " spell " .. tostring(spell)
-    local ok, err = pcall(function()
+    pcall(function()
         local get = (C_Spell and C_Spell.GetSpellPowerCost) or GetSpellPowerCost
-        if not get then info = info .. ": no cost API"; return end
-        local ptype = UnitPowerType("player")
+        if not get then return end
+        local pt = UnitPowerType("player")
         local list = get(spell)
-        info = info .. ", power type " .. tostring(ptype) .. ", costs:"
         for _, c in ipairs(list or {}) do
             local amount = c.cost or c.minCost
-            info = info .. " [type " .. tostring(c.type) .. " cost " .. tostring(amount) .. "]"
-            if c.type == ptype and amount and amount > 0 then cost = amount end
+            if c.type == pt and amount and amount > 0 then cost = amount end
         end
     end)
-    if not ok then info = info .. " (error: " .. tostring(err) .. ")" end
-    return cost, info .. (cost and " -> shown" or " -> nothing to show")
+    if ptype ~= nil then cache[spell] = { ptype = ptype, cost = cost } end
+    return cost
+end
+
+-- What /webby cost prints. Not used while casting.
+function ns.costReport(spell)
+    if not spell then return "none yet (cast something with a cast time, then try again)" end
+    local lines = "spell " .. tostring(spell)
+    local ok, err = pcall(function()
+        local get = (C_Spell and C_Spell.GetSpellPowerCost) or GetSpellPowerCost
+        if not get then lines = lines .. ": no cost API"; return end
+        local ptype = UnitPowerType("player")
+        local list = get(spell)
+        lines = lines .. ", power type " .. tostring(ptype) .. ", costs:"
+        for _, c in ipairs(list or {}) do
+            lines = lines .. " [type " .. tostring(c.type) .. " cost " .. tostring(c.cost or c.minCost) .. "]"
+        end
+    end)
+    if not ok then lines = lines .. " (error: " .. tostring(err) .. ")" end
+    local cost = spellCost(spell)
+    return lines .. (cost and (" -> shown " .. tostring(cost)) or " -> nothing to show")
 end
 
 -- Fits one of the cost bars to the power bar: its fill, mask and length, its end on the fill's end.
@@ -1338,7 +1383,8 @@ local function updateCostPrediction(f)
     -- the trail takes over: no gap between the two)
     local spell = f.castSpell or (f.costHold and f.costHold.spell)
     if spell and getSetting("player", "costPredict") then
-        cost, f.costInfo = spellCost(spell, "cast")
+        cost = spellCost(spell)
+        f.costSpell = spell
     end
     if not cost then cp:Hide(); return end
     fitCostBar(f, cp, "RIGHT")
@@ -1476,7 +1522,10 @@ local function updateManaTick(f, curP, maxP, isMana)
                         m.tex:SetPoint("CENTER", mt.dust, "LEFT", m.x, m.y + m.drift * a)
                         m.tex:SetSize(s, s)
                         m.tex:SetAlpha(0.9 * tw)
-                        pcall(m.tex.SetRotation, m.tex, m.spin * a)
+                        if m.spin ~= 0 then
+                            if mt.canSpin == nil then mt.canSpin = pcall(m.tex.SetRotation, m.tex, m.spin * a)
+                            elseif mt.canSpin then m.tex:SetRotation(m.spin * a) end
+                        end
                         any = true
                     end
                 end
@@ -1485,7 +1534,12 @@ local function updateManaTick(f, curP, maxP, isMana)
             if not any then mt.dust:Hide() end
         end
         -- (the stars fade out on their own, so they finish after the light has stopped)
-        mt.dust:SetScript("OnUpdate", function() moveDust(GetTime()) end)
+        -- Every other frame: a mote lives under half a second, and the eye does not catch the skip.
+        mt.dust:SetScript("OnUpdate", function()
+            mt.dustFlip = not mt.dustFlip
+            if mt.dustFlip then return end
+            moveDust(GetTime())
+        end)
         mt.dust:Hide()
         mt.clearDust = clearDust
         mt:SetScript("OnUpdate", function(self)
@@ -1513,7 +1567,8 @@ local function updateManaTick(f, curP, maxP, isMana)
                 local s = h * (0.5 + 1.5 * k) * z
                 self.star:SetSize(s, s)
                 self.star:SetAlpha(0.2 + 0.8 * k)
-                pcall(self.star.SetRotation, self.star, now * 1.4)
+                if self.canSpin == nil then self.canSpin = pcall(self.star.SetRotation, self.star, now * 1.4)
+                elseif self.canSpin then self.star:SetRotation(now * 1.4) end
                 self.star:Show()
             else
                 self.star:Hide()
@@ -1529,19 +1584,22 @@ local function updateManaTick(f, curP, maxP, isMana)
         mt.starTex = starTex
         if mt.star:SetTexture(starTex) == false then mt.star:SetTexture(ns.MANA_SPARKLES.star) end
     end
-    mt.opts = {
-        sparkle = getSetting("player", "manaTickSparkle") ~= false,
-        trail = getSetting("player", "manaTickTrail") ~= false,
-        size = (tonumber(getSetting("player", "manaTickSize")) or 100) / 100,
-        color = type(c) == "table" and { c[1] or 1, c[2] or 1, c[3] or 1 } or { 1, 1, 1 },
-    }
+    local sparkle = getSetting("player", "manaTickSparkle") ~= false
+    local trailOn = getSetting("player", "manaTickTrail") ~= false
+    local size = (tonumber(getSetting("player", "manaTickSize")) or 100) / 100
+    local cr, cg, cb = 1, 1, 1
+    if type(c) == "table" then cr, cg, cb = c[1] or 1, c[2] or 1, c[3] or 1 end
+    local o = mt.opts
+    if not (o and o.sparkle == sparkle and o.trail == trailOn and o.size == size and o.cr == cr and o.cg == cg and o.cb == cb) then
+        mt.opts = { sparkle = sparkle, trail = trailOn, size = size, cr = cr, cg = cg, cb = cb, color = { cr, cg, cb } }
+    end
 end
 
 -- A spell went off: if it cost mana, the five second rule starts (over).
 function ns.manaSpend(f, spell)
     local mt = f.manaTick
     if not (mt and mt.opts and spell) then return end
-    local cost = spellCost(spell, "spent")
+    local cost = spellCost(spell)
     if not (cost and cost > 0) then return end
     mt.ruleUntil = GetTime() + MANA_RULE
     mt:Show()
@@ -1862,18 +1920,12 @@ local function createIndicators(f)
                 for _, t in ipairs({ glow, halo, lit }) do pcall(t.SetDesaturated, t, d) end
             end,
         }
-        -- pulse animations per frame, started and stopped together: a strong, quick one in combat and
-        -- a soft, slow breath while resting
         -- Blizzard's own pulse (PlayerFrame_OnUpdate): the alpha ramps straight up from 55/255 to full
-        -- over half a second, then straight back down, for resting and combat alike. Runs while the
-        -- glow is shown; its colour is ours (updateIndicators).
-        -- (from the clock, so it pulses in step with the dispel glow, AuraKit.pulseAlpha)
-        sf:SetScript("OnUpdate", function()
-            local p = GetTime() % 1
-            local alpha = p < 0.5 and (55 + p * 400) / 255 or (255 - (p - 0.5) * 400) / 255
-            alpha = math.max(0, math.min(1, alpha))
-            sf:SetAlpha(alpha); cf:SetAlpha(alpha)
-        end)
+        -- over half a second, then straight back down, for resting and combat alike. An animation, so
+        -- it keeps time while the glow is hidden and costs no Lua while it shows. Colour is ours
+        -- (updateIndicators). The same helper drives the dispel glow, so they stay in step when both
+        -- were started together.
+        if AuraKit.attachPulse then AuraKit.attachPulse(sf); AuraKit.attachPulse(cf) end
         if not f.updateRest then
             f.restIcon = ov:CreateTexture(nil, "OVERLAY", nil, 5)
             f.restIcon:SetSize(24, 24)
@@ -2427,6 +2479,7 @@ local function mirrorCastbar(f)
     local box = cb.box
     if not getSetting(f.baseUnit, "castShow") or not bar:IsShown() then
         if box:IsShown() then box:Hide() end
+        f.castColor, f.castText, f.castIconTex = nil, nil, nil
         return
     end
     pcall(cb.SetMinMaxValues, cb, bar:GetMinMaxValues())
@@ -2434,12 +2487,23 @@ local function mirrorCastbar(f)
     box:SetAlpha(bar:GetAlpha())
     local ok, c = pcall(ns.castColor, bar)
     if not (ok and c) then c = CAST_COLORS.standard end
-    cb:SetStatusBarColor(c[1], c[2], c[3], 1)
-    -- the default fill is grey art made for tinting; a chosen texture keeps its own look, like the health bar
-    local tex = cb:GetStatusBarTexture()
-    if tex then tex:SetDesaturated(not f.customTex) end
-    if bar.Text then pcall(cb.text.SetText, cb.text, bar.Text:GetText()) end
-    if bar.Icon then pcall(cb.icon.SetTexture, cb.icon, bar.Icon:GetTexture()) end
+    -- colour, spell name and icon hold still for the whole cast. Value and alpha do not.
+    if f.castColor ~= c then
+        f.castColor = c
+        cb:SetStatusBarColor(c[1], c[2], c[3], 1)
+        local tex = cb:GetStatusBarTexture()
+        if tex then tex:SetDesaturated(not f.customTex) end
+    end
+    if bar.Text then
+        local okT, text = pcall(bar.Text.GetText, bar.Text)
+        if okT and isSecret(text) then pcall(cb.text.SetText, cb.text, text)
+        elseif okT and text ~= f.castText then f.castText = text; pcall(cb.text.SetText, cb.text, text) end
+    end
+    if bar.Icon then
+        local okI, icon = pcall(bar.Icon.GetTexture, bar.Icon)
+        if okI and isSecret(icon) then pcall(cb.icon.SetTexture, cb.icon, icon)
+        elseif okI and icon ~= f.castIconTex then f.castIconTex = icon; pcall(cb.icon.SetTexture, cb.icon, icon) end
+    end
     if not box:IsShown() then box:Show() end
 end
 
@@ -2511,8 +2575,11 @@ local function showHit(f, action, indicator, amount)
     pcall(function() word = HIT_WORDS[action] end)
     pcall(function() if action == "HEAL" or action == "ENERGIZE" or action == "WOUND" then kind = action elseif not word then kind = nil end end)
     -- sized to the portrait: about 40% of it, more for a crit
-    local size = math.floor((f.portrait:GetHeight() or 60) * (crit and 0.5 or 0.38))
-    pcall(function() fs:SetFont(STANDARD_TEXT_FONT, math.max(10, size), "OUTLINE") end)
+    local size = math.max(10, math.floor((f.portrait:GetHeight() or 60) * (crit and 0.5 or 0.38)))
+    if fs.hitSize ~= size then
+        fs.hitSize = size
+        pcall(fs.SetFont, fs, STANDARD_TEXT_FONT, size, "OUTLINE")
+    end
     if word then
         fs:SetText(word)
         fs:SetTextColor(1, 1, 1)
@@ -2901,8 +2968,51 @@ local function safely(fn, f)
     if not ok and err and not updateErrors[err] then updateErrors[err] = true; updateErrors[#updateErrors + 1] = err end
 end
 local function updateAll(f)
+    f.colorHold = nil
     safely(updateInfo, f); safely(updateHealth, f); safely(updatePower, f); safely(updateIndicators, f)
     safely(updateThreat, f); safely(updateAuras, f); safely(Extras.update, f)
+end
+
+-- Several unit events often land in one frame (health, heal prediction, an absorb). Paint once,
+-- before the frame is drawn. Events run before OnUpdate.
+ns.paintQ, ns.paintN = {}, 0
+ns.paintHost = CreateFrame("Frame")
+ns.paintHost:Hide()
+ns.paintHost:SetScript("OnUpdate", function(self)
+    self:Hide()
+    local n, q = ns.paintN, ns.paintQ
+    ns.paintN = 0
+    for i = 1, n do
+        local f = q[i]
+        q[i] = nil
+        if f then
+            local all, hp, mp, pred = f.paintAll, f.paintHP, f.paintMP, f.paintPred
+            f.paintQueued, f.paintAll, f.paintHP, f.paintMP, f.paintPred = nil, nil, nil, nil, nil
+            if not f.wfOff then
+                pcall(function()
+                    if all then updateAll(f)
+                    else
+                        if hp then updateHealth(f) end
+                        if mp then updatePower(f) end
+                        if pred and not hp then updatePrediction(f) end
+                    end
+                end)
+            end
+        end
+    end
+end)
+function ns.markPaint(f, kind)
+    if not f or f.wfOff then return end
+    if not f.paintQueued then
+        f.paintQueued = true
+        ns.paintN = ns.paintN + 1
+        ns.paintQ[ns.paintN] = f
+        ns.paintHost:Show()
+    end
+    if kind == "all" then f.paintAll = true
+    elseif kind == "health" then f.paintHP = true
+    elseif kind == "power" then f.paintMP = true
+    elseif kind == "pred" then f.paintPred = true end
 end
 
 ---------------------------------------------------------------------------
@@ -3167,10 +3277,12 @@ local function applyShown(f)
     f.wfOff = not on
     if on then
         Party.watch(f)
+        if Party.listen then Party.listen(f) end
         pcall(updateAll, f)        -- (it ignored its events while off: catch up)
     else
         Party.unwatch(f)
         f:Hide()
+        if Party.silence then Party.silence(f) end
     end
 end
 
@@ -3226,6 +3338,12 @@ end
 local function applyUnit(f)
     local unit = f.baseUnit
     applyShown(f)
+    -- Portrait party frames, hidden (party off, or raid style): nothing further to lay out or paint.
+    -- Turning them back on runs the rest, with the settings as they are then.
+    if unit == "party" and f.wfOff and not Party.portraitsOn() then
+        pcall(updateAuras, f)        -- (drops the aura unit, so a hidden frame is not scanned)
+        return
+    end
     if f.altMana then placeAltMana(f) end
     local changed = applyLayout(f)
     if f.small and applySmallLayout(f) then changed = true end
@@ -3261,6 +3379,8 @@ local function applyUnit(f)
         changed = true
     end
     refreshText(f)
+    f.wantPred = (getSetting(unit, "healPrediction") or getSetting(unit, "absorbs")) and true or false
+    f.wantTrail = getSetting(unit, "damageTrail") and true or false
     if changed then pcall(updateAll, f) end
 end
 
@@ -3271,6 +3391,7 @@ local function applyAll()
         if frames[unit] then applyUnit(frames[unit]) end
     end
     for i = 2, Party.SLOTS do if Party.members[i] then applyUnit(Party.members[i]) end end
+    if Party.sync then pcall(Party.sync) end   -- (party off: listeners and tickers stop here)
 end
 
 local function touchOptions()
@@ -3281,8 +3402,16 @@ local function setSetting(unit, key, value)
     unitData(unit, true)[key] = value
     -- (the party's options are every party slot's)
     local list = { frames[unit] }
-    if unit == "party" then for i = 2, Party.SLOTS do list[#list + 1] = Party.members[i] end end
+    if unit == "party" then
+        -- Off, and staying off: nothing to paint. Turning them off still hides them once.
+        if frameOn("party") or key == "frameShown" then
+            for i = 2, Party.SLOTS do list[#list + 1] = Party.members[i] end
+        else
+            list = {}
+        end
+    end
     for _, f in ipairs(list) do
+        if f then f.colorHold = nil end
         if key == "textMode" then f.textMode = value end
         pcall(updateHealth, f)
         pcall(updatePower, f)
@@ -3290,15 +3419,10 @@ local function setSetting(unit, key, value)
         if lib and f == frames[unit] then lib:RefreshFrameSettings(f) end
     end
     -- the pet's bar can follow the player frame's colour
-    if unit == "player" and frames.pet then pcall(updateHealth, frames.pet) end
+    if unit == "player" and frames.pet then frames.pet.colorHold = nil; pcall(updateHealth, frames.pet) end
     if unit == "player" and ns.PlayerExtras then pcall(ns.PlayerExtras.apply) end
-    -- the party: who goes in which slot (order, you), and the pet / target mini frames
-    if unit == "party" then
-        pcall(Party.arrange)
-        for i = 1, Party.SLOTS do if Party.members[i] and Party.minis then pcall(Party.minis, Party.members[i]) end end
-        if ns.RaidParty then pcall(ns.RaidParty.apply) end
-        if Party.testing then pcall(Party.paintSamples) end    -- (the portrait sample party, repainted)
-    end
+    -- the party: listeners, tickers, who goes in which slot. Off, this is what makes them stop.
+    if unit == "party" and Party.sync then pcall(Party.sync) end
     touchOptions()
 end
 
@@ -3524,11 +3648,11 @@ local function createFrame(unit)
     f:SetScript("OnEvent", function(self, event, ...)
         if self.wfOff then return end      -- (turned off: nothing to draw; applyShown catches it up when it's back)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
-            updateHealth(self)
-            -- a spell on its way has landed (see flyDamage)
+            -- a spell on its way has landed (see flyDamage). The bar paint waits for this frame's other events.
             if event == "UNIT_HEALTH" then self.hitAt = GetTime(); if self.dmgFlying then landDamage(self) end end
+            ns.markPaint(self, "health")
         elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_POWER_FREQUENT" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then
-            updatePower(self)
+            ns.markPaint(self, "power")
 
         elseif event == "PLAYER_UPDATE_RESTING" then
             if self.updateRest then self.updateRest() end
@@ -3582,14 +3706,16 @@ local function createFrame(unit)
             updateLeader(self)
             pcall(Extras.raid, self)
             if event == "GROUP_ROSTER_UPDATE" then rebuildThreatRoster() end
-        elseif event == "UNIT_AURA" then pcall(AuraKit.auraChanged, self)   -- (the aura containers redraw on their own)
+        elseif event == "UNIT_AURA" then
+            local _, info = ...
+            pcall(AuraKit.auraChanged, self, info)   -- (the aura containers redraw on their own)
         elseif event == "UNIT_COMBAT" then
             local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
             -- the spell landed (or missed): its next combat event after the cast
             self.hitAt = GetTime()
             if self.dmgFlying then landDamage(self) end
-        elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
-        else updateAll(self) end
+        elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then ns.markPaint(self, "pred")
+        else ns.markPaint(self, "all") end
     end)
     -- smooth energy / rage / focus ticks on your own frame (every change: the plain power update would
     -- then only redraw the bar a second time)
@@ -3630,8 +3756,6 @@ end
 ---------------------------------------------------------------------------
 -- Small frames: target of target, focus target, pet (art and numbers from Blizzard's TargetFrame.xml)
 ---------------------------------------------------------------------------
-local POLL_INTERVAL = 0.25
-
 -- wf: the unit shown (party members: "party" frames showing party1 - party4); index: the party slot.
 local function createSmallFrame(unit, wf, index)
     local f = newUnitButton(unit, 120, 49, wf)
@@ -3686,47 +3810,60 @@ local function createSmallFrame(unit, wf, index)
 
     addHover(f)
 
-    -- Compound units (targettarget, focustarget) get no unit events, so while shown they are polled:
-    -- bars every tick, name / portrait only when the unit changes. A secret GUID can't be compared,
-    -- so that case counts as changed (repaint rather than show stale info).
+    -- Compound units (targettarget, focustarget) get no unit events, so while shown they are polled
+    -- four times a second: bars only, name / portrait when the unit changes. A secret GUID can't be
+    -- compared, so that case counts as changed (repaint rather than show stale info). A ticker, not
+    -- an OnUpdate: nothing runs on the frames in between.
     if unit == "targettarget" or unit == "focustarget" then
-        local acc = 0
-        f:HookScript("OnUpdate", function(self, dt)
-            acc = acc + dt
-            if acc < POLL_INTERVAL then return end
-            acc = 0
-            local u = self.wfUnit
-            if not UnitExists(u) then return end
-            local guid = UnitGUID(u)
-            local same = not isSecret(guid) and not isSecret(self.lastGUID) and guid == self.lastGUID
-            if not same then
-                self.lastGUID = guid
-                pcall(updateAll, self)
-            else
-                pcall(updateHealth, self)
-                pcall(updatePower, self)
-            end
-        end)
+        ns.totPoll = ns.totPoll or {}
+        ns.totPoll[#ns.totPoll + 1] = f
+        if not ns.totTicker then
+            ns.totTicker = C_Timer.NewTicker(0.25, function()
+                for _, self in ipairs(ns.totPoll) do
+                    if self:IsShown() and not self.wfOff then
+                        local u = self.wfUnit
+                        if UnitExists(u) then
+                            local guid = UnitGUID(u)
+                            local same = not isSecret(guid) and not isSecret(self.lastGUID) and guid == self.lastGUID
+                            if not same then
+                                self.lastGUID = guid
+                                self.colorHold = nil
+                                pcall(updateAll, self)
+                            else
+                                pcall(updateHealth, self, true)
+                                pcall(updatePower, self)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
     end
 
     f:SetScript("OnEvent", function(self, event, ...)
         if self.wfOff then return end      -- (turned off: nothing to draw; applyShown catches it up when it's back)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
-            updateHealth(self)
-            -- a spell on its way has landed (see flyDamage)
             if event == "UNIT_HEALTH" then self.hitAt = GetTime(); if self.dmgFlying then landDamage(self) end end
-        elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
-        elseif event == "UNIT_AURA" then pcall(AuraKit.auraChanged, self)   -- (the aura containers redraw on their own)
+            ns.markPaint(self, "health")
+        elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then ns.markPaint(self, "power")
+        elseif event == "UNIT_AURA" then
+            local _, info = ...
+            pcall(AuraKit.auraChanged, self, info)   -- (the aura containers redraw on their own)
         elseif event == "UNIT_COMBAT" then
             local _, action, indicator, amount = ...; pcall(showHit, self, action, indicator, amount)
             -- the spell landed (or missed): its next combat event after the cast
             self.hitAt = GetTime()
             if self.dmgFlying then landDamage(self) end
-        elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
-        else updateAll(self) end
+        elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then ns.markPaint(self, "pred")
+        else ns.markPaint(self, "all") end
     end)
-    for _, e in ipairs(Party.UNIT_EVENTS) do
-        pcall(f.RegisterUnitEvent, f, e, shown)
+    -- Party slots that are not in use (party off, or raid style) register nothing. Party.listen
+    -- puts the events back when the portrait frames are shown again.
+    local partyOn = unit ~= "party" or Party.portraitsOn()
+    if partyOn then
+        for _, e in ipairs(Party.UNIT_EVENTS) do
+            pcall(f.RegisterUnitEvent, f, e, shown)
+        end
     end
     if unit == "pet" then
         pcall(f.RegisterUnitEvent, f, "UNIT_PET", "player")
@@ -3734,17 +3871,17 @@ local function createSmallFrame(unit, wf, index)
         pcall(f.RegisterUnitEvent, f, "UNIT_TARGET", "focus")
         f:RegisterEvent("PLAYER_FOCUS_CHANGED")
     elseif unit == "party" then
-        f:RegisterEvent("GROUP_ROSTER_UPDATE")   -- (who is in each slot changes)
+        if partyOn then f:RegisterEvent("GROUP_ROSTER_UPDATE") end   -- (who is in each slot changes)
     else
         pcall(f.RegisterUnitEvent, f, "UNIT_TARGET", "target")   -- the target changed who it is targeting
     end
     if unit ~= "party" then f:RegisterEvent("PLAYER_TARGET_CHANGED") end
-    f:RegisterEvent("PLAYER_ENTERING_WORLD")
+    if partyOn then f:RegisterEvent("PLAYER_ENTERING_WORLD") end
 
-    Party.watch(f)
+    if partyOn then Party.watch(f) end
     if not index or index == 1 then frames[unit] = f end
     if index then Party.members[index] = f end
-    updateAll(f)
+    if partyOn then updateAll(f) end
     return f
 end
 
@@ -4609,7 +4746,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
             .. "; cast starts seen: " .. tostring(f.costStarts or 0)
             .. "; C_Spell.GetSpellPowerCost " .. ((C_Spell and C_Spell.GetSpellPowerCost) and "yes" or "no")
             .. ", GetSpellPowerCost " .. (GetSpellPowerCost and "yes" or "no"))
-        print(p .. "last cast: " .. tostring(f.costInfo or "none yet (cast something with a cast time, then try again)"))
+        print(p .. "last cast: " .. ns.costReport(f.costSpell))
         print(p .. "bar: " .. (f.costBar:IsShown() and "showing" or "hidden") .. ", width " .. tostring(math.floor(f.costBar:GetWidth() or 0)))
         local t = frames.target
         print(p .. "damage prediction, last cast at an enemy: " .. tostring(t and t.dmgInfo or "none yet"))

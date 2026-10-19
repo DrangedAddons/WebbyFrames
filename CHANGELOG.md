@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.16.11
+- Click casting can be turned off (Click casting page). While it is off, none of it runs: no spellbook checks, no listeners. Clicks go back to targeting and the menu. Your bindings are kept, and come back when you turn it on.
+- Buff bars: the per-frame update only runs while a bar is counting down in plain numbers.
+
+## 1.16.10
+- Party frames off: nothing of theirs keeps running. The portrait frames and the raid-style tiles stop listening, and the range, missing-buff and healer-mana checks stop. Turning the party frames back on starts that again. Click casting on your other frames is unchanged.
+
+## 1.16.9
+- Player glow: a buff on you no longer lights it. Gaining a magic buff (fortitude, intellect, a blessing) was read as a debuff you could dispel, so the frame glowed until that buff fell off. Casting one also starts the mana tick, which is why the glow seemed to follow the five second rule.
+
 ## 1.16.8
 - Mana tick: a sparkle trail. Little stars are left behind as the light crosses the bar, twinkling, drifting and fading out (Sparkle trail, on to start with).
 - More sparkle shapes: Raid star, Diamond and Soft glow, for the sparkle and the trail alike.

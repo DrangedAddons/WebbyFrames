@@ -185,7 +185,7 @@ PX.SAMPLES = { { 1243, 1800, 1500 }, { 1126, 1800, 640 }, { 1459, 1800, 95 } }
 function PX.updateBars()
     local box = PX.box
     if not box then return end
-    if not getSetting("player", "buffBars") then box:Hide(); return end
+    if not getSetting("player", "buffBars") then box:Hide(); PX.syncTick(); return end
     local filter = getSetting("player", "buffBarsWho") == "all" and "HELPFUL" or "HELPFUL|PLAYER"
     local max = getSetting("player", "buffBarsMax") or 8
     local w = getSetting("player", "buffBarsWidth") or 180
@@ -228,9 +228,11 @@ function PX.updateBars()
     end
     box:SetSize(w, math.max(PX.BAR_H, n * (PX.BAR_H + 2) - 2))
     box:Show()
+    PX.syncTick()
 end
 
--- Every frame while shown: the plain bars' fill (smooth); ten times a second: the time left as text.
+-- Every frame while a bar is timed by plain numbers: its fill. Ten times a second: the time left.
+-- A bar the game times itself needs no fill update, only that text, from a ticker.
 local textWait = 0
 function PX.tick(_, dt)
     local now = GetTime()
@@ -247,6 +249,43 @@ function PX.tick(_, dt)
                 local ok, left = pcall(bar.object.GetRemainingDuration, bar.object)
                 if not (ok and pcall(bar.time.SetFormattedText, bar.time, "%.0f", left)) then bar.time:SetText("") end
             end
+        end
+    end
+end
+
+function PX.tickText()
+    for _, bar in ipairs(PX.bars) do
+        if bar:IsShown() and bar.object then
+            local ok, left = pcall(bar.object.GetRemainingDuration, bar.object)
+            if not (ok and pcall(bar.time.SetFormattedText, bar.time, "%.0f", left)) then bar.time:SetText("") end
+        end
+    end
+end
+
+-- OnUpdate only while some shown bar has a plain end time. Otherwise a 0.1s ticker for the
+-- duration-object text, or nothing.
+function PX.syncTick()
+    local box = PX.box
+    if not box then return end
+    local ends, object = false, false
+    if getSetting("player", "buffBars") then
+        for _, bar in ipairs(PX.bars) do
+            if bar:IsShown() then
+                if bar.ends then ends = true
+                elseif bar.object then object = true end
+            end
+        end
+    end
+    if ends then
+        if PX.barTicker then PX.barTicker:Cancel(); PX.barTicker = nil end
+        if box:GetScript("OnUpdate") ~= PX.tick then box:SetScript("OnUpdate", PX.tick) end
+    else
+        box:SetScript("OnUpdate", nil)
+        if object then
+            if not PX.barTicker then PX.barTicker = C_Timer.NewTicker(0.1, PX.tickText) end
+        elseif PX.barTicker then
+            PX.barTicker:Cancel()
+            PX.barTicker = nil
         end
     end
 end
@@ -268,7 +307,6 @@ function PX.init()
     box:SetClampedToScreen(true)
     box:SetSize(180, PX.BAR_H)
     box:Hide()
-    box:SetScript("OnUpdate", PX.tick)
     PX.box = box
     PX.place()
     local lib = LibStub and LibStub("LibEditMode", true)

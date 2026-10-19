@@ -177,8 +177,8 @@ end
 -- pulses the way the player frame does while resting: its border (portrait ring included) recoloured,
 -- with a glow on it and just round it. It's drawn by the game: an aura container whose one "debuff you
 -- can dispel" button is copies of the border, tinted by the game per dispel type, so it works in combat
--- too, when the debuffs themselves are hidden from addons, and costs nothing while nobody has one (no
--- polling). The pulse is the box's alpha (AuraKit.startGlowPulse). On the player frame the resting /
+-- too, when the debuffs themselves are hidden from addons. The pulse is an animation on the box
+-- (AuraKit.attachPulse), so it never enters Lua. On the player frame the resting /
 -- combat glow takes the colour too: that one needs the type itself, read when your auras change
 -- (AuraKit.auraChanged), and stays as it is while the game won't say.
 -- (any frame with "Dispel glow" on: every frame's default)
@@ -199,9 +199,38 @@ AuraKit.ALL_DISPEL = { includeDispelTypes = { Magic = true, Curse = true, Diseas
 -- `all` any dispellable one; false for none (or an enemy: nothing of theirs is yours to dispel), nil
 -- when the game won't say. ("RAID" is the game's own "you can dispel this" filter.)
 -- (on every aura change of yours: one scratch table, no throwaway functions)
+-- Magic is first in DISPEL_ORDER, so the scan stops when it finds one. A partial UNIT_AURA that
+-- added a harmful Magic debuff can answer without the scan. A buff cannot: most buffs are Magic
+-- too (fortitude, intellect, a blessing), and taking that lit the player glow until the buff fell.
+-- `info` is the event's update table when the client sends one.
 local found = {}
-function AuraKit.dispelType(u, all)
+-- true: this added aura is harmful. false: a buff. nil: hidden, or the payload didn't say.
+local function addedHarmful(a)
+    if isSecret(a) or type(a) ~= "table" then return nil end
+    local harm = a.isHarmful
+    if isSecret(harm) then return nil end
+    if harm == true then return true end
+    if harm == false then return false end
+    local help = a.isHelpful
+    if isSecret(help) then return nil end
+    if help == true then return false end
+end
+function AuraKit.dispelType(u, all, info)
     if ns.plain(UnitCanAttack, "player", u) then return false end
+    if type(info) == "table" and info.isFullUpdate == false and info.addedAuras then
+        for _, a in ipairs(info.addedAuras) do
+            if isSecret(a) then return nil end
+            local harm = addedHarmful(a)
+            -- not said: don't answer from this list (a buff's Magic used to, and the glow stuck).
+            -- A harmful Magic debuff still answers on its own; anything else is the scan's.
+            if harm == nil then break end
+            if harm then
+                local t = a.dispelName
+                if isSecret(t) then return nil end
+                if t == "Magic" then return "Magic" end
+            end
+        end
+    end
     wipe(found)
     local filter = all and "HARMFUL" or "HARMFUL|RAID"
     for i = 1, 40 do
@@ -210,9 +239,33 @@ function AuraKit.dispelType(u, all)
         if not d then break end
         local t = d.dispelName
         if isSecret(t) then return nil end
+        if t == "Magic" then return "Magic" end
         if t and t ~= "" then found[t] = true end
     end
     for _, t in ipairs(AuraKit.DISPEL_ORDER) do if found[t] then return t end end
+    return false
+end
+
+-- True when a UNIT_AURA payload might change which dispel is showing. Duration refreshes
+-- (updated ids only) do not, and neither does gaining a buff. No payload, or a full update, always might.
+local function dispelTouched(info)
+    if type(info) ~= "table" or info.isFullUpdate ~= false then return true end
+    local removed = info.removedAuraInstanceIDs
+    if type(removed) == "table" and removed[1] ~= nil then return true end
+    local added = info.addedAuras
+    if type(added) == "table" then
+        for _, a in ipairs(added) do
+            if isSecret(a) then return true end
+            local harm = addedHarmful(a)
+            if harm == nil then
+                local t = a and a.dispelName
+                if isSecret(t) then return true end
+                if t and t ~= "" then return true end
+            elseif harm then
+                return true
+            end
+        end
+    end
     return false
 end
 
@@ -224,11 +277,67 @@ function AuraKit.dispelRGB(typ)
 end
 
 -- The pulse, the resting glow's (Blizzard's PlayerFrame_OnUpdate): from 55/255 straight up to full over
--- half a second, then straight back down. From the clock, so every glow pulses together.
+-- half a second, then straight back down. Played by an AnimationGroup (AuraKit.attachPulse), not Lua.
+local PULSE_LOW = 55 / 255
 function AuraKit.pulseAlpha()
     local p = GetTime() % 1
     local a = p < 0.5 and (55 + p * 400) / 255 or (255 - (p - 0.5) * 400) / 255
     return math.max(0, math.min(1, a))
+end
+
+-- One always-shown host. Each region's animation group lives here and targets that region, so the
+-- pulse keeps the clock while the region itself is hidden, and hiding a glow does not stop the others.
+local function pulseHost()
+    local host = AuraKit.pulseHost
+    if host then return host end
+    host = CreateFrame("Frame", nil, UIParent)
+    host:SetFrameStrata("BACKGROUND")
+    host:SetAlpha(0)
+    host:SetSize(1, 1)
+    host:EnableMouse(false)
+    host:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 0, 0)
+    AuraKit.pulseHost = host
+    AuraKit.glowDriver = host
+    return host
+end
+
+local function newPulse(region)
+    local ag = pulseHost():CreateAnimationGroup()
+    ag:SetLooping("REPEAT")
+    local up = ag:CreateAnimation("Alpha")
+    up:SetTarget(region)
+    up:SetOrder(1)
+    up:SetDuration(0.5)
+    up:SetFromAlpha(PULSE_LOW)
+    up:SetToAlpha(1)
+    pcall(up.SetSmoothing, up, "NONE")
+    local down = ag:CreateAnimation("Alpha")
+    down:SetTarget(region)
+    down:SetOrder(2)
+    down:SetDuration(0.5)
+    down:SetFromAlpha(1)
+    down:SetToAlpha(PULSE_LOW)
+    pcall(down.SetSmoothing, down, "NONE")
+    return ag
+end
+
+-- Start the region's pulse. A second call leaves a running one alone, so a batch started together
+-- stays in step. A stopped one starts again from the beginning of the ramp.
+function AuraKit.attachPulse(region)
+    if not region then return end
+    local ag = region.wfPulseAg
+    if not ag then
+        ag = newPulse(region)
+        region.wfPulseAg = ag
+    end
+    if not ag:IsPlaying() then ag:Play() end
+end
+
+function AuraKit.stopPulse(region)
+    if not region then return end
+    local ag = region.wfPulseAg
+    if ag then ag:Stop() end
+    region:SetAlpha(1)
 end
 
 -- The player frame's resting / combat glow in the debuff's colour (f.dispelType -> f.dispelRGB).
@@ -240,29 +349,21 @@ function AuraKit.paintGlow(f)
 end
 
 -- A frame's unit's auras changed (UNIT_AURA), or its unit did: only the player frame's glow colour
--- needs the debuff's type itself; everything else redraws on its own.
-function AuraKit.auraChanged(f)
+-- needs the debuff's type itself; everything else redraws on its own. `info` is the event payload
+-- when the client sends one. A duration tick does not rescan.
+function AuraKit.auraChanged(f, info)
     if not f.status then return end
+    if f.dglowWant and not dispelTouched(info) then return end
     local typ = false
-    if f.dglowWant then typ = AuraKit.dispelType(f.wfUnit, getSetting(f.baseUnit, "dispelWho") == "all") end
+    if f.dglowWant then typ = AuraKit.dispelType(f.wfUnit, getSetting(f.baseUnit, "dispelWho") == "all", info) end
     if typ == nil then return end          -- (hidden: keep what's shown)
     if typ ~= f.dispelType then f.dispelType = typ; AuraKit.paintGlow(f) end
 end
 
--- Every frame of a pulse: the glow boxes' alpha (the box shows nothing without a debuff, so this is all
--- the work there is).
+-- Kept for /webby glow. The pulse itself is AuraKit.attachPulse on each box.
 AuraKit.glowFrames = {}
 function AuraKit.startGlowPulse()
-    if AuraKit.glowDriver then return end
-    local d = CreateFrame("Frame")
-    d:SetScript("OnUpdate", function()
-        local a = AuraKit.pulseAlpha()
-        for _, f in ipairs(AuraKit.glowFrames) do
-            local c = f.dispelBox
-            if c and f.dglowWant and c:IsVisible() then c:SetAlpha(a) end
-        end
-    end)
-    AuraKit.glowDriver = d
+    pulseHost()
 end
 
 function AuraKit.dispelGlow(f)
@@ -326,6 +427,7 @@ function AuraKit.dispelGlow(f)
     c:SetPoint("TOPLEFT", f.border, "TOPLEFT")
     pcall(c.SetSize, c, w, h)
     c:Show()
+    AuraKit.attachPulse(c)
     AuraKit.auraChanged(f)
 end
 
@@ -406,6 +508,14 @@ function AuraKit.setEditing(on)
 end
 
 function AuraKit.update(f)
+    -- A hidden frame keeps no aura unit. Blizzard's container would keep scanning it otherwise.
+    if f.wfOff then
+        local c = f.auraContainer
+        if c then AuraKit.stopPulse(c); pcall(c.SetUnit, c, nil); c:Hide() end
+        local d = f.dispelBox
+        if d and d ~= false then AuraKit.stopPulse(d); pcall(d.SetUnit, d, nil); d:Hide() end
+        return
+    end
     local c = AuraKit.container(f)
     if not c then return end          -- (a client without Blizzard's aura container: no auras)
     local base = f.baseUnit

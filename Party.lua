@@ -74,9 +74,20 @@ end
 -- health and power bars with their shaped ends, the name), at PET_SCALE of it, hung under the member's
 -- frame (part of it, so it moves, scales and fades with it), clickable to target. One per party slot,
 -- made at login (secure buttons can't be made in combat); shown while the pet exists (the game's unit
--- watch). Polled five times a second; values only go to setters.
+-- watch). Health, power and the name come from the pet's unit events. The portrait is a rendered
+-- model, refreshed about every two seconds. Values only go to setters.
 Party.PET_SCALE = 0.6
 Party.PET_INDENT, Party.PET_TUCK = 24, 2  -- in from the member frame's portrait side; up under its bottom edge
+Party.PET_EVENTS = { "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER", "UNIT_NAME_UPDATE" }
+
+-- Listen to `unit`, or to nothing. A hidden pet is not listening. Same unit twice does nothing.
+function Party.petListen(m, unit)
+    if m.petUnit == unit then return end
+    for _, e in ipairs(Party.PET_EVENTS) do pcall(m.UnregisterEvent, m, e) end
+    m.petUnit = unit
+    if not unit then return end
+    for _, e in ipairs(Party.PET_EVENTS) do pcall(m.RegisterUnitEvent, m, e, unit) end
+end
 
 function Party.makePet(f)
     local m = CreateFrame("Button", "WebbyFrames_partypet" .. f.partyIndex, f, "SecureUnitButtonTemplate")
@@ -118,6 +129,15 @@ function Party.makePet(f)
         end)
     end)
     m:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    m:SetScript("OnEvent", function(self)
+        if self:IsShown() then pcall(Party.paintPet, self, true) end
+    end)
+    m:HookScript("OnShow", function(self)
+        local u = self:GetAttribute("unit")
+        if u then Party.petListen(self, u) end
+        pcall(Party.paintPet, self)
+    end)
+    m:HookScript("OnHide", function(self) Party.petListen(self, nil) end)
     m:Hide()
     return m
 end
@@ -142,7 +162,8 @@ function Party.layoutPet(m, left)
     m:SetHitRectInsets(left and 0 or 6, left and 6 or 0, 4, 4)
 end
 
-function Party.paintPet(m)
+-- `barsOnly`: health, power and the name. The portrait and the font stay for a full paint.
+function Party.paintPet(m, barsOnly)
     local u = m:GetAttribute("unit")
     if not (u and UnitExists(u)) then return end
     local f = m:GetParent()
@@ -172,13 +193,13 @@ function Party.paintPet(m)
     m.hp:SetMinMaxValues(0, UnitHealthMax(u)); m.hp:SetValue(UnitHealth(u))
     m.mp:SetMinMaxValues(0, UnitPowerMax(u)); m.mp:SetValue(UnitPower(u))
     m.name:SetText(UnitName(u))
-    -- the portrait now and then (it's a rendered model, not worth five times a second)
-    m.portraitTick = ((m.portraitTick or 0) + 1) % 10
-    if m.portraitTick == 1 then pcall(SetPortraitTexture, m.portrait, u) end
-    local font = resolveFont(getSetting("party", "font"))
-    if m.font ~= font then
-        m.font = font
-        pcall(function() local fp, fz, ff = m.name:GetFont(); m.name:SetFont(font or fp, fz, ff) end)
+    if not barsOnly then
+        pcall(SetPortraitTexture, m.portrait, u)
+        local font = resolveFont(getSetting("party", "font"))
+        if m.font ~= font then
+            m.font = font
+            pcall(function() local fp, fz, ff = m.name:GetFont(); m.name:SetFont(font or fp, fz, ff) end)
+        end
     end
     if m.sampleName then m.name:SetText(m.sampleName) end      -- (a sample member's pet)
 end
@@ -199,7 +220,6 @@ function Party.minis(f)
     else
         m:SetPoint("TOPLEFT", f, "BOTTOMLEFT", Party.PET_INDENT / s, Party.PET_TUCK / s)
     end
-    m.portraitTick = 0
     local s = f.partySample
     m.sampleName = s and s.pet or nil
     if s then
@@ -210,7 +230,21 @@ function Party.minis(f)
         m:SetAttribute("unit", Party.petOf(f.homeUnit or f.wfUnit))
         if Party.portraitsOn() and getSetting("party", "partyPets") then RegisterUnitWatch(m) else UnregisterUnitWatch(m); m:Hide() end
     end
+    Party.petListen(m, m:IsShown() and m:GetAttribute("unit") or nil)
     pcall(Party.paintPet, m)
+end
+
+-- Portrait pets off: no unit watch and no pet events. Out of combat only (the watch is secure).
+function Party.hidePets()
+    if InCombatLockdown() then return end
+    for i = 1, Party.SLOTS do
+        local m = Party.members[i] and Party.members[i].miniPet
+        if m then
+            UnregisterUnitWatch(m)
+            m:Hide()
+            Party.petListen(m, nil)
+        end
+    end
 end
 
 
@@ -219,6 +253,12 @@ end
 local ROLE_RANK = { TANK = 1, HEALER = 2, DAMAGER = 3 }
 function Party.arrange()
     if InCombatLockdown() then Party.pendingArrange = true; return end
+    -- Portrait frames not in use (party off, or raid style): no role sort, no repaint of hidden slots.
+    if not Party.portraitsOn() then
+        Party.pendingArrange = nil
+        Party.hidePets()
+        return
+    end
     if Party.testing then return end          -- (the sample party keeps the slots; stopping it arranges)
     Party.pendingArrange = nil
     local list = {}
@@ -245,16 +285,36 @@ function Party.arrange()
     if ns.Click and ns.Click.header then pcall(ns.Click.apply) end
 end
 
--- Gives a party slot another unit: its secure unit, its unit events, how it shows and hides, and a
--- repaint. (In Edit Mode it keeps showing you as the stand-in until Edit Mode closes.)
-function Party.setUnit(f, unit)
-    if f.homeUnit == unit then return end
-    f.homeUnit = unit
-    f:SetAttribute("unit", unit)
+-- Portrait frames sit hidden while the raid style is on. Drop their unit events until they are
+-- shown again (applyShown). Other frames keep theirs.
+-- Frame events (not unit events) a party slot also has. Silence drops them; listen puts them back.
+Party.FRAME_EVENTS = { "GROUP_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD" }
+
+function Party.silence(f)
+    if not f or f.baseUnit ~= "party" then return end
+    for _, e in ipairs(Party.UNIT_EVENTS) do pcall(f.UnregisterEvent, f, e) end
+    for _, e in ipairs(Party.FRAME_EVENTS) do pcall(f.UnregisterEvent, f, e) end
+end
+
+function Party.listen(f)
+    if not f or f.baseUnit ~= "party" or f.wfOff then return end
+    local unit = f.homeUnit or f:GetAttribute("unit") or f.wfUnit
+    if not unit then return end
     for _, e in ipairs(Party.UNIT_EVENTS) do
         pcall(f.UnregisterEvent, f, e)
         pcall(f.RegisterUnitEvent, f, e, unit)
     end
+    for _, e in ipairs(Party.FRAME_EVENTS) do pcall(f.RegisterEvent, f, e) end
+end
+
+-- Gives a party slot another unit: its secure unit, its unit events, how it shows and hides, and a
+-- repaint. (In Edit Mode it keeps showing you as the stand-in until Edit Mode closes.)
+-- While the portrait frames are off, the events stay unregistered.
+function Party.setUnit(f, unit)
+    if f.homeUnit == unit then return end
+    f.homeUnit = unit
+    f:SetAttribute("unit", unit)
+    if f.wfOff then Party.silence(f) else Party.listen(f) end
     if not AuraKit.editing then
         f.wfUnit = unit
         if not f.wfOff then Party.watch(f) end
@@ -365,6 +425,7 @@ function Party.applyRest()
 end
 
 function Party.updateAllIcons()
+    if not Party.portraitsLive() then return end
     for i = 1, Party.SLOTS do
         local f = Party.members[i]
         if f then pcall(Party.updateIcons, f) end
@@ -478,19 +539,10 @@ function Party.startSamples()
     Party.paintSamples()
 end
 
-function Party.stopSamples()
-    if not Party.testing then return end
-    Party.testing = nil
-    for i = 1, Party.SLOTS do
-        local f = Party.members[i]
-        if f then
-            f.partySample = nil
-            if f.miniPet then f.miniPet.sampleName = nil end
-            f.portrait:SetTexCoord(0, 1, 0, 1)
-            if f.auraContainer then pcall(f.auraContainer.SetEditModePreviewEnabled, f.auraContainer, false) end
-        end
-    end
-    if InCombatLockdown() then Party.pendingArrange = true; return end
+-- The secure half of stopping the sample party (unit watch, real units). Combat defers it.
+function Party.finishSampleStop()
+    if InCombatLockdown() then Party.sampleStop = true; return end
+    Party.sampleStop = nil
     for i = 1, Party.SLOTS do
         local f = Party.members[i]
         if f then
@@ -504,6 +556,23 @@ function Party.stopSamples()
     pcall(Party.arrange)
     for i = 1, Party.SLOTS do if Party.members[i] then pcall(Party.minis, Party.members[i]) end end
     pcall(Party.reflow)
+end
+
+function Party.stopSamples()
+    if not Party.testing then return end
+    Party.testing = nil
+    for i = 1, Party.SLOTS do
+        local f = Party.members[i]
+        if f then
+            f.partySample = nil
+            if f.miniPet then f.miniPet.sampleName = nil end
+            f.portrait:SetTexCoord(0, 1, 0, 1)
+            f:SetAlpha(1)
+            if f.auraContainer then pcall(f.auraContainer.SetEditModePreviewEnabled, f.auraContainer, false) end
+        end
+    end
+    if InCombatLockdown() then Party.sampleStop = true; Party.pendingArrange = true; return end
+    Party.finishSampleStop()
 end
 
 -- The Party page's Preview button and /webby party: the sample party for the style in use.
@@ -520,56 +589,118 @@ end
 Party.GROUP = { "player", "party1", "party2", "party3", "party4" }
 Party.GROUP_UNIT = { player = true, party1 = true, party2 = true, party3 = true, party4 = true }
 Party.UNIT_ONLY = { UNIT_PHASE = true, UNIT_THREAT_SITUATION_UPDATE = true, UNIT_FLAGS = true, UNIT_CONNECTION = true, UNIT_PET = true }
+Party.EVENTS = { "GROUP_ROSTER_UPDATE", "PARTY_LEADER_CHANGED", "PLAYER_ROLES_ASSIGNED", "PLAYER_ENTERING_WORLD",
+    "READY_CHECK", "READY_CHECK_CONFIRM", "READY_CHECK_FINISHED", "PLAYER_REGEN_ENABLED",
+    "INCOMING_RESURRECT_CHANGED", "INCOMING_SUMMON_CHANGED", "UNIT_PHASE", "UNIT_THREAT_SITUATION_UPDATE",
+    "UNIT_FLAGS", "UNIT_CONNECTION", "UNIT_PET", "PLAYER_REGEN_DISABLED" }
 
-function Party.init()
-    local ev = CreateFrame("Frame")
-    for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PARTY_LEADER_CHANGED", "PLAYER_ROLES_ASSIGNED", "PLAYER_ENTERING_WORLD",
-                         "READY_CHECK", "READY_CHECK_CONFIRM", "READY_CHECK_FINISHED", "PLAYER_REGEN_ENABLED",
-                         "INCOMING_RESURRECT_CHANGED", "INCOMING_SUMMON_CHANGED", "UNIT_PHASE", "UNIT_THREAT_SITUATION_UPDATE",
-                         "UNIT_FLAGS", "UNIT_CONNECTION", "UNIT_PET", "PLAYER_REGEN_DISABLED" }) do
-        pcall(ev.RegisterEvent, ev, e)
+-- Portrait frames are up, or still on screen because combat has not let them hide yet.
+function Party.portraitsLive()
+    if Party.portraitsOn() then return true end
+    for i = 1, Party.SLOTS do
+        local f = Party.members[i]
+        if f and not f.wfOff then return true end
     end
-    ev:SetScript("OnEvent", function(_, event, unit)
-        -- (the unit events come for every unit about, nameplates included: only the group's matter)
-        if Party.UNIT_ONLY[event] and not Party.GROUP_UNIT[unit] then return end
-        -- (the portrait frames not in use: the raid style, or the party frames off)
-        if not Party.portraitsOn() and event ~= "PLAYER_REGEN_DISABLED" then return end
-        if event == "PLAYER_REGEN_DISABLED" then
-            -- combat ends the sample party (the last moment its frames can still be changed)
-            if Party.testing then Party.stopSamples() end
+end
+
+function Party.onEvent(_, event, unit)
+    -- (the unit events come for every unit about, nameplates included: only the group's matter)
+    if Party.UNIT_ONLY[event] and not Party.GROUP_UNIT[unit] then return end
+    if event == "PLAYER_REGEN_ENABLED" then
+        -- a sample stop, a role sort or a pet reflow that had to wait out combat
+        if Party.sampleStop then pcall(Party.finishSampleStop) end
+        if Party.pendingArrange then pcall(Party.arrange) end
+        if Party.pendingReflow then pcall(Party.reflow) end
+        if not Party.portraitsLive() then
+            Party.syncEvents()
+            Party.syncTicker()
             return
         end
-        -- who goes in which slot (role order, you): again when the group or its roles change, or after
-        -- combat if a change had to wait
-        if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ROLES_ASSIGNED" or event == "PLAYER_ENTERING_WORLD"
-            or (event == "PLAYER_REGEN_ENABLED" and Party.pendingArrange) then
-            pcall(Party.arrange)
+    end
+    -- (portrait frames not in use: raid style, or the party frames off and already hidden)
+    if not Party.portraitsLive() then
+        if event == "PLAYER_REGEN_DISABLED" and Party.testing then Party.stopSamples() end
+        return
+    end
+    if event == "PLAYER_REGEN_DISABLED" then
+        -- combat ends the sample party (the last moment its frames can still be changed)
+        if Party.testing then Party.stopSamples() end
+        return
+    end
+    -- who goes in which slot (role order): again when the group or its roles change
+    if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ROLES_ASSIGNED" or event == "PLAYER_ENTERING_WORLD" then
+        pcall(Party.arrange)
+    end
+    -- a pet came or went (or the group changed): pet room under each member
+    if event == "UNIT_PET" or event == "GROUP_ROSTER_UPDATE" then
+        pcall(Party.reflow)
+    end
+    if event == "READY_CHECK" then
+        Party.readyCheck, Party.readyLinger = true, nil
+    elseif event == "READY_CHECK_FINISHED" then
+        Party.readyCheck, Party.readyLinger = nil, true
+        C_Timer.After(6, function() Party.readyLinger = nil; Party.updateAllIcons() end)
+    end
+    Party.updateAllIcons()
+end
+
+-- Range, five times a second, only while the portrait frames are in use. Pet bars come from unit
+-- events; a shown pet's portrait is refreshed about every two seconds.
+function Party.onTick()
+    if not Party.portraitsLive() then return end
+    for i = 1, Party.SLOTS do
+        local f = Party.members[i]
+        if f and f:IsShown() then pcall(Party.updateRange, f) end
+        local m = f and f.miniPet
+        if m and m:IsShown() then
+            m.portraitTick = ((m.portraitTick or 0) + 1) % 10
+            if m.portraitTick == 1 then
+                local u = m:GetAttribute("unit")
+                if u then pcall(SetPortraitTexture, m.portrait, u) end
+            end
         end
-        -- a pet came or went (or the group changed): pet room under each member
-        if event == "UNIT_PET" or event == "GROUP_ROSTER_UPDATE" or (event == "PLAYER_REGEN_ENABLED" and Party.pendingReflow) then
-            pcall(Party.reflow)
+    end
+end
+
+-- The portrait event frame listens only while those frames are in use. A combat-deferred sort keeps
+-- the two regen events until it has run.
+function Party.syncEvents()
+    local ev = Party.ev
+    if not ev then return end
+    if Party.portraitsLive() then
+        if Party.evMode ~= "all" then
+            ev:UnregisterAllEvents()
+            for _, e in ipairs(Party.EVENTS) do pcall(ev.RegisterEvent, ev, e) end
+            Party.evMode = "all"
         end
-        if event == "READY_CHECK" then
-            Party.readyCheck, Party.readyLinger = true, nil
-        elseif event == "READY_CHECK_FINISHED" then
-            Party.readyCheck, Party.readyLinger = nil, true
-            C_Timer.After(6, function() Party.readyLinger = nil; Party.updateAllIcons() end)
+    elseif Party.pendingArrange or Party.pendingReflow or Party.sampleStop or Party.testing then
+        if Party.evMode ~= "regen" then
+            ev:UnregisterAllEvents()
+            ev:RegisterEvent("PLAYER_REGEN_ENABLED")
+            ev:RegisterEvent("PLAYER_REGEN_DISABLED")
+            Party.evMode = "regen"
         end
-        Party.updateAllIcons()
-    end)
-    -- range, five times a second, for the party frames on show
-    C_Timer.NewTicker(0.2, function()
-        for i = 1, Party.SLOTS do
-            local f = Party.members[i]
-            if f and f:IsShown() then pcall(Party.updateRange, f) end
-            -- and the pet / target minis on show
-            if f and f.miniPet and f.miniPet:IsShown() then pcall(Party.paintPet, f.miniPet) end
-        end
-    end)
-    pcall(Party.arrange)
+    elseif Party.evMode then
+        ev:UnregisterAllEvents()
+        Party.evMode = nil
+    end
+end
+
+function Party.syncTicker()
+    if Party.portraitsLive() then
+        if not Party.rangeTicker then Party.rangeTicker = C_Timer.NewTicker(0.2, Party.onTick) end
+    elseif Party.rangeTicker then
+        Party.rangeTicker:Cancel()
+        Party.rangeTicker = nil
+    end
+end
+
+function Party.init()
+    Party.ev = CreateFrame("Frame")
+    Party.ev:SetScript("OnEvent", Party.onEvent)
+    -- (listeners and the range ticker start from Party.sync, once applyAll has shown or hidden them)
     if ns.RaidParty then pcall(ns.RaidParty.init) end   -- (the raid-style tiles, made now so click casting gets them)
     if ns.Click then pcall(ns.Click.init) end     -- (click casting on the frames, now they're made)
-    Party.updateAllIcons()
 end
 
 ---------------------------------------------------------------------------
@@ -753,26 +884,51 @@ function Party.updateMissing()
 end
 
 -- The events that make it look again: buffs changing on you or a member, the group, a spell learned.
-function Party.watchMissing()
-    local ev = CreateFrame("Frame")
-    pcall(ev.RegisterUnitEvent, ev, "UNIT_AURA", "player", "party1")
-    local ev2 = CreateFrame("Frame")
-    pcall(ev2.RegisterUnitEvent, ev2, "UNIT_AURA", "party2", "party3")
-    local ev3 = CreateFrame("Frame")
-    pcall(ev3.RegisterUnitEvent, ev3, "UNIT_AURA", "party4")
-    local function onAura(_, _, u) Party.markMissing(u) end
-    ev:SetScript("OnEvent", onAura); ev2:SetScript("OnEvent", onAura); ev3:SetScript("OnEvent", onAura)
-    local g = CreateFrame("Frame")
-    for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PLAYER_ROLES_ASSIGNED", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED", "SPELLS_CHANGED" }) do
-        pcall(g.RegisterEvent, g, e)
+-- Only while missing buffs is on and the party frames are on. Off, nothing is registered and the
+-- ticker is not running. The frames are made the first time they're needed.
+function Party.syncMissing()
+    local on = getSetting("party", "missingBuffs") and frameOn("party")
+    if not on then
+        if Party.missTicker then Party.missTicker:Cancel(); Party.missTicker = nil end
+        if Party.missEv then
+            for _, ev in ipairs(Party.missEv) do ev:UnregisterAllEvents() end
+        end
+        if Party.missOn then
+            Party.missOn = nil
+            wipe(Party.missDirty)
+            pcall(Party.updateMissing)     -- (icons that were up come off)
+        end
+        return
     end
-    g:SetScript("OnEvent", function(_, event)
-        if event == "SPELLS_CHANGED" then wipe(Party.knownCache) end
+    if not Party.missEv then
+        local function onAura(_, _, u) Party.markMissing(u) end
+        local ev, ev2, ev3 = CreateFrame("Frame"), CreateFrame("Frame"), CreateFrame("Frame")
+        ev:SetScript("OnEvent", onAura)
+        ev2:SetScript("OnEvent", onAura)
+        ev3:SetScript("OnEvent", onAura)
+        local g = CreateFrame("Frame")
+        g:SetScript("OnEvent", function(_, event)
+            if event == "SPELLS_CHANGED" then wipe(Party.knownCache) end
+            Party.markMissing()
+        end)
+        Party.missEv = { ev, ev2, ev3, g }
+    end
+    if not Party.missOn then
+        local ev, ev2, ev3, g = Party.missEv[1], Party.missEv[2], Party.missEv[3], Party.missEv[4]
+        pcall(ev.RegisterUnitEvent, ev, "UNIT_AURA", "player", "party1")
+        pcall(ev2.RegisterUnitEvent, ev2, "UNIT_AURA", "party2", "party3")
+        pcall(ev3.RegisterUnitEvent, ev3, "UNIT_AURA", "party4")
+        for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PLAYER_ROLES_ASSIGNED", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED", "SPELLS_CHANGED" }) do
+            pcall(g.RegisterEvent, g, e)
+        end
+        Party.missOn = true
         Party.markMissing()
-    end)
-    Party.markMissing()
-    -- (painted at most twice a second, however many buffs changed)
-    C_Timer.NewTicker(0.5, function() if next(Party.missDirty) then pcall(Party.updateMissing) end end)
+    end
+    if not Party.missTicker then
+        Party.missTicker = C_Timer.NewTicker(0.5, function()
+            if next(Party.missDirty) then pcall(Party.updateMissing) end
+        end)
+    end
 end
 
 -- Healer mana: a small block of text, one line per healer in the group (role Healer, or with no roles
@@ -884,6 +1040,43 @@ function Party.updateMana()
     m:SetShown(#units > 0)
 end
 
+-- Twice a second, and only while the list is turned on (it is off by default).
+function Party.watchMana()
+    local on = getSetting("party", "healerMana") and frameOn("party")
+    if on then
+        if not Party.manaTicker then
+            Party.manaTicker = C_Timer.NewTicker(0.5, function() pcall(Party.updateMana) end)
+        end
+        pcall(Party.updateMana)
+    else
+        if Party.manaTicker then Party.manaTicker:Cancel(); Party.manaTicker = nil end
+        if Party.manaBox then Party.manaBox:Hide() end
+    end
+end
+
+-- Party frames on or off, both styles. Called when a party option changes and after the frames are
+-- applied (login, combat ending, a layout change). Off: no listeners, no tickers, no role sort.
+function Party.sync()
+    if not Party.ev then return end
+    -- A sample stop that waited out combat has to put the real units back before anything else.
+    if not Party.portraitsOn() and Party.testing then pcall(Party.stopSamples) end
+    if Party.sampleStop and not InCombatLockdown() then pcall(Party.finishSampleStop) end
+    if Party.portraitsOn() then
+        pcall(Party.arrange)
+        pcall(Party.updateAllIcons)
+        if Party.testing then pcall(Party.paintSamples) end
+    elseif not InCombatLockdown() then
+        Party.pendingArrange = nil
+        Party.pendingReflow = nil
+        Party.hidePets()
+    end
+    Party.syncEvents()
+    Party.syncTicker()
+    Party.syncMissing()
+    Party.watchMana()
+    if ns.RaidParty and ns.RaidParty.sync then pcall(ns.RaidParty.sync) end
+end
+
 ---------------------------------------------------------------------------
 -- Raid style (Party page, Style: Raid style)
 ---------------------------------------------------------------------------
@@ -893,7 +1086,7 @@ end
 -- summons and resurrections in the middle, a white edge on whoever you're targeting (and under the
 -- mouse), the threat colour on whoever has aggro, a debuff you can dispel (or any dispellable one) as a
 -- pulsing tint with its type icon, big defensive cooldowns in the middle, missing buffs, their debuffs
--- and your heals over time, a combat icon, and fading out of range. You can be one of the tiles
+-- and your heals over time, and fading out of range. You can be one of the tiles
 -- (Include yourself); pets get small tiles beside their owners. The same click casting as the portrait
 -- frames (ns.RaidParty.tiles, petTiles). Placed in Edit Mode on its own, with a sample party.
 -- (The layout and the combat-safe dispel highlight follow Blizzard's CompactUnitFrame and EllesmereUI's
@@ -1227,7 +1420,7 @@ end
 -- from addons): a container whose groups are "a debuff you can dispel" (or any dispellable one), one
 -- per type; each group's button carries the tint (a gradient up from the bottom, a flat fill, or just
 -- the edge), the 2px edge and the type's icon, all placed on the tile, in that type's colour. The tile
--- pulses it (RP.init). Rebuilt when its look changes (a container's groups can't be changed).
+-- pulses it (an animation on the container). Rebuilt when its look changes (a container's groups can't be changed).
 function RP.dispelFilter()
     return get("dispelWho") == "all" and "HARMFUL" or "HARMFUL|RAID"
 end
@@ -1239,12 +1432,14 @@ function RP.buildDispel(t)
         -- only who it's for may have changed: the filters change live
         if t.dispelBox then
             for _, d in ipairs(RP.DISPEL_TYPES) do pcall(t.dispelBox.SetAuraGroupFilterString, t.dispelBox, d[1], RP.dispelFilter()) end
+            AuraKit.attachPulse(t.dispelBox)
         end
         return
     end
     t.dispelSig = sig
     if t.dispelBox then
         local old = t.dispelBox
+        AuraKit.stopPulse(old)
         old:Hide()
         pcall(old.SetEnabled, old, false)
         t.dispelBox = nil
@@ -1287,6 +1482,7 @@ function RP.buildDispel(t)
     if t.wfUnit then pcall(c.SetUnit, c, t.wfUnit) end
     c:SetShown(not t.sample)
     t.dispelBox = c
+    AuraKit.attachPulse(c)
 end
 
 ---------------------------------------------------------------------------
@@ -1537,7 +1733,7 @@ function RP.paintPower(t)
     if t.mpText:IsShown() or RP.numbersOn(t) then RP.paintNumbers(t) end
 end
 
--- Role, leader, raid marker, in combat, and the middle icon (ready check, summon, resurrection, phase).
+-- Role, leader, raid marker, and the middle icon (ready check, summon, resurrection, phase).
 function RP.paintIcons(t)
     local u = t.wfUnit
     local role = plain(UnitGroupRolesAssigned, u)
@@ -1641,6 +1837,25 @@ function RP.petOf(u)
     return Party.petOf(u)
 end
 
+-- No unit, no events, no aura scan. The aura containers keep listening until their unit is cleared.
+local function dropContainer(c)
+    if not c then return end
+    AuraKit.stopPulse(c)
+    pcall(c.SetUnit, c, nil)
+end
+
+function RP.clearUnit(t)
+    if not t then return end
+    UnregisterUnitWatch(t)
+    t:Hide()
+    t.wfUnit = nil
+    t:UnregisterAllEvents()
+    dropContainer(t.debuffs)
+    dropContainer(t.buffs)
+    dropContainer(t.defs)
+    dropContainer(t.dispelBox)
+end
+
 -- Who goes in which tile: you first (Include yourself), then party1 - 4; or by role (tanks, healers,
 -- damage). Each tile shows while its unit exists, its pet's beside it (Pets). Out of combat only.
 function RP.arrange()
@@ -1650,9 +1865,8 @@ function RP.arrange()
     -- drawn in the background
     if not RP.enabled() then
         for i = 1, RP.MAX do
-            for _, t in ipairs({ RP.tiles[i], RP.petTiles[i] }) do
-                UnregisterUnitWatch(t); t:Hide(); t.wfUnit = nil; t:UnregisterAllEvents()
-            end
+            RP.clearUnit(RP.tiles[i])
+            RP.clearUnit(RP.petTiles[i])
         end
         if ns.Click and ns.Click.header then pcall(ns.Click.apply) end
         return
@@ -1683,7 +1897,7 @@ function RP.arrange()
             if UnitExists(u) then members = members + 1 end
         else
             -- (an empty tile stops listening too: it has no one to draw)
-            UnregisterUnitWatch(t); t:Hide(); t.wfUnit = nil; t:UnregisterAllEvents()
+            RP.clearUnit(t)
         end
     end
     -- The pets: their own group, in their owners' order, packed with no gaps: the pets out now take the
@@ -1704,7 +1918,7 @@ function RP.arrange()
             if p.wfUnit ~= pu then RP.setUnit(p, pu) end
             if pets then RegisterUnitWatch(p) else UnregisterUnitWatch(p); p:Hide() end
         else
-            UnregisterUnitWatch(p); p:Hide(); p.wfUnit = nil; p:UnregisterAllEvents()
+            RP.clearUnit(p)
         end
     end
     RP.placePets(members, pets and petCount or 0)
@@ -1820,8 +2034,19 @@ end
 -- Everything again (an option changed).
 function RP.apply()
     if not RP.box then return end
-    if InCombatLockdown() then RP.pending = true; return end
+    if InCombatLockdown() then
+        -- Already hidden and not in use: nothing secure is waiting, so don't keep a regen listen.
+        if not RP.enabled() and not RP.testing and not RP.box:IsShown() then return end
+        RP.pending = true
+        return
+    end
     RP.pending = nil
+    -- Raid style off: clear the tiles and hide the box. No layout, no paint.
+    if not RP.enabled() and not RP.testing then
+        RP.arrange()
+        RP.applyVisibility()
+        return
+    end
     RP.layout()
     RP.place()
     if RP.testing then RP.showSamples(); return end   -- (the sample party stays up, in the new layout)
@@ -1845,6 +2070,26 @@ RP.SAMPLES = {
     { name = "Thornek", class = "HUNTER", role = "DAMAGER", hp = 0.38, mp = 0.9, dispel = "Poison", absorb = 0.15, pet = "Fang", missing = 1243, afk = true },
     { name = "Fenwick", class = "MAGE", role = "DAMAGER", hp = 0, mp = 0, dead = true, far = true },
 }
+
+-- The sample dispel pulse: the edge, the tint and the icon. Aggro stays at full alpha, so a sample
+-- that is not dispelling stops these. Real threat uses the same edge and must not be left pulsing.
+function RP.sampleRegions(t)
+    local regs = t.pulseRegs
+    if regs then return regs end
+    regs = { t.wash, t.sampleDispel }
+    for _, tex in ipairs(t.glow) do regs[#regs + 1] = tex end
+    t.pulseRegs = regs
+    return regs
+end
+
+function RP.startSamplePulse(t)
+    for _, r in ipairs(RP.sampleRegions(t)) do AuraKit.attachPulse(r) end
+end
+
+function RP.stopSamplePulse(t)
+    if not t.glow then return end
+    for _, r in ipairs(RP.sampleRegions(t)) do AuraKit.stopPulse(r) end
+end
 
 -- A sample member's tile, painted from the made-up values.
 function RP.paintSample(t, s)
@@ -1921,11 +2166,15 @@ function RP.paintSample(t, s)
             end
             t.sampleDispel:Show()
         end
-    elseif s.aggro then
-        local r, g, b = threatColor("target", s.aggro, 100)
-        t.glow.alpha(1)
-        t.glow.color(r, g, b, 1)
-        t.glow.shown(true)
+        RP.startSamplePulse(t)
+    else
+        RP.stopSamplePulse(t)
+        if s.aggro then
+            local r, g, b = threatColor("target", s.aggro, 100)
+            t.glow.alpha(1)
+            t.glow.color(r, g, b, 1)
+            t.glow.shown(true)
+        end
     end
     t:SetAlpha((s.far and get("rangeFade")) and (tonumber(get("rangeAlpha")) or 0.45) or 1)
 end
@@ -1971,6 +2220,7 @@ function RP.showSamples()
             RP.paintSample(t, s)
         else
             t.sample = nil
+            RP.stopSamplePulse(t)
             t:Hide()
         end
         if t.dispelBox then t.dispelBox:SetShown(s == nil) end         -- (the samples draw their own)
@@ -2008,6 +2258,7 @@ function RP.stopTest()
         t.sample, t.dispelRGB, p.sample, t.roleAtlas = nil, nil, nil, nil
         t.wfUnit, p.wfUnit = nil, nil           -- (every tile gets its real unit back)
         t:SetAlpha(1)
+        RP.stopSamplePulse(t)
         t.sampleDef:Hide()
         t.sampleDispel:Hide()
         if t.dispelBox then t.dispelBox:Show() end
@@ -2055,6 +2306,98 @@ end
 ---------------------------------------------------------------------------
 -- Start (from Party.init, at login, out of combat: secure buttons can't be made in combat)
 ---------------------------------------------------------------------------
+RP.EVENTS = { "GROUP_ROSTER_UPDATE", "PLAYER_ROLES_ASSIGNED", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED",
+    "PLAYER_REGEN_DISABLED", "PARTY_LEADER_CHANGED", "READY_CHECK", "READY_CHECK_CONFIRM",
+    "READY_CHECK_FINISHED", "RAID_TARGET_UPDATE", "INCOMING_RESURRECT_CHANGED",
+    "INCOMING_SUMMON_CHANGED", "UNIT_PET" }
+
+-- Raid style is on, or the box is still showing because combat has not let it hide.
+function RP.live()
+    if RP.enabled() or RP.testing then return true end
+    return RP.box and RP.box:IsShown()
+end
+
+function RP.onGroup(_, event)
+    if event == "PLAYER_REGEN_DISABLED" then
+        -- combat ends the sample party (the last moment its tiles can still be changed)
+        if RP.testing then RP.stopTest() end
+        return
+    end
+    if event == "PLAYER_REGEN_ENABLED" then
+        if RP.pending then RP.apply() end
+        RP.syncIdle()
+        return
+    end
+    if RP.testing or not RP.enabled() then return end    -- (the sample party keeps the tiles; off, nothing to do)
+    if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ROLES_ASSIGNED" or event == "PLAYER_ENTERING_WORLD" or event == "UNIT_PET" then
+        RP.arrange()
+        for _, t in ipairs(RP.tiles) do if t.wfUnit then RP.paintAll(t) end end
+        for _, p in ipairs(RP.petTiles) do if p.wfUnit then RP.paintPet(p) end end
+    else
+        -- (the ready check's icon lingers a few seconds after it ends, as the portrait frames' does)
+        for _, t in ipairs(RP.tiles) do if t.wfUnit then RP.paintIcons(t) end end
+        if event == "READY_CHECK_FINISHED" then
+            C_Timer.After(6.1, function()
+                if not RP.enabled() then return end
+                for _, t in ipairs(RP.tiles) do if t.wfUnit then RP.paintIcons(t) end end
+            end)
+        end
+    end
+end
+
+-- Range, five times a second, while the box is shown.
+function RP.onTick()
+    if not RP.box or not RP.box:IsVisible() then return end
+    for _, t in ipairs(RP.tiles) do
+        if t:IsVisible() and t.wfUnit and not t.sample then
+            pcall(Party.updateRange, t)
+        end
+    end
+end
+
+function RP.syncEvents()
+    local ev = RP.ev
+    if not ev then return end
+    if RP.live() then
+        if RP.evMode ~= "all" then
+            ev:UnregisterAllEvents()
+            for _, e in ipairs(RP.EVENTS) do pcall(ev.RegisterEvent, ev, e) end
+            RP.evMode = "all"
+        end
+    elseif RP.pending then
+        if RP.evMode ~= "regen" then
+            ev:UnregisterAllEvents()
+            ev:RegisterEvent("PLAYER_REGEN_ENABLED")
+            ev:RegisterEvent("PLAYER_REGEN_DISABLED")
+            RP.evMode = "regen"
+        end
+    elseif RP.evMode then
+        ev:UnregisterAllEvents()
+        RP.evMode = nil
+    end
+end
+
+function RP.syncTicker()
+    if RP.live() then
+        if not RP.rangeTicker then RP.rangeTicker = C_Timer.NewTicker(0.2, RP.onTick) end
+    elseif RP.rangeTicker then
+        RP.rangeTicker:Cancel()
+        RP.rangeTicker = nil
+    end
+end
+
+function RP.syncIdle()
+    RP.syncEvents()
+    RP.syncTicker()
+end
+
+-- Show or hide the raid style, and listen only while it is in use.
+function RP.sync()
+    if not RP.box then return end
+    if not RP.enabled() and RP.testing then RP.stopTest() else pcall(RP.apply) end
+    RP.syncIdle()
+end
+
 function RP.init()
     if RP.box then return end
     RP.box = CreateFrame("Frame", "WebbyFrames_RaidPartyBox", UIParent, "SecureHandlerStateTemplate")
@@ -2062,56 +2405,9 @@ function RP.init()
     RP.box:SetClampedToScreen(true)
     RP.box:Hide()
     for i = 1, RP.MAX do RP.makeTile(i); RP.makePetTile(i) end
-    -- the group, roles, leader, ready check, raid markers, summons and resurrections
-    local ev = CreateFrame("Frame")
-    for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PLAYER_ROLES_ASSIGNED", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED",
-                         "PLAYER_REGEN_DISABLED", "PARTY_LEADER_CHANGED", "READY_CHECK", "READY_CHECK_CONFIRM",
-                         "READY_CHECK_FINISHED", "RAID_TARGET_UPDATE", "INCOMING_RESURRECT_CHANGED",
-                         "INCOMING_SUMMON_CHANGED", "SPELLS_CHANGED", "UNIT_PET" }) do
-        pcall(ev.RegisterEvent, ev, e)
-    end
-    ev:SetScript("OnEvent", function(_, event)
-        if event == "SPELLS_CHANGED" then return end      -- (missing buffs: Party.watchMissing)
-        if event == "PLAYER_REGEN_DISABLED" then
-            -- combat ends the sample party (the last moment its tiles can still be changed)
-            if RP.testing then RP.stopTest() end
-        elseif event == "PLAYER_REGEN_ENABLED" then
-            if RP.pending then RP.apply() end
-        elseif RP.testing or not RP.enabled() then
-            return                                       -- (the sample party keeps the tiles; off, nothing to do)
-        elseif event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ROLES_ASSIGNED" or event == "PLAYER_ENTERING_WORLD" or event == "UNIT_PET" then
-            RP.arrange()
-            for _, t in ipairs(RP.tiles) do if t.wfUnit then RP.paintAll(t) end end
-            for _, p in ipairs(RP.petTiles) do if p.wfUnit then RP.paintPet(p) end end
-        else
-            -- (the ready check's icon lingers a few seconds after it ends, as Party.init keeps it)
-            for _, t in ipairs(RP.tiles) do if t.wfUnit then RP.paintIcons(t) end end
-            if event == "READY_CHECK_FINISHED" then
-                C_Timer.After(6.1, function() for _, t in ipairs(RP.tiles) do if t.wfUnit then RP.paintIcons(t) end end end)
-            end
-        end
-    end)
-    -- five times a second: range, the middle icon, in combat; every frame: the dispel pulse
-    C_Timer.NewTicker(0.2, function()
-        if not RP.box:IsVisible() then return end
-        for _, t in ipairs(RP.tiles) do
-            if t:IsVisible() and t.wfUnit and not t.sample then
-                pcall(Party.updateRange, t)
-                RP.paintIcons(t)
-            end
-        end
-    end)
-    RP.box:SetScript("OnUpdate", function()
-        local a = AuraKit.pulseAlpha()
-        for _, t in ipairs(RP.tiles) do
-            if t.dispelBox then t.dispelBox:SetAlpha(a) end
-            if t.sample and t.dispelRGB then t.glow.alpha(a); t.wash:SetAlpha(a); t.sampleDispel:SetAlpha(a) end
-        end
-    end)
+    RP.ev = CreateFrame("Frame")
+    RP.ev:SetScript("OnEvent", RP.onGroup)
+    -- (events and the range ticker start from RP.sync, and only while raid style is on)
     RP.setupEditMode()
-    -- the extras both styles share: missing buffs (once a second) and the healer mana list (twice)
     Party.makeManaBox()
-    Party.watchMissing()
-    C_Timer.NewTicker(0.5, function() pcall(Party.updateMana) end)
-    RP.apply()
 end

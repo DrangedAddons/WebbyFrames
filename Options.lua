@@ -579,6 +579,7 @@ Opt.SEARCH_WORDS = {
     buffBars = "timer bars", rpShieldStyle = "absorb", rpShieldEdge = "absorb",
     rpDefensives = "cooldowns wall divine ice block barkskin", rpSelf = "me player", rpSolo = "alone",
     clickTooltip = "click casting bindings", clickAllFrames = "click casting bindings",
+    clickCasting = "mouseover clique bindings spells",
 }
 
 -- Why a search result isn't in use now (nil: it is); the row to show above it that would bring it in (a
