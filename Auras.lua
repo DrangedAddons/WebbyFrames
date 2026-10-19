@@ -198,21 +198,20 @@ AuraKit.ALL_DISPEL = { includeDispelTypes = { Magic = true, Curse = true, Diseas
 -- The type of a debuff on `u` that you can dispel ("Magic", "Curse", "Disease", "Poison"), or with
 -- `all` any dispellable one; false for none (or an enemy: nothing of theirs is yours to dispel), nil
 -- when the game won't say. ("RAID" is the game's own "you can dispel this" filter.)
+-- (on every aura change of yours: one scratch table, no throwaway functions)
+local found = {}
 function AuraKit.dispelType(u, all)
-    local hostile = false
-    pcall(function() hostile = UnitCanAttack("player", u) and true or false end)
-    if hostile then return false end
-    local found = {}
-    local ok = pcall(function()
-        for i = 1, 40 do
-            local d = C_UnitAuras.GetAuraDataByIndex(u, i, all and "HARMFUL" or "HARMFUL|RAID")
-            if not d then break end
-            local t = d.dispelName
-            if isSecret(t) then error("hidden") end
-            if t and t ~= "" then found[t] = true end
-        end
-    end)
-    if not ok then return nil end
+    if ns.plain(UnitCanAttack, "player", u) then return false end
+    wipe(found)
+    local filter = all and "HARMFUL" or "HARMFUL|RAID"
+    for i = 1, 40 do
+        local ok, d = pcall(C_UnitAuras.GetAuraDataByIndex, u, i, filter)
+        if not ok or isSecret(d) then return nil end
+        if not d then break end
+        local t = d.dispelName
+        if isSecret(t) then return nil end
+        if t and t ~= "" then found[t] = true end
+    end
     for _, t in ipairs(AuraKit.DISPEL_ORDER) do if found[t] then return t end end
     return false
 end

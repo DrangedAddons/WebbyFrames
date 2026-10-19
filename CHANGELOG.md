@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.14.2
+Lighter in combat
+- Party frames only react to changes on you and your party (they were redrawing their icons for every unit about, nameplates included).
+- Your power bar redraws once per tick instead of twice.
+- Combo points are only looked at by rogues and druids.
+- Target and focus cast bars, threat, health colours, druid mana, target of target, your dispel glow and the healer mana list do the same work with far less waste.
+- Removed two leftover helpers nothing used any more.
+
 ## 1.14.1
 - A logo: a web with a W and an F, in the settings window's title bar (with the name stacked beside it), on the minimap button, in the AddOns list, on the Esc > Options page and in the DrangedAddons app.
 

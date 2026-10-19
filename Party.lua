@@ -517,6 +517,10 @@ function Party.toggleSamples()
     end
 end
 
+Party.GROUP = { "player", "party1", "party2", "party3", "party4" }
+Party.GROUP_UNIT = { player = true, party1 = true, party2 = true, party3 = true, party4 = true }
+Party.UNIT_ONLY = { UNIT_PHASE = true, UNIT_THREAT_SITUATION_UPDATE = true, UNIT_FLAGS = true, UNIT_CONNECTION = true, UNIT_PET = true }
+
 function Party.init()
     local ev = CreateFrame("Frame")
     for _, e in ipairs({ "GROUP_ROSTER_UPDATE", "PARTY_LEADER_CHANGED", "PLAYER_ROLES_ASSIGNED", "PLAYER_ENTERING_WORLD",
@@ -525,7 +529,9 @@ function Party.init()
                          "UNIT_FLAGS", "UNIT_CONNECTION", "UNIT_PET", "PLAYER_REGEN_DISABLED" }) do
         pcall(ev.RegisterEvent, ev, e)
     end
-    ev:SetScript("OnEvent", function(_, event)
+    ev:SetScript("OnEvent", function(_, event, unit)
+        -- (the unit events come for every unit about, nameplates included: only the group's matter)
+        if Party.UNIT_ONLY[event] and not Party.GROUP_UNIT[unit] then return end
         if event == "PLAYER_REGEN_DISABLED" then
             -- combat ends the sample party (the last moment its frames can still be changed)
             if Party.testing then Party.stopSamples() end
@@ -705,7 +711,7 @@ Party.missDirty = {}
 
 function Party.markMissing(u)
     if u then Party.missDirty[u] = true
-    else for _, x in ipairs({ "player", "party1", "party2", "party3", "party4" }) do Party.missDirty[x] = true end end
+    else for _, x in ipairs(Party.GROUP) do Party.missDirty[x] = true end end
 end
 
 -- Paints every party frame's missing buffs from what was last worked out (or the samples').
@@ -770,6 +776,7 @@ end
 -- set a priest, druid, paladin or shaman), class-coloured name and mana. Placed in Edit Mode.
 Party.HEALER_CLASS = { PRIEST = true, DRUID = true, PALADIN = true, SHAMAN = true }
 Party.MANA_POS = { point = "TOPLEFT", x = 20, y = -470 }
+Party.MANA_SAMPLES = { { name = "Lyssandra", class = "PRIEST", pct = 72 }, { name = "Bramblewood", class = "DRUID", pct = 38 } }
 
 function Party.makeManaBox()
     local m = CreateFrame("Frame", "WebbyFrames_HealerMana", UIParent)
@@ -816,21 +823,25 @@ function Party.updateMana()
     local on = getSetting("party", "healerMana") and frameOn("party")
     local sample = Party.manaEditing or Party.testing or (ns.RaidParty and ns.RaidParty.testing)
     if not on or (not sample and not IsInGroup()) or IsInRaid() then m:Hide(); return end
-    local units = {}
+    local units
     if sample then
-        units = { { name = "Lyssandra", class = "PRIEST", pct = 72 }, { name = "Bramblewood", class = "DRUID", pct = 38 } }
+        units = Party.MANA_SAMPLES
     else
+        -- (twice a second: plain() reads, no throwaway functions)
+        units = {}
         local roles = false
-        for _, u in ipairs({ "player", "party1", "party2", "party3", "party4" }) do
-            pcall(function() if UnitExists(u) and UnitGroupRolesAssigned(u) ~= "NONE" then roles = true end end)
+        for _, u in ipairs(Party.GROUP) do
+            if UnitExists(u) and (plain(UnitGroupRolesAssigned, u) or "NONE") ~= "NONE" then roles = true; break end
         end
-        for _, u in ipairs({ "player", "party1", "party2", "party3", "party4" }) do
+        for _, u in ipairs(Party.GROUP) do
             local healer = false
-            pcall(function()
-                if not UnitExists(u) then return end
-                if roles then healer = UnitGroupRolesAssigned(u) == "HEALER"
-                else healer = Party.HEALER_CLASS[select(2, UnitClass(u))] and UnitPowerType(u) == 0 end
-            end)
+            if UnitExists(u) then
+                if roles then healer = plain(UnitGroupRolesAssigned, u) == "HEALER"
+                else
+                    local ok, _, cls = pcall(UnitClass, u)
+                    healer = ok and not isSecret(cls) and Party.HEALER_CLASS[cls or ""] and plain(UnitPowerType, u) == 0 or false
+                end
+            end
             if healer then units[#units + 1] = { unit = u } end
         end
     end

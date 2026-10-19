@@ -431,22 +431,25 @@ end)
 -- Colours
 ---------------------------------------------------------------------------
 
+-- (both run on every health change: no throwaway functions)
 local function classColorOf(u)
-    local r, g, b
-    pcall(function()
-        if UnitIsPlayer(u) then
-            local _, token = UnitClass(u)
-            local c = token and RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
-            if c then r, g, b = c.r, c.g, c.b end
-        end
-    end)
-    return r, g, b
+    if not plain(UnitIsPlayer, u) then return end
+    local ok, _, token = pcall(UnitClass, u)
+    if not ok or isSecret(token) then return end
+    local c = token and RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
+    if c then return c.r, c.g, c.b end
 end
 
 local function reactionColorOf(u)
-    local r, g, b
-    pcall(function() r, g, b = UnitSelectionColor(u, true) end)
-    if type(r) == "number" then return r, g, b end
+    local ok, r, g, b = pcall(UnitSelectionColor, u, true)
+    if ok and type(r) == "number" then return r, g, b end
+end
+
+-- Your own class token ("DRUID"), read once. (On ns, as are the other helpers added since: this file
+-- is close to Lua's limit of 200 locals in one chunk.)
+function ns.playerClass()
+    if not ns.PLAYER_CLASS then ns.PLAYER_CLASS = select(2, UnitClass("player")) end
+    return ns.PLAYER_CLASS
 end
 
 
@@ -1146,9 +1149,11 @@ local function landDamage(f)
     end
 end
 
+ns.DMG_UNITS = { "target", "focus" }
 local function flyDamage(spell)
     local token = {}
-    for _, f in ipairs({ frames.target, frames.focus }) do
+    for _, unit in ipairs(ns.DMG_UNITS) do
+        local f = frames[unit]
         if f and f.dmgBar and f.dmgBar:IsShown() then
             -- a quick spell's hit can come in just before the cast's own "succeeded": already landed
             if GetTime() - (f.hitAt or 0) < 0.2 then
@@ -1159,7 +1164,8 @@ local function flyDamage(spell)
         end
     end
     C_Timer.After(FLY_MAX, function()
-        for _, f in ipairs({ frames.target, frames.focus }) do
+        for _, unit in ipairs(ns.DMG_UNITS) do
+            local f = frames[unit]
             if f and f.dmgFlying == token then landDamage(f) end
         end
     end)
@@ -1352,7 +1358,7 @@ local function updatePower(f)
     -- bar under it the form's rage or energy
     local formToken = token
     local swap = f.altMana and getSetting("player", "druidMana") and getSetting("player", "druidBars") == "mana"
-        and not isSecret(token) and token ~= "MANA" and select(2, UnitClass("player")) == "DRUID"
+        and not isSecret(token) and token ~= "MANA" and ns.playerClass() == "DRUID"
     local MANA = Enum.PowerType and Enum.PowerType.Mana or 0
     if swap then token = "MANA" end
     local fill, tinted = f.powerTex, true
@@ -1394,19 +1400,21 @@ local function updatePower(f)
     -- a druid in bear or cat form: their mana in the slim bar under the frame
     local am = f.altMana
     if am then
-        local show = getSetting("player", "druidMana") and select(2, UnitClass("player")) == "DRUID"
+        local show = getSetting("player", "druidMana") and ns.playerClass() == "DRUID"
             and not isSecret(formToken) and formToken ~= "MANA"
         am:SetShown(show and true or false)
         if show then
             -- (the slim bar: mana, or with Mana first the form's own power, in its own fill)
             local file = BAR_FILE.player .. (swap and (POWER_FILE[formToken] or "Rage") or "Mana")
             if am.file ~= file then am.file = file; am.bar:SetStatusBarTexture(file) end
-            local kind = swap and nil or MANA
-            pcall(function()
-                am.bar:SetMinMaxValues(0, kind and UnitPowerMax("player", kind) or UnitPowerMax("player"))
-                setBarValue(f, am.bar, kind and UnitPower("player", kind) or UnitPower("player"))
-                am.text:SetText(AbbreviateLargeNumbers(kind and UnitPower("player", kind) or UnitPower("player")))
-            end)
+            -- (the values may be hidden: they only go to setters, never tested)
+            local maxP, curP
+            if swap then maxP, curP = UnitPowerMax("player"), UnitPower("player")
+            else maxP, curP = UnitPowerMax("player", MANA), UnitPower("player", MANA) end
+            pcall(am.bar.SetMinMaxValues, am.bar, 0, maxP)
+            pcall(setBarValue, f, am.bar, curP)
+            local okA, txt = pcall(AbbreviateLargeNumbers, curP)
+            if okA then pcall(am.text.SetText, am.text, txt) end
             am.text:SetShown((f.textMode or getSetting("player", "textMode")) ~= "off")
         end
     end
@@ -1932,16 +1940,14 @@ end
 -- Colour is the gradient (green to red on the scaled percent) or Blizzard's own threat colours.
 -- An older saved choice (status, colourblind, class) reads as the gradient.
 local function threatColor(base, status, scaled)
-    local scheme = getSetting(base, "threatColors")
     local r, g, b
-    pcall(function()
-        if scheme == "blizzard" then
-            r, g, b = GetThreatStatusColor(status)
-        else
-            local p = math.max(0, math.min(1, (scaled or 0) / 100))
-            if p < 0.5 then r, g, b = p * 2, 1, 0 else r, g, b = 1, 1 - ((p - 0.5) * 2), 0 end
-        end
-    end)
+    if getSetting(base, "threatColors") == "blizzard" then
+        local ok, cr, cg, cb = pcall(GetThreatStatusColor, status)
+        if ok then r, g, b = cr, cg, cb end
+    elseif not isSecret(scaled) then
+        local p = math.max(0, math.min(1, (tonumber(scaled) or 0) / 100))
+        if p < 0.5 then r, g, b = p * 2, 1, 0 else r, g, b = 1, 1 - ((p - 0.5) * 2), 0 end
+    end
     if not r then r, g, b = 1, 1, 0 end
     return r, g, b
 end
@@ -1981,6 +1987,23 @@ local function threatOverNext(mob)
     return math.floor(mine / second * 100 + 0.5)
 end
 
+-- Your threat on u: status, scaled %, and the % to show. Run inside pcall (the values can be hidden,
+-- and testing a hidden one errors): an error means nothing to show.
+function ns.readThreat(u, wantNumber)
+    if not UnitExists(u) or not UnitCanAttack("player", u) then return end
+    -- PvP: players (and their pets and totems) have no threat to show
+    if UnitIsPlayer(u) or UnitPlayerControlled(u) then return end
+    local tanking, st, sc, raw = UnitDetailedThreatSituation("player", u)
+    local pct = raw or sc
+    -- holding aggro: the raw % would sit frozen, so measure against the next highest instead.
+    -- Glow-only uses the status from the call above; the group scan is only for the number.
+    if tanking and wantNumber then
+        local ok, over = pcall(threatOverNext, u)
+        if ok and over then pct = over end
+    end
+    return st, sc, pct
+end
+
 local function updateThreat(f)
     if not f.threatText then return end
     -- what to show: "both" (glow and number), "glow", "number" or "off"
@@ -1989,27 +2012,14 @@ local function updateThreat(f)
     -- where the number goes: "text" (just the number, by the raid marker) or "box" (above the name row)
     local inBox = getSetting(f.baseUnit, "threatStyle") == "box"
     local status, scaled, pct
-    pcall(function()
-        if not (wantGlow or wantNumber) then return end
-        local u = f.wfUnit
-        if not UnitExists(u) or not UnitCanAttack("player", u) then return end
-        -- PvP: players (and their pets and totems) have no threat to show
-        if UnitIsPlayer(u) or UnitPlayerControlled(u) then return end
-        local tanking, st, sc, raw = UnitDetailedThreatSituation("player", u)
-        status, scaled = st, sc
-        pct = raw or sc
-        -- holding aggro: the raw % would sit frozen, so measure against the next highest instead.
-        -- Glow-only uses the status from the call above; the group scan is only for the number.
-        if tanking and wantNumber then
-            local over
-            pcall(function() over = threatOverNext(u) end)
-            if over then pct = over end
-        end
-    end)
-    -- Values may be protected: they only go to SetFormattedText, and comparisons are inside pcall. The glow
-    -- shows from status 1 up (about to pull, tanking); a status that can't be compared shows none.
-    local shown, glowOn, has = false, false, false
-    pcall(function() has = (status ~= nil and pct ~= nil) end)
+    if wantGlow or wantNumber then
+        local ok, st, sc, p = pcall(ns.readThreat, f.wfUnit, wantNumber)
+        if ok then status, scaled, pct = st, sc, p end
+    end
+    -- Values may be protected: they only go to SetFormattedText and are only compared when plain. The
+    -- glow shows from status 1 up (about to pull, tanking); a status that can't be compared shows none.
+    local shown, glowOn = false, false
+    local has = (isSecret(status) or status ~= nil) and (isSecret(pct) or pct ~= nil)
     if has then
         local r, g, b = threatColor(f.baseUnit, status, scaled)
         if wantNumber then
@@ -2017,7 +2027,7 @@ local function updateThreat(f)
             shown = pcall(fs.SetFormattedText, fs, "%d%%", pct)
             if shown then fs:SetTextColor(r, g, b) end
         end
-        if wantGlow then pcall(function() glowOn = status >= 1 end) end
+        glowOn = wantGlow and not isSecret(status) and status >= 1
         if glowOn then f.threatGlow:SetVertexColor(r, g, b) end
     end
     local byMarker = not inBox and f.threatBadge ~= nil
@@ -2197,7 +2207,16 @@ local function placeCastbar(f)
     cb.text:SetShown(getSetting(f.baseUnit, "castText") and true or false)
 end
 
--- Copies Blizzard's bar onto ours while that bar is shown.
+-- The cast's colour: Retail bars name their cast type in barType; older ones have channeling /
+-- notInterruptible flags. (Run in pcall: a flag could be hidden.)
+function ns.castColor(bar)
+    if CAST_COLORS[bar.barType] then return CAST_COLORS[bar.barType] end
+    if bar.notInterruptible then return CAST_COLORS.uninterruptable end
+    if bar.channeling then return CAST_COLORS.channel end
+end
+
+-- Copies Blizzard's bar onto ours while that bar is shown. Every frame of a cast, so no throwaway
+-- functions: each call goes straight into pcall.
 local function mirrorCastbar(f)
     local bar, cb = f.castbar, f.cb
     local box = cb.box
@@ -2205,22 +2224,17 @@ local function mirrorCastbar(f)
         if box:IsShown() then box:Hide() end
         return
     end
-    pcall(function() cb:SetMinMaxValues(bar:GetMinMaxValues()) end)
-    pcall(function() cb:SetValue(bar:GetValue()) end)
+    pcall(cb.SetMinMaxValues, cb, bar:GetMinMaxValues())
+    pcall(cb.SetValue, cb, bar:GetValue())
     box:SetAlpha(bar:GetAlpha())
-    -- Retail bars name their cast type in barType; older ones have channeling / notInterruptible flags
-    local c = CAST_COLORS.standard
-    pcall(function()
-        if CAST_COLORS[bar.barType] then c = CAST_COLORS[bar.barType]
-        elseif bar.notInterruptible then c = CAST_COLORS.uninterruptable
-        elseif bar.channeling then c = CAST_COLORS.channel end
-    end)
+    local ok, c = pcall(ns.castColor, bar)
+    if not (ok and c) then c = CAST_COLORS.standard end
     cb:SetStatusBarColor(c[1], c[2], c[3], 1)
     -- the default fill is grey art made for tinting; a chosen texture keeps its own look, like the health bar
-    local plain = not f.customTex
-    pcall(function() cb:GetStatusBarTexture():SetDesaturated(plain) end)
-    if bar.Text then pcall(function() cb.text:SetText(bar.Text:GetText()) end) end
-    if bar.Icon then pcall(function() cb.icon:SetTexture(bar.Icon:GetTexture()) end) end
+    local tex = cb:GetStatusBarTexture()
+    if tex then tex:SetDesaturated(not f.customTex) end
+    if bar.Text then pcall(cb.text.SetText, cb.text, bar.Text:GetText()) end
+    if bar.Icon then pcall(cb.icon.SetTexture, cb.icon, bar.Icon:GetTexture()) end
     if not box:IsShown() then box:Show() end
 end
 
@@ -2410,7 +2424,7 @@ function Extras.editCombo(on)
 end
 
 function Extras.combo(f)
-    local _, class = UnitClass("player")
+    local class = ns.playerClass()
     local want = (class == "ROGUE" or class == "DRUID") and getSetting("target", "comboPoints")
     -- druids: only in cat form (the form with energy); in Edit Mode, always (to place them)
     if want and class == "DRUID" and not f.comboEditing then
@@ -2598,25 +2612,6 @@ function Extras.tint(f)
     end
 end
 
--- Opens the colour picker on a frame's custom colour (and switches it to the custom colour).
-function Extras.pickColor(unit, set)
-    local old = Extras.tintColor(unit) or { 1, 1, 1 }
-    Extras.openPicker(old, function(r, g, b)
-        set(unit, "frameColor", { r, g, b })
-        set(unit, "frameTint", "custom")
-    end)
-end
-
--- Opens the colour picker on the custom colour for hostile NPCs' health bars (and switches to it).
-function Extras.pickNpcColor(unit, set)
-    local c = getSetting(unit, "npcColorRGB")
-    local old = type(c) == "table" and { c[1] or 0.1, c[2] or 0.8, c[3] or 0.1 } or { 0.1, 0.8, 0.1 }
-    Extras.openPicker(old, function(r, g, b)
-        set(unit, "npcColorRGB", { r, g, b })
-        set(unit, "npcColor", "custom")
-    end)
-end
-
 -- Blizzard's colour picker, starting at `old`; apply(r, g, b) as it changes (and back to old on cancel).
 -- The picker reports every movement while you drag; the frames are updated with the latest colour at
 -- most every 0.1s, and an error can't escape into the picker.
@@ -2668,10 +2663,15 @@ function Extras.init()
     local ev = CreateFrame("Frame")
     ev:RegisterEvent("RAID_TARGET_UPDATE")
     ev:RegisterEvent("PLAYER_TARGET_CHANGED")
-    pcall(ev.RegisterUnitEvent, ev, "UNIT_POWER_UPDATE", "player")
-    pcall(ev.RegisterUnitEvent, ev, "UNIT_POWER_FREQUENT", "player")
-    pcall(ev.RegisterUnitEvent, ev, "UNIT_MAXPOWER", "player")
-    pcall(ev.RegisterUnitEvent, ev, "UNIT_DISPLAYPOWER", "player")   -- (a druid shifting in or out of cat form)
+    -- combo points ride on your power events: only rogues and druids have any
+    local cls = ns.playerClass()
+    if cls == "ROGUE" or cls == "DRUID" then
+        if not pcall(ev.RegisterUnitEvent, ev, "UNIT_POWER_FREQUENT", "player") then
+            pcall(ev.RegisterUnitEvent, ev, "UNIT_POWER_UPDATE", "player")
+        end
+        pcall(ev.RegisterUnitEvent, ev, "UNIT_MAXPOWER", "player")
+        pcall(ev.RegisterUnitEvent, ev, "UNIT_DISPLAYPOWER", "player")   -- (a druid shifting in or out of cat form)
+    end
     pcall(ev.RegisterUnitEvent, ev, "UNIT_HAPPINESS", "pet")
     pcall(ev.RegisterUnitEvent, ev, "UNIT_PET", "player")
     pcall(ev.RegisterEvent, ev, "PET_UI_UPDATE")
@@ -3361,13 +3361,14 @@ local function createFrame(unit)
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then pcall(updatePrediction, self)
         else updateAll(self) end
     end)
+    -- smooth energy / rage / focus ticks on your own frame (every change: the plain power update would
+    -- then only redraw the bar a second time)
+    local frequent = isPlayer and pcall(f.RegisterUnitEvent, f, "UNIT_POWER_FREQUENT", unit)
     for _, e in ipairs({ "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
                          "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_PORTRAIT_UPDATE", "UNIT_MODEL_CHANGED", "UNIT_FACTION", "UNIT_CONNECTION", "UNIT_AURA",
                          "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED", "UNIT_HEAL_ABSORB_AMOUNT_CHANGED", "UNIT_COMBAT" }) do
-        pcall(f.RegisterUnitEvent, f, e, unit)
+        if not (frequent and e == "UNIT_POWER_UPDATE") then pcall(f.RegisterUnitEvent, f, e, unit) end
     end
-    -- smooth energy / rage / focus ticks on your own frame
-    if isPlayer then pcall(f.RegisterUnitEvent, f, "UNIT_POWER_FREQUENT", unit) end
     f:RegisterEvent("PLAYER_ENTERING_WORLD")
     f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
     -- who leads the group (the crown)
@@ -3467,8 +3468,8 @@ local function createSmallFrame(unit, wf, index)
             local u = self.wfUnit
             if not UnitExists(u) then return end
             local guid = UnitGUID(u)
-            local ok, same = pcall(function() return guid == self.lastGUID end)
-            if not (ok and same) then
+            local same = not isSecret(guid) and not isSecret(self.lastGUID) and guid == self.lastGUID
+            if not same then
                 self.lastGUID = guid
                 pcall(updateAll, self)
             else
