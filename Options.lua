@@ -1416,9 +1416,16 @@ local function buildSettings()
             B.dropdown("rpNamePos", "Name position", "Where the name sits on the tile.", "topleft", { { "topleft", "Top left" }, { "top", "Top" }, { "center", "Middle" } }),
             B.slider("rpNameMax", "Name length", "The most letters of a name shown (0: all of it).", defaultFor("party", "rpNameMax"), 0, 20, 1,
                 function(v) v = math.floor(v + 0.5); return v == 0 and "All" or string.format("%d", v) end),
-            B.check("rpPets", "Pets", "Each member's pet as a small tile beside theirs (under it when side by side).", false),
             B.pair({ "rpAFK", "Show AFK", "Away members say AFK on their tile.", true },
                    { "rpHoverEdge", "Edge on mouseover", "A light edge round the tile under your mouse, like the white one round your target.", true }))
+        local rpPets = B.check("rpPets", "Pets", "The group's pets as their own group of tiles, as wide as the members' and in their owners' order, with no gaps for members without one.", false)
+        local petOpts = {
+            B.dropdown("rpPetPos", "Pet group", "After the party: on down the stack (or on along the row when side by side), like Blizzard's raid frames.\nBeside the party: a column to the right of the stack (or a row under it when side by side).", "after",
+                { { "after", "After the party" }, { "beside", "Beside the party" } }),
+            B.slider("rpPetHeight", "Pet height", "How tall each pet tile is (never taller than the members').", defaultFor("party", "rpPetHeight"), 14, 60, 1, px),
+        }
+        B.under(rpPets, on("rpPets"), unpack(petOpts))
+        B.showIf(raid, rpPets, unpack(petOpts))
         B.pair({ "missingBuffs", "Missing buffs", "On each member, the icons of buffs they're missing that you can cast: Fortitude, Spirit, Mark of the Wild, Arcane Intellect, Thorns on tanks, and a paladin blessing chosen by their role. Checked out of combat.", true },
                { "healerMana", "Healer mana", "A small list of your group's healers and their mana, placed in Edit Mode (Webby Healer Mana).", false })
         local fade = B.check("rangeFade", "Fade when out of range", "Members too far away for your spells fade out.", true)

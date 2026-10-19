@@ -68,7 +68,7 @@ local UNIT_DEFAULTS = {
               rpHealthColor = "class", rpHealthCustom = { 0.15, 0.75, 0.25 }, rpMissingDark = 75,
               rpDispelStyle = "gradient", rpDispelIcon = true,
               rpNameColor = "white", rpNameMax = 0, rpNamePos = "topleft",
-              rpHoverEdge = true, rpPets = false, rpSolo = false, rpAFK = true,
+              rpHoverEdge = true, rpPets = false, rpPetPos = "after", rpPetHeight = 24, rpSolo = false, rpAFK = true,
               rpDeadColor = { 0.3, 0.1, 0.1 }, rpOfflineColor = { 0.35, 0.35, 0.35 },
               rpShieldStyle = "striped", rpShieldEdge = false,
               -- both styles: fading out of range, missing buffs, the healer mana list, tooltips

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.15.0
+Raid-style pets, reworked
+- Pets on the raid-style party frames are now their own group, as Blizzard's raid frames and EllesmereUI do it: tiles as wide as the members', in their owners' order, packed with no gaps for members without a pet.
+- Pet group: after the party (on down the stack, or on along the row when side by side) or beside it (a column to the right, or a row underneath).
+- Pet height: how tall each pet tile is.
+- The sample party shows its pet in the pet group too.
+
 ## 1.14.3
 Settings tidy-up
 - Paired switches and sliders now line up with the rest of the rows and the controls column.

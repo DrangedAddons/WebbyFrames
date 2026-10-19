@@ -1644,26 +1644,46 @@ function RP.arrange()
     end
     local on = RP.enabled()
     local pets = on and get("rpPets")
+    local members = 0
     for i = 1, RP.MAX do
-        local t, p = RP.tiles[i], RP.petTiles[i]
+        local t = RP.tiles[i]
         local u = list[i]
         if u then
             if t.wfUnit ~= u then RP.setUnit(t, u) end
             if on then RegisterUnitWatch(t) else UnregisterUnitWatch(t); t:Hide() end
-            local pu = RP.petOf(u)
+            if UnitExists(u) then members = members + 1 end
+        else
+            UnregisterUnitWatch(t); t:Hide(); t.wfUnit = nil
+        end
+    end
+    -- The pets: their own group, in their owners' order, packed with no gaps: the pets out now take the
+    -- first pet tiles, and the rest of the group's pet units the tiles after them (so a pet summoned in
+    -- combat, when nothing can move, shows straight after the others).
+    local out, later = {}, {}
+    for _, u in ipairs(list) do
+        local pu = RP.petOf(u)
+        if pu then
+            if UnitExists(pu) then out[#out + 1] = pu else later[#later + 1] = pu end
+        end
+    end
+    local petCount = #out
+    for _, pu in ipairs(later) do out[#out + 1] = pu end
+    for i = 1, RP.MAX do
+        local p, pu = RP.petTiles[i], out[i]
+        if pu then
             if p.wfUnit ~= pu then RP.setUnit(p, pu) end
             if pets then RegisterUnitWatch(p) else UnregisterUnitWatch(p); p:Hide() end
         else
-            UnregisterUnitWatch(t); t:Hide(); t.wfUnit = nil
             UnregisterUnitWatch(p); p:Hide(); p.wfUnit = nil
         end
     end
+    RP.placePets(members, pets and petCount or 0)
     -- (click casting again: a resurrect binding names each tile's unit)
     if ns.Click and ns.Click.header then pcall(ns.Click.apply) end
 end
 
--- Size and spot of every tile (stacked or side by side, the party's Layout), its pet's beside it, and
--- the box round them.
+-- Size and spot of every tile (stacked or side by side, the party's Layout); the pet group and the box
+-- round them all: RP.placePets.
 function RP.layout()
     if InCombatLockdown() then RP.pending = true; return end
     RP.box:SetScale(get("scale") or 1)
@@ -1671,22 +1691,18 @@ function RP.layout()
     RP.px = px
     local w, h, gap = RP.snap(get("rpWidth") or 96, px), RP.snap(get("rpHeight") or 48, px), RP.snap(get("rpGap") or 3, px)
     local across = get("partyLayout") == "horizontal"
-    local pets = get("rpPets") and true or false
-    local pw, ph = RP.snap(w * 0.6, px), RP.snap(math.max(16, h * 0.45), px)
+    -- (pet tiles: as wide as the members', their own height; placed by RP.placePets)
+    local pw, ph = w, RP.snap(math.min(h, tonumber(get("rpPetHeight")) or 24), px)
+    RP.dim = { w = w, h = h, gap = gap, pw = pw, ph = ph, across = across }
     local tex = resolveTexture(get("barTexture")) or RP.FILL
     local ptex = resolveTexture(get("powerTexture")) or RP.POWER_FILL     -- (the party's Power texture, both styles)
     local font = resolveFont(get("font"))
-    -- (stacked: pets to the right; side by side: pets underneath)
     local stepX, stepY = across and (w + gap) or 0, across and 0 or (h + gap)
     for i = 1, RP.MAX do
         local t, p = RP.tiles[i], RP.petTiles[i]
         t:SetSize(w, h)
         t:ClearAllPoints()
         t:SetPoint("TOPLEFT", RP.box, "TOPLEFT", (i - 1) * stepX, -(i - 1) * stepY)
-        p:SetSize(pw, ph)
-        p:ClearAllPoints()
-        if across then p:SetPoint("TOPLEFT", t, "BOTTOMLEFT", 0, -gap)
-        else p:SetPoint("TOPLEFT", t, "TOPRIGHT", gap, 0) end
         -- (1px insets and edges, in screen pixels)
         t.hp:SetPoint("TOPLEFT", t, "TOPLEFT", px, -px)
         t.mp:ClearAllPoints()
@@ -1715,9 +1731,37 @@ function RP.layout()
         RP.placeAuras(t)
         RP.buildDispel(t)
     end
-    local bw = across and (RP.MAX * (w + gap) - gap) or (w + (pets and (gap + pw) or 0))
-    local bh = across and (h + (pets and (gap + ph) or 0)) or (RP.MAX * (h + gap) - gap)
-    RP.box:SetSize(bw, bh)
+    RP.placePets(RP.shownMembers or RP.MAX, RP.shownPets or 0)
+end
+
+-- The pet group's tiles, after `members` member tiles (Pet group: After the party: on down the stack,
+-- or on along the row; Beside the party: a column to the right of the stack, or a row under the row),
+-- `pets` of them out now; and the box round members and pets. Out of combat only.
+function RP.placePets(members, pets)
+    local d = RP.dim
+    if not d or InCombatLockdown() then return end
+    RP.shownMembers, RP.shownPets = members, pets
+    local w, h, gap, pw, ph, across = d.w, d.h, d.gap, d.pw, d.ph, d.across
+    local after = (get("rpPetPos") or "after") == "after"
+    local right, bottom = 0, 0
+    local function spot(p, x, y, sw, sh, counts)
+        p:SetSize(sw, sh)
+        p:ClearAllPoints()
+        p:SetPoint("TOPLEFT", RP.box, "TOPLEFT", x, -y)
+        if counts then right, bottom = math.max(right, x + sw), math.max(bottom, y + sh) end
+    end
+    -- (the box: always room for a full party, as before; and the pets out now)
+    if across then right, bottom = RP.MAX * (w + gap) - gap, h else right, bottom = w, RP.MAX * (h + gap) - gap end
+    for k = 1, RP.MAX do
+        local x, y
+        if across then
+            if after then x, y = members * (w + gap) + (k - 1) * (pw + gap), 0 else x, y = (k - 1) * (pw + gap), h + gap end
+        else
+            if after then x, y = 0, members * (h + gap) + (k - 1) * (ph + gap) else x, y = w + gap, (k - 1) * (ph + gap) end
+        end
+        spot(RP.petTiles[k], x, y, pw, ph, k <= pets)
+    end
+    RP.box:SetSize(right, bottom)
 end
 
 -- The box's saved spot for this Edit Mode layout.
@@ -1863,10 +1907,31 @@ function RP.showSamples()
         if i > 1 or get("rpSelf") then list[#list + 1] = s end
     end
     local pets = get("rpPets")
-    for i, t in ipairs(RP.tiles) do
-        local p = RP.petTiles[i]
-        UnregisterUnitWatch(t)
+    -- (the sample pets, packed into the pet group as the real ones are)
+    local samplePets = {}
+    if pets then
+        for _, s in ipairs(list) do if s.pet then samplePets[#samplePets + 1] = s.pet end end
+    end
+    for i, p in ipairs(RP.petTiles) do
         UnregisterUnitWatch(p)
+        local name = samplePets[i]
+        if name then
+            p.sample = nil
+            if p.wfUnit ~= "player" then RP.setUnit(p, "player") end
+            p.sample = name
+            p.name:SetText(name)
+            p.hp:SetMinMaxValues(0, 100)
+            p.hp:SetValue(75)
+            p.sel.shown(false)
+            p:Show()
+        else
+            p.sample = nil
+            p:Hide()
+        end
+    end
+    RP.placePets(#list, #samplePets)
+    for i, t in ipairs(RP.tiles) do
+        UnregisterUnitWatch(t)
         local s = list[i]
         if s then
             t.sample = nil
@@ -1883,20 +1948,6 @@ function RP.showSamples()
             if c then pcall(c.SetEditModePreviewEnabled, c, s ~= nil) end
         end
         if t.defs then t.defs:SetShown(s == nil and get("rpDefensives") and true or false) end
-        -- a sample pet
-        if s and s.pet and pets then
-            p.sample = nil
-            if p.wfUnit ~= "player" then RP.setUnit(p, "player") end
-            p.sample = s.pet
-            p.name:SetText(s.pet)
-            p.hp:SetMinMaxValues(0, 100)
-            p.hp:SetValue(75)
-            p.sel.shown(false)
-            p:Show()
-        else
-            p.sample = nil
-            p:Hide()
-        end
     end
     Party.updateMissing()
     Party.updateMana()
