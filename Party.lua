@@ -532,6 +532,8 @@ function Party.init()
     ev:SetScript("OnEvent", function(_, event, unit)
         -- (the unit events come for every unit about, nameplates included: only the group's matter)
         if Party.UNIT_ONLY[event] and not Party.GROUP_UNIT[unit] then return end
+        -- (the portrait frames not in use: the raid style, or the party frames off)
+        if not Party.portraitsOn() and event ~= "PLAYER_REGEN_DISABLED" then return end
         if event == "PLAYER_REGEN_DISABLED" then
             -- combat ends the sample party (the last moment its frames can still be changed)
             if Party.testing then Party.stopSamples() end
@@ -716,7 +718,8 @@ end
 
 -- Paints every party frame's missing buffs from what was last worked out (or the samples').
 function Party.updateMissing()
-    local on = getSetting("party", "missingBuffs")
+    -- (the party frames off: nothing to work out or paint)
+    local on = getSetting("party", "missingBuffs") and frameOn("party")
     if not InCombatLockdown() then
         for u in pairs(Party.missDirty) do
             Party.missDirty[u] = nil
@@ -796,14 +799,26 @@ function Party.makeManaBox()
     local lib = LibStub and LibStub("LibEditMode", true)
     if lib then
         lib:AddFrame(m, function(_, layoutName, point, x, y)
+            local active = layoutName == lib:GetActiveLayoutName()
+            if active and ns.snapFrame then
+                local sp, sx, sy = ns.snapFrame(m)       -- (lines up with the other frames, as they do)
+                if sp then point, x, y = sp, sx, sy end
+            end
             local u = unitData("party", true, layoutName)
             u.hmPoint, u.hmX, u.hmY = point, x, y
-            if layoutName == lib:GetActiveLayoutName() then Party.placeManaBox() end
+            if active then Party.placeManaBox() end
         end, Party.MANA_POS, "Webby Healer Mana")
-        lib:RegisterCallback("enter", function() Party.manaEditing = true; Party.updateMana() end)
-        lib:RegisterCallback("exit", function() Party.manaEditing = nil; Party.updateMana() end)
         lib:RegisterCallback("layout", function() C_Timer.After(0, Party.placeManaBox) end)
     end
+    -- (for Edit Mode's toolbar, snapping and EllesmereUI's Unlock Mode; its sample lines while either is open)
+    ns.addMover({
+        frame = m, label = "Healer Mana", page = "party",
+        store = function(point, x, y) local u = unitData("party", true); u.hmPoint, u.hmX, u.hmY = point, x, y end,
+        place = Party.placeManaBox,
+        reset = function() local u = unitData("party", true); u.hmPoint, u.hmX, u.hmY = nil, nil, nil; Party.placeManaBox() end,
+        enter = function() Party.manaEditing = true; Party.updateMana() end,
+        exit = function() Party.manaEditing = nil; Party.updateMana() end,
+    })
     Party.placeManaBox()
 end
 
@@ -1129,7 +1144,7 @@ function RP.makePetTile(i)
     end)
     p:SetScript("OnLeave", function(self) self.hov.shown(false); GameTooltip:Hide() end)
     p:SetScript("OnEvent", function(self, event)
-        if self.sample then return end
+        if self.sample or not self.wfUnit then return end
         if event == "PLAYER_TARGET_CHANGED" then RP.paintSelected(self) else RP.paintPet(self) end
     end)
     p:Hide()
@@ -1195,6 +1210,9 @@ function RP.placeAuras(t)
     end
     place(t.debuffs, "BOTTOMLEFT", 2, 2, s, 3, "right")
     place(t.buffs, "BOTTOMRIGHT", -2, 2, s, 3, "left")
+    -- (each on or off: Party page, Buffs and debuffs)
+    if t.debuffs then t.debuffs:SetShown(get("rpDebuffs") ~= false) end
+    if t.buffs then t.buffs:SetShown(get("rpBuffs") ~= false) end
     if t.defs then
         place(t.defs, "LEFT", 0, 0, ds, 2, "right")
         t.defs:ClearAllPoints()
@@ -1577,7 +1595,7 @@ function RP.paintAll(t)
 end
 
 function RP.onEvent(t, event)
-    if t.sample then return end          -- (a sample member: nothing real to show)
+    if t.sample or not t.wfUnit then return end      -- (a sample member, or an empty tile: nothing real to show)
     if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" or event == "UNIT_CONNECTION" or event == "UNIT_FLAGS" then
         RP.paintHealth(t)
     elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then
@@ -1628,6 +1646,17 @@ end
 function RP.arrange()
     if InCombatLockdown() then RP.pending = true; return end
     if RP.testing then return end
+    -- raid style not in use (portrait frames, or the party frames off): no units, no events, nothing
+    -- drawn in the background
+    if not RP.enabled() then
+        for i = 1, RP.MAX do
+            for _, t in ipairs({ RP.tiles[i], RP.petTiles[i] }) do
+                UnregisterUnitWatch(t); t:Hide(); t.wfUnit = nil; t:UnregisterAllEvents()
+            end
+        end
+        if ns.Click and ns.Click.header then pcall(ns.Click.apply) end
+        return
+    end
     local list = {}
     if get("rpSelf") then list[#list + 1] = "player" end
     for i = 1, 4 do list[#list + 1] = "party" .. i end
@@ -1653,7 +1682,8 @@ function RP.arrange()
             if on then RegisterUnitWatch(t) else UnregisterUnitWatch(t); t:Hide() end
             if UnitExists(u) then members = members + 1 end
         else
-            UnregisterUnitWatch(t); t:Hide(); t.wfUnit = nil
+            -- (an empty tile stops listening too: it has no one to draw)
+            UnregisterUnitWatch(t); t:Hide(); t.wfUnit = nil; t:UnregisterAllEvents()
         end
     end
     -- The pets: their own group, in their owners' order, packed with no gaps: the pets out now take the
@@ -1674,7 +1704,7 @@ function RP.arrange()
             if p.wfUnit ~= pu then RP.setUnit(p, pu) end
             if pets then RegisterUnitWatch(p) else UnregisterUnitWatch(p); p:Hide() end
         else
-            UnregisterUnitWatch(p); p:Hide(); p.wfUnit = nil
+            UnregisterUnitWatch(p); p:Hide(); p.wfUnit = nil; p:UnregisterAllEvents()
         end
     end
     RP.placePets(members, pets and petCount or 0)
@@ -2001,13 +2031,25 @@ function RP.setupEditMode()
     local lib = LibStub and LibStub("LibEditMode", true)
     if not lib then return end
     lib:AddFrame(RP.box, function(_, layoutName, point, x, y)
+        local active = layoutName == lib:GetActiveLayoutName()
+        if active and ns.snapFrame then
+            local sp, sx, sy = ns.snapFrame(RP.box)      -- (lines up with the other frames, as they do)
+            if sp then point, x, y = sp, sx, sy end
+        end
         local u = unitData("party", true, layoutName)
         u.rpPoint, u.rpX, u.rpY = point, x, y
-        if layoutName == lib:GetActiveLayoutName() then RP.place() end
+        if active then RP.place() end
     end, RP.DEFAULT_POS, "Webby Party Frames (raid style)")
     lib:RegisterCallback("layout", function() C_Timer.After(0, RP.apply) end)
-    lib:RegisterCallback("enter", RP.enterEdit)
-    lib:RegisterCallback("exit", RP.exitEdit)
+    -- (for Edit Mode's toolbar, snapping and EllesmereUI's Unlock Mode; the sample party while either is open)
+    ns.addMover({
+        frame = RP.box, label = "Party frames (raid style)", page = "party",
+        store = function(point, x, y) local u = unitData("party", true); u.rpPoint, u.rpX, u.rpY = point, x, y end,
+        place = RP.place,
+        reset = function() local u = unitData("party", true); u.rpPoint, u.rpX, u.rpY = nil, nil, nil; RP.place() end,
+        enter = RP.enterEdit,
+        exit = RP.exitEdit,
+    })
 end
 
 ---------------------------------------------------------------------------
@@ -2035,8 +2077,8 @@ function RP.init()
             if RP.testing then RP.stopTest() end
         elseif event == "PLAYER_REGEN_ENABLED" then
             if RP.pending then RP.apply() end
-        elseif RP.testing then
-            return                                       -- (the sample party keeps the tiles)
+        elseif RP.testing or not RP.enabled() then
+            return                                       -- (the sample party keeps the tiles; off, nothing to do)
         elseif event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ROLES_ASSIGNED" or event == "PLAYER_ENTERING_WORLD" or event == "UNIT_PET" then
             RP.arrange()
             for _, t in ipairs(RP.tiles) do if t.wfUnit then RP.paintAll(t) end end

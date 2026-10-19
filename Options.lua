@@ -566,7 +566,7 @@ Opt.SEARCH_WORDS = {
     threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
     dispelGlow = "cleanse decurse magic curse poison disease debuff", dispelWho = "cleanse decurse debuff",
     rpDispelStyle = "cleanse decurse debuff", rpDispelIcon = "cleanse decurse magic curse poison disease debuff",
-    auraBuffs = "hots auras", auraDebuffs = "dots auras", auraMine = "dots my debuffs", auraMineBig = "dots my debuffs",
+    auraBuffs = "hots auras", auraDebuffs = "dots auras", rpBuffs = "hots auras", rpDebuffs = "dots auras", auraMine = "dots my debuffs", auraMineBig = "dots my debuffs",
     auraTimer = "cooldown duration timer countdown swipe", auraPos = "auras buffs debuffs",
     castShow = "castbar casting spell interrupt kick", castText = "castbar spell", castIcon = "castbar spell",
     partyGap = "gap padding", rpGap = "gap padding", rangeFade = "range distance alpha", rangeAlpha = "range distance alpha fade",
@@ -1002,6 +1002,9 @@ function openSettings(unit)
     Opt.window:Raise()
     Opt.select((unit and Opt.pages[unit]) and unit or Opt.current or "general")
 end
+
+-- (shared: the main file's /webby options and Edit Mode's Settings buttons open the window with it)
+ns.openSettings = openSettings
 
 function Opt.toggle()
     if Opt.window and Opt.window:IsShown() then Opt.window:Hide() else openSettings() end
@@ -1696,8 +1699,13 @@ local function buildSettings()
         local defs = B.check("rpDefensives", "Big defensives", "Big defensive cooldowns (Shield Wall, Divine Shield, Pain Suppression, Ice Block, Barkskin and more) as a large icon in the middle of the tile.", true)
         local defSize = B.slider("rpDefSize", "Size", "How big the defensive cooldown icon is.", defaultFor("party", "rpDefSize"), 12, 32, 1, px)
         B.under(defs, on("rpDefensives"), defSize)
-        B.showIf(raid, defs, defSize,
-            B.slider("rpAuraSize", "Icon size", "Their debuffs (bottom left) and your heals over time on them (bottom right). New sizes show on new icons; /reload for all of them.", defaultFor("party", "rpAuraSize"), 10, 24, 1, px))
+        B.showIf(raid, defs, defSize)
+        -- (the tiles' own two rows of icons, each on or off, and their size)
+        local rpAuras = B.pair({ "rpDebuffs", "Debuffs", "Each member's debuffs, at the bottom left of their tile, the ones that matter most first.", true },
+                               { "rpBuffs", "Your buffs", "The buffs you put on each member (your heals over time, shields), at the bottom right of their tile.", true })
+        local rpSize = B.slider("rpAuraSize", "Icon size", "Their debuffs and your buffs on them. New sizes show on new icons; /reload for all of them.", defaultFor("party", "rpAuraSize"), 10, 24, 1, px)
+        B.showIf(raid, rpAuras)
+        B.showIf(both(raid, function() return get("rpDebuffs") ~= false or get("rpBuffs") ~= false end), rpSize)
         -- (the portrait frames' buffs and debuffs, as on the other frames)
         local function anyAuras() return portrait() and (get("auraBuffs") or get("auraDebuffs")) and true or false end
         Opt.predParts[anyAuras] = { portrait }
@@ -1829,9 +1837,9 @@ local function buildSettings()
         B.pair({ "damageTrail", "Recent damage", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true },
                (unit == "target" or unit == "focus") and { "damagePredict", "Preview spell damage", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true } or nil)
         if isPlayer then
-            local cost = B.check("costPredict", "Spell costs", "On your mana (or other power) bar: while you cast, the part the spell will use is shaded; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true)
+            local cost = B.check("costPredict", "Spell costs", "On your mana (or other power) bar: while you cast, the part the spell will use is shaded; when your power drops (any spell or ability, instants too), the part just spent stays lit where it was for a moment, then slides away.", true)
             B.under(cost, isOn("costPredict"),
-                B.slider("costShade", "Shading", "How the cost shows on the bar while you cast: lighter (right) or darker (left), and by how much. The flash when a spell goes off always stays light.", 55, -100, 100, 5,
+                B.slider("costShade", "Shading", "How the cost shows on the bar while you cast: lighter (right) or darker (left), and by how much. The trail of what was just spent always stays light.", 55, -100, 100, 5,
                     function(v)
                         v = math.floor(v + 0.5)
                         if v == 0 then return "Off" end

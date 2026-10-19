@@ -68,7 +68,7 @@ local UNIT_DEFAULTS = {
               rpHealthColor = "class", rpHealthCustom = { 0.15, 0.75, 0.25 }, rpMissingDark = 75,
               rpDispelStyle = "gradient", rpDispelIcon = true,
               rpNameColor = "white", rpNameMax = 0, rpNamePos = "topleft",
-              rpHoverEdge = true, rpPets = false, rpPetPos = "after", rpPetHeight = 24, rpSolo = false, rpAFK = true,
+              rpHoverEdge = true, rpPets = false, rpPetPos = "after", rpPetHeight = 24, rpDebuffs = true, rpBuffs = true, rpSolo = false, rpAFK = true,
               rpDeadColor = { 0.3, 0.1, 0.1 }, rpOfflineColor = { 0.35, 0.35, 0.35 },
               rpShieldStyle = "striped", rpShieldEdge = false,
               -- both styles: fading out of range, missing buffs, the healer mana list, tooltips
@@ -1181,6 +1181,7 @@ local function followTrail(self, elapsed)
     self.pending = false
     self:SetScript("OnUpdate", nil)
     if not (SMOOTH and pcall(self.SetValue, self, self.target, SMOOTH)) then pcall(self.SetValue, self, self.target) end
+    self.shown = self.targetPlain       -- (the mana trail keeps track of where it stands)
 end
 
 local function updateDamageTrail(f, status)
@@ -1300,13 +1301,14 @@ local function fitCostBar(f, bar, side)
     bar:SetPoint("BOTTOM", f.mp, "BOTTOM")
     bar:SetPoint(side, f.mp:GetStatusBarTexture(), "RIGHT")
     bar:SetWidth(f.mp:GetWidth())
-    pcall(bar.SetMinMaxValues, bar, 0, UnitPowerMax("player"))
+    -- (the bar's own max: with Druid bars "Mana first" that's your mana, not the form's power)
+    pcall(bar.SetMinMaxValues, bar, 0, f.mpMaxNow or UnitPowerMax("player"))
 end
 
 -- Shades a cost bar by the "Spell cost shade" slider (-100 to 100): above 0 it lightens the fill
--- (added white), below 0 it darkens it (black laid over), by that much. The spent flash (`flash`)
--- always lightens, by the same amount and a little more: only the cast preview darkens. False at 0
--- (nothing to show).
+-- (added white), below 0 it darkens it (black laid over), by that much. The trail of what was spent
+-- (`flash`) always lightens, by the same amount and a little more: only the cast preview darkens.
+-- False at 0 (nothing to show).
 local function shadeCostBar(bar, flash)
     local v = tonumber(getSetting("player", "costShade")) or 55
     if v == 0 then return false end
@@ -1326,8 +1328,11 @@ local function updateCostPrediction(f)
     local cp = f.costBar
     if not cp then return end
     local cost
-    if f.castSpell and getSetting("player", "costPredict") then
-        cost, f.costInfo = spellCost(f.castSpell, "cast")
+    -- (the spell being cast; or, just after it went off, it still, until the mana actually drops and
+    -- the trail takes over: no gap between the two)
+    local spell = f.castSpell or (f.costHold and f.costHold.spell)
+    if spell and getSetting("player", "costPredict") then
+        cost, f.costInfo = spellCost(spell, "cast")
     end
     if not cost then cp:Hide(); return end
     fitCostBar(f, cp, "RIGHT")
@@ -1336,20 +1341,59 @@ local function updateCostPrediction(f)
     cp:Show()
 end
 
--- A spell just went off: flash what it spent.
-local SPENT_FADE = 0.6       -- seconds
-local function flashSpent(f, spell)
-    local sb = f.spentBar
-    if not (sb and spell and getSetting("player", "costPredict")) then return end
-    local cost
-    cost, f.costInfo = spellCost(spell, "spent")
-    if not cost then return end
-    fitCostBar(f, sb, "LEFT")
-    if not shadeCostBar(sb, true) then return end
-    pcall(sb.SetValue, sb, cost)
-    sb.left = SPENT_FADE
-    sb:SetAlpha(1)
-    sb:Show()
+-- The mana trail: when your power drops, the part just spent stays lit (in the cost shading) where it
+-- was, with the bar's end sliding down over it; a moment later it slides away too. Like the health
+-- bar's recent damage (updateDamageTrail): a bar under the power fill that keeps the old value,
+-- clipped to past the fill's end, so it's always exactly the part just spent, however the fill
+-- animates. (It replaced a flash pinned to the fill's end, which slid along with the fill.)
+local function updateManaTrail(f, maxP, curP, token)
+    local t = f.mpTrail
+    if not getSetting("player", "costPredict") then
+        t.pending, t.shown = false, nil
+        t:SetScript("OnUpdate", nil)
+        t:Hide()
+        return
+    end
+    local tex = f.mpCurrent or PLAIN_FILL
+    if t.tex ~= tex then
+        t.tex = tex
+        if not pcall(t.SetStatusBarTexture, t, tex) or not t:GetStatusBarTexture() then t:SetStatusBarTexture(PLAIN_FILL) end
+        if f.mpMaskOn then pcall(function() t:GetStatusBarTexture():AddMaskTexture(f.mpMask) end) end
+    end
+    if not shadeCostBar(t, true) then t:Hide(); return end
+    -- the clip starts where the power fill ends (re-anchored when the fill texture changes)
+    local fill = f.mp:GetStatusBarTexture()
+    if fill and t.clipFill ~= fill then
+        t.clipFill = fill
+        t.clip:ClearAllPoints()
+        t.clip:SetPoint("TOPLEFT", fill, "TOPRIGHT")
+        t.clip:SetPoint("BOTTOMRIGHT", f.mp, "BOTTOMRIGHT")
+    end
+    pcall(t.SetMinMaxValues, t, 0, maxP)
+    local now = (not isSecret(curP)) and tonumber(curP) or nil
+    local dropped = now and t.shown and t.token == token and now < t.shown
+    t.token = token
+    if dropped then
+        -- spent: the trail stays at the old value a moment, then catches up (followTrail); the cast
+        -- preview hands over to it now
+        f.costHold = nil
+        t.target, t.targetPlain = curP, now
+        if not t.pending then
+            t.pending, t.waited = true, 0
+            t:SetScript("OnUpdate", followTrail)
+        end
+        t.wait = TRAIL_WAIT
+    elseif t.pending and now and t.shown and now < t.shown then
+        -- (still waiting and it ticked back up a little: catch up to that instead)
+        t.target, t.targetPlain = curP, now
+    else
+        -- regen, another power type, or a hidden value: straight there, no trail
+        t.pending = false
+        t:SetScript("OnUpdate", nil)
+        pcall(t.SetValue, t, curP)
+        t.shown = now
+    end
+    t:Show()
 end
 
 local function updatePower(f)
@@ -1397,6 +1441,14 @@ local function updatePower(f)
         f.mp:SetMinMaxValues(0, UnitPowerMax(u))
         setBarValue(f, f.mp, UnitPower(u))
         if f.textMode ~= "off" then setBarText(f.mpText, f, "mp") end
+    end
+    -- your own frame: the trail of what was just spent, then the cast's cost (in that order: a drop
+    -- ends the preview's hold)
+    if f.mpTrail then
+        local maxP, curP
+        if swap then maxP, curP = UnitPowerMax(u, MANA), UnitPower(u, MANA) else maxP, curP = UnitPowerMax(u), UnitPower(u) end
+        f.mpMaxNow = maxP
+        pcall(updateManaTrail, f, maxP, curP, token)
     end
     if f.costBar then pcall(updateCostPrediction, f) end
     -- a druid in bear or cat form: their mana in the slim bar under the frame
@@ -2342,7 +2394,8 @@ local Extras = {
     HAPPY_ATLAS = { "UI-PetMad", "UI-PetNeutral", "UI-PetHappiness" },
 }
 
-Extras.allFrames = AuraKit.allFrames     -- every unit frame
+-- every unit frame (looked up when called: Auras.lua, which defines it, loads after this file)
+function Extras.allFrames() return AuraKit.allFrames() end
 
 -- Raid markers: at the top of the portrait; side by side with the leader crown when both show.
 function Extras.raid(f)
@@ -2963,6 +3016,7 @@ local function applyShown(f)
     f.wfOff = not on
     if on then
         Party.watch(f)
+        pcall(updateAll, f)        -- (it ignored its events while off: catch up)
     else
         Party.unwatch(f)
         f:Hide()
@@ -3231,14 +3285,21 @@ local function createFrame(unit)
         f.costBar = CreateFrame("StatusBar", nil, clip)
         f.costBar:SetReverseFill(true)
         f.costBar:Hide()
-        -- the spent flash (flashSpent), fading out
-        f.spentBar = CreateFrame("StatusBar", nil, clip)
-        f.spentBar:Hide()
-        f.spentBar:SetScript("OnUpdate", function(self, elapsed)
-            self.left = (self.left or 0) - elapsed
-            if self.left <= 0 then self:Hide(); return end
-            self:SetAlpha(self.left / SPENT_FADE)
-        end)
+        -- the trail of what was just spent (updateManaTrail): under the power fill, inside a frame that
+        -- clips it to past the fill's end (anchored there by updateManaTrail), as the health trail is
+        local tclip = CreateFrame("Frame", nil, f)
+        tclip:SetClipsChildren(true)
+        tclip:SetFrameLevel(f.mp:GetFrameLevel())
+        tclip:SetAllPoints(f.mp)
+        local mt = CreateFrame("StatusBar", nil, tclip)
+        mt:SetAllPoints(f.mp)
+        mt:SetFrameLevel(tclip:GetFrameLevel())
+        mt.clip = tclip
+        mt:SetMinMaxValues(0, 1)
+        mt:SetValue(0)
+        mt:Hide()
+        f.mp:SetFrameLevel(mt:GetFrameLevel() + 1)       -- (the power fill draws over it)
+        f.mpTrail = mt
         for _, e in ipairs({ "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP", "UNIT_SPELLCAST_FAILED",
                              "UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_SUCCEEDED" }) do
             pcall(f.RegisterUnitEvent, f, e, "player")
@@ -3310,6 +3371,7 @@ local function createFrame(unit)
 
     -- events
     f:SetScript("OnEvent", function(self, event, ...)
+        if self.wfOff then return end      -- (turned off: nothing to draw; applyShown catches it up when it's back)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
             updateHealth(self)
             -- a spell on its way has landed (see flyDamage)
@@ -3329,8 +3391,7 @@ local function createFrame(unit)
             pcall(function() same = UnitIsUnit("focus", "target") and true or false end)
             pcall(updateDamagePrediction, frames.focus, same and spellID or nil)
         elseif event:find("^UNIT_SPELLCAST_") then
-            -- went off (cast or instant, however it was pressed): flash what it spent
-            if event == "UNIT_SPELLCAST_SUCCEEDED" then local _, _, spellID = ...; pcall(flashSpent, self, spellID) end
+            -- (what a spell spent shows as the mana trail, when your power drops: updateManaTrail)
             -- only the cast being shown ends it (a failed second spell mid-cast leaves it alone)
             local _, guid = ...
             local mine = true
@@ -3338,6 +3399,15 @@ local function createFrame(unit)
             if mine then
                 local spell = self.castSpell
                 self.castSpell, self.castGUID = nil, nil
+                -- went off: the cost preview stays until the mana actually drops (the trail takes over
+                -- then), or half a second if it never does (a free cast)
+                if event == "UNIT_SPELLCAST_SUCCEEDED" and spell then
+                    local hold = { spell = spell }
+                    self.costHold = hold
+                    C_Timer.After(0.5, function()
+                        if self.costHold == hold then self.costHold = nil; pcall(updateCostPrediction, self) end
+                    end)
+                end
                 pcall(updateCostPrediction, self)
                 if event == "UNIT_SPELLCAST_SUCCEEDED" then
                     pcall(flyDamage, spell)                  -- on its way: stays until it lands
@@ -3482,6 +3552,7 @@ local function createSmallFrame(unit, wf, index)
     end
 
     f:SetScript("OnEvent", function(self, event, ...)
+        if self.wfOff then return end      -- (turned off: nothing to draw; applyShown catches it up when it's back)
         if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
             updateHealth(self)
             -- a spell on its way has landed (see flyDamage)
@@ -3536,7 +3607,20 @@ local function sampleFrames()
     return list
 end
 
+-- Everything Webby that can be moved (the unit frames, the raid-style party box, Healer Mana, Buff
+-- Bars), for Edit Mode's look and toolbar (EditMode.lua), snapping, and EllesmereUI's Unlock Mode.
+--   frame, label, page (its settings page), unit (a unit frame: it can be attached to another);
+--   store(point, x, y) / place() (its saved spot, from UIParent's point, and putting it there),
+--   reset() (back to its default spot), enter() / exit() (Edit Mode or Unlock Mode opening / closing)
+ns.MOVERS = ns.MOVERS or {}
+function ns.addMover(m)
+    for _, o in ipairs(ns.MOVERS) do if o.frame == m.frame then return end end
+    ns.MOVERS[#ns.MOVERS + 1] = m
+end
+
 local function enterSample()
+    -- (the modules' own stand-ins: the raid-style sample party, the healer mana and buff bar samples)
+    for _, m in ipairs(ns.MOVERS) do if m.enter then pcall(m.enter) end end
     if InCombatLockdown() then return end
     if Party.stopSamples then pcall(Party.stopSamples) end    -- (Edit Mode has its own stand-ins)
     for _, f in ipairs(sampleFrames()) do
@@ -3551,6 +3635,7 @@ local function enterSample()
 end
 
 local function exitSample()
+    for _, m in ipairs(ns.MOVERS) do if m.exit then pcall(m.exit) end end
     AuraKit.setEditing(false)
     pcall(editAltMana, false)
     pcall(Extras.editCombo, false)
@@ -3583,6 +3668,11 @@ local function snapTargets(self)
     for _, unit in ipairs(UNITS) do
         local o = frames[unit]
         if o and o ~= self and o:IsVisible() then list[#list + 1] = o end
+    end
+    -- (and the other Webby boxes: raid-style party, Healer Mana, Buff Bars)
+    for _, m in ipairs(ns.MOVERS) do
+        local o = m.frame
+        if not m.unit and o ~= self and o:IsVisible() then list[#list + 1] = o end
     end
     pcall(function()
         for _, o in ipairs(EditModeManagerFrame.registeredSystemFrames or {}) do
@@ -3629,6 +3719,40 @@ local function snapFrame(f)
     f:SetPoint("TOPLEFT", UIParent, "TOPLEFT", x, y)
     return "TOPLEFT", x, y
 end
+ns.snapFrame = snapFrame       -- (the other modules' boxes snap as they're dropped too)
+
+-- The lines a frame being dragged would snap to right now (each { x = ..., y1, y2 } or { y = ..., x1,
+-- x2 }, in UIParent's coordinates): drawn as guides while you drag (EditMode.lua). The same rules as
+-- snapFrame.
+function ns.snapGuides(f)
+    local out = {}
+    local snapOn = true
+    pcall(function() if EditModeManagerFrame.IsSnapEnabled then snapOn = EditModeManagerFrame:IsSnapEnabled() end end)
+    if not snapOn then return out end
+    local l, b, r, t = boxOf(f)
+    if not l then return out end
+    local function near(a, c) return math.abs(a - c) <= SNAP_DIST end
+    local function vline(x, y1, y2) out[#out + 1] = { x = x, y1 = y1, y2 = y2 } end
+    local function hline(y, x1, x2) out[#out + 1] = { y = y, x1 = x1, x2 = x2 } end
+    for _, o in ipairs(snapTargets(f)) do
+        local ol, ob, orr, ot = boxOf(o)
+        if ol then
+            local y1, y2, x1, x2 = math.min(b, ob), math.max(t, ot), math.min(l, ol), math.max(r, orr)
+            for _, x in ipairs({ ol, orr }) do
+                if near(l, x) or near(r, x) then vline(x, y1, y2) end
+            end
+            if near((l + r) / 2, (ol + orr) / 2) then vline((ol + orr) / 2, y1, y2) end
+            for _, y in ipairs({ ob, ot }) do
+                if near(b, y) or near(t, y) then hline(y, x1, x2) end
+            end
+            if near((b + t) / 2, (ob + ot) / 2) then hline((ob + ot) / 2, x1, x2) end
+        end
+    end
+    local W, H = UIParent:GetSize()
+    if near((l + r) / 2, W / 2) then vline(W / 2, 0, H) end
+    if near((b + t) / 2, H / 2) then hline(H / 2, 0, W) end
+    return out
+end
 
 -- Sticky frames: a frame dropped within SNAP_DIST of another Webby frame (touching, overlapping or just
 -- beside it) is attached to it and follows it when that frame moves. Dropped further away, it's free
@@ -3668,8 +3792,23 @@ local function updateAttachment(f, unit, layoutName)
     u.ay = (f:GetTop() * fs - p:GetTop() * ps) / fs
 end
 
--- Edit Mode is only for moving the frames: each frame's dialog has buttons for its options page
--- (Esc > Options > AddOns > Webby Frames) and for a reset.
+-- The frame a unit frame is attached to (its label), or nil; and letting it go where it is now.
+function ns.attachedTo(unit)
+    local u = unitData(unit)
+    return u and u.attach and UNIT_LABEL[u.attach] or nil
+end
+function ns.detachFrame(unit)
+    local f = frames[unit]
+    if InCombatLockdown() or not f or not f:GetLeft() then return end
+    local u = unitData(unit, true)
+    local H = UIParent:GetHeight() * UIParent:GetEffectiveScale() / f:GetEffectiveScale()
+    u.point, u.x, u.y = "TOPLEFT", f:GetLeft(), f:GetTop() - H
+    u.attach, u.ax, u.ay = nil, nil, nil
+    pcall(placeFrame, f, unit)
+end
+
+-- Edit Mode is only for moving the frames: the library's own settings dialog is kept out of sight, and
+-- EditMode.lua puts a toolbar of our own on the frame you pick (its settings page, reset, detach).
 local function setupEditMode()
     local ok, l = pcall(LibStub, "LibEditMode")
     if not ok or not l then
@@ -3690,6 +3829,15 @@ local function setupEditMode()
             pcall(updateAttachment, f, unit, layoutName)
             if layoutName == activeLayout then pcall(placeFrame, f, unit) end
         end, { point = d.point, x = d.x, y = d.y }, "Webby " .. UNIT_LABEL[unit] .. " Frame")
+        ns.addMover({
+            frame = f, label = UNIT_LABEL[unit] .. (unit == "party" and " frames" or " frame"), page = unit, unit = unit,
+            reset = function()
+                if InCombatLockdown() then return end
+                local u = unitData(unit, true)
+                u.point, u.x, u.y, u.attach, u.ax, u.ay = nil, nil, nil, nil, nil, nil
+                pcall(placeFrame, f, unit)
+            end,
+        })
         -- The library's box covers the whole (larger, clickable) frame; fit it to the frame art instead,
         -- the same box snapping lines up (it follows the art when the layout changes).
         pcall(function()
@@ -3709,11 +3857,15 @@ local function setupEditMode()
         local dlg = lib.internal and lib.internal.dialog
         if dlg and not dlg.webbyHidden then
             dlg.webbyHidden = true
-            hooksecurefunc(dlg, "Update", function(d)
+            hooksecurefunc(dlg, "Update", function(d, selection)
                 d:ClearAllPoints()
                 d:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", -5000, -5000)
                 d:SetAlpha(0)
+                -- our toolbar on the frame picked instead (EditMode.lua)
+                local sel = selection or d.selection
+                if ns.EditKit then pcall(ns.EditKit.select, sel and sel.parent) end
             end)
+            dlg:HookScript("OnHide", function() if ns.EditKit then pcall(ns.EditKit.hide) end end)
         end
     end)
 
@@ -3722,8 +3874,8 @@ local function setupEditMode()
         applyAll()
         touchOptions()
     end)
-    lib:RegisterCallback("enter", enterSample)
-    lib:RegisterCallback("exit", exitSample)
+    lib:RegisterCallback("enter", function() enterSample(); if ns.EditKit then pcall(ns.EditKit.enter) end end)
+    lib:RegisterCallback("exit", function() exitSample(); if ns.EditKit then pcall(ns.EditKit.exit) end end)
 end
 
 -- EllesmereUI's Unlock Mode: the frames can be dragged there too. Positions are saved in the same
@@ -3777,6 +3929,40 @@ local function setupEllesmere()
                 end,
                 applyPosition = function()
                     if not InCombatLockdown() then pcall(placeFrame, f, unit) end
+                end,
+            }
+        end
+    end
+    -- and the other boxes (raid-style party, Healer Mana, Buff Bars), saved where their Edit Mode spot is
+    for i, m in ipairs(ns.MOVERS) do
+        if not m.unit and m.store then
+            local f = m.frame
+            list[#list + 1] = {
+                key = "WebbyFrames_box" .. i,
+                label = "Webby " .. m.label,
+                order = 520 + i,
+                ownsPosition = true, noAnchorTo = true, noResize = true, noSizeMatchTarget = true,
+                getFrame = function() return f end,
+                loadPosition = function()
+                    local x, y = centerOffset(f)
+                    if not x then return nil end
+                    return { point = "CENTER", relPoint = "CENTER", x = x, y = y }
+                end,
+                savePosition = function(_, point, relPoint, x, y)
+                    if InCombatLockdown() or type(x) ~= "number" or type(y) ~= "number" then return end
+                    if type(relPoint) ~= "string" then relPoint = point end
+                    f:ClearAllPoints()
+                    f:SetPoint(point or "CENTER", UIParent, relPoint or "CENTER", x, y)
+                    local cx, cy = centerOffset(f)
+                    if not cx then return end
+                    m.store("CENTER", cx, cy)
+                    pcall(m.place)
+                end,
+                clearPosition = function()
+                    if not InCombatLockdown() and m.reset then pcall(m.reset) end
+                end,
+                applyPosition = function()
+                    if not InCombatLockdown() then pcall(m.place) end
                 end,
             }
         end
@@ -4120,7 +4306,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
     if msg == "" then
         Opt.toggle()
     elseif msg == "options" then
-        openSettings()
+        if ns.openSettings then ns.openSettings() end     -- (the settings window's own, from Options.lua)
     elseif msg == "edit" then
         openEditMode()
     elseif msg == "reset" then

@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.16.0
+Edit Mode, made nicer
+- Every Webby frame and box has an amber outline and a name tag in Edit Mode, lit up when you pick it.
+- Pick one for a toolbar: open its settings, reset its position, detach it from the frame it's stuck to, and a reminder of the arrow-key nudge.
+- Amber guide lines while you drag, wherever it's about to snap. The raid-style party, Healer Mana and Buff Bars boxes snap now too.
+- A banner at the top of the screen while Edit Mode is open, with a button for the settings.
+- EllesmereUI's Unlock Mode can now move everything Webby: the raid-style party, Healer Mana and Buff Bars too, with their sample previews.
+
+Fixes
+- Spell costs: the part of your mana a spell just used now stays lit where it was, then slides away (it used to slide along with the bar, past its end). The cast preview holds until your mana actually drops.
+- Errors when someone joined or left the group, with the party frames off or in either style: the raid-style tiles were kept up to date in the background even when not in use. They, the hidden frames, the party icons and missing buffs now rest while not in use.
+- Raid markers: an error whenever they changed.
+- /webby options opens the settings again.
+
+Also
+- Raid-style tiles: Debuffs and Your buffs can each be turned off (Party page, Buffs and debuffs).
+
 ## 1.15.2
 - A Reload UI button in the settings window's title bar.
 - Click casting page tidied: its columns fit (Also target was cut off), the bindings sit on cards like the other pages, and the keybind headings only show once you have a keybind.

@@ -274,13 +274,27 @@ function PX.init()
     local lib = LibStub and LibStub("LibEditMode", true)
     if lib then
         lib:AddFrame(box, function(_, layoutName, point, x, y)
+            local active = layoutName == lib:GetActiveLayoutName()
+            if active and ns.snapFrame then
+                local sp, sx, sy = ns.snapFrame(box)     -- (lines up with the other frames, as they do)
+                if sp then point, x, y = sp, sx, sy end
+            end
             local u = unitData("player", true, layoutName)
             u.bbPoint, u.bbX, u.bbY = point, x, y
-            if layoutName == lib:GetActiveLayoutName() then PX.place() end
+            if active then PX.place() end
         end, PX.POS, "Webby Buff Bars")
-        lib:RegisterCallback("enter", function() PX.editing = true; PX.updateBars() end)
-        lib:RegisterCallback("exit", function() PX.editing = nil; PX.updateBars() end)
         lib:RegisterCallback("layout", function() C_Timer.After(0, function() PX.place(); PX.updateBars() end) end)
+    end
+    -- (for Edit Mode's toolbar, snapping and EllesmereUI's Unlock Mode; sample bars while either is open)
+    if ns.addMover then
+        ns.addMover({
+            frame = box, label = "Buff Bars", page = "player",
+            store = function(point, x, y) local u = unitData("player", true); u.bbPoint, u.bbX, u.bbY = point, x, y end,
+            place = PX.place,
+            reset = function() local u = unitData("player", true); u.bbPoint, u.bbX, u.bbY = nil, nil, nil; PX.place() end,
+            enter = function() PX.editing = true; PX.updateBars() end,
+            exit = function() PX.editing = nil; PX.updateBars() end,
+        })
     end
     -- your auras (bars) and your weapons (enchants); a change waits for the next frame, so a burst of
     -- them is one update
