@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.6
+- Mana tick: works when the game hides your mana from addons. The five second rule now starts when a spell that costs mana goes off, the ticks come from the mana changes themselves, and the light rests once they stop (full mana).
+
 ## 1.16.5
 - Mana tick options (player page): the five second rule and the regen ticks can each be turned off, each has its own colour, the light's size, the sparkle on or off, and the sparkle's shape (Star, Starburst, Ring, Spark, Flare).
 

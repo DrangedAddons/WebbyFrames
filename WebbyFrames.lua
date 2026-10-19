@@ -1443,7 +1443,7 @@ local function updateManaTick(f, curP, maxP, isMana)
                 -- the five second rule: steady across the bar, a soft light
                 p = 1 - (self.ruleUntil - now) / MANA_RULE
                 k, burst, c = 0.35, 0, o.ruleColor
-            elseif o.ticks and self.tickAt then
+            elseif o.ticks and self.tickAt and (self.valuesKnown or now - (self.lastSeen or 0) < MANA_TICK * 2 + 0.6) then
                 -- the regen ticks: sweeping every 2 seconds, swelling towards the tick, a burst as it lands
                 local since = now - self.tickAt
                 p = (since % MANA_TICK) / MANA_TICK
@@ -1473,6 +1473,7 @@ local function updateManaTick(f, curP, maxP, isMana)
                 self.star:Hide()
             end
         end)
+        mt.refresh = function() ns.manaTickRefresh(mt) end
         f.manaTick = mt
     end
     -- its options, read here (on every power change and option change), not every frame
@@ -1494,17 +1495,48 @@ local function updateManaTick(f, curP, maxP, isMana)
         ruleColor = colour("manaTickRuleColor", { 1, 1, 1 }),
         tickColor = colour("manaTickColor", { 0.55, 0.82, 1 }),
     }
+    -- When your mana can be read, a rise is a tick. Often the game hides it from addons, though: then the
+    -- ticks come from the mana events themselves (ns.manaTickEvent) and the rule from spells' costs
+    -- (ns.manaSpend), and the light rests once the ticks stop coming (full mana).
     local cur = (not isSecret(curP)) and tonumber(curP) or nil
     local max = (not isSecret(maxP)) and tonumber(maxP) or nil
-    if cur and mt.last then
-        if cur > mt.last then mt.tickAt = GetTime()                       -- (mana up on its own: a tick)
-        elseif cur < mt.last then mt.ruleUntil = GetTime() + MANA_RULE end  -- (spent: the five second rule)
-    end
+    mt.valuesKnown = cur ~= nil
+    if cur and mt.last and cur > mt.last then mt.tickAt = GetTime(); mt.lastSeen = mt.tickAt end
     if cur then mt.last = cur end
-    local full = cur and max and cur >= max
+    mt.full = (cur and max and cur >= max) and true or false
+    mt.refresh()
+end
+
+-- (shown while there's something to show: the rule running, or ticks still coming in; not at full mana)
+function ns.manaTickRefresh(mt)
     local o = mt.opts
-    local any = (o.ticks and mt.tickAt ~= nil) or (o.rule and mt.ruleUntil ~= nil and GetTime() < mt.ruleUntil)
-    mt:SetShown((any and not full) and true or false)
+    if not o then return end
+    local now = GetTime()
+    local ticking = o.ticks and mt.tickAt and (mt.valuesKnown or now - (mt.lastSeen or 0) < MANA_TICK * 2 + 0.6)
+    local ruling = o.rule and mt.ruleUntil and now < mt.ruleUntil
+    mt:SetShown(((ticking or ruling) and not mt.full) and true or false)
+end
+
+-- A mana event for your frame (the number itself perhaps hidden): unless it's a spell's cost just
+-- paid, it's a tick.
+function ns.manaTickEvent(f)
+    local mt = f.manaTick
+    if not mt or mt.valuesKnown then return end      -- (readable: updateManaTick saw it itself)
+    local now = GetTime()
+    if now - (f.manaSpentAt or 0) < 0.5 then return end
+    mt.tickAt, mt.lastSeen = now, now
+    ns.manaTickRefresh(mt)
+end
+
+-- A spell went off: if it cost mana, the five second rule starts (over).
+function ns.manaSpend(f, spell)
+    local mt = f.manaTick
+    if not (mt and spell) then return end
+    local cost = spellCost(spell, "spent")
+    if not (cost and cost > 0) then return end
+    f.manaSpentAt = GetTime()
+    mt.ruleUntil = f.manaSpentAt + MANA_RULE
+    ns.manaTickRefresh(mt)
 end
 local function updatePower(f)
     local u = f.wfUnit
@@ -3487,7 +3519,13 @@ local function createFrame(unit)
             updateHealth(self)
             -- a spell on its way has landed (see flyDamage)
             if event == "UNIT_HEALTH" then self.hitAt = GetTime(); if self.dmgFlying then landDamage(self) end end
-        elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_POWER_FREQUENT" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then updatePower(self)
+        elseif event == "UNIT_POWER_UPDATE" or event == "UNIT_POWER_FREQUENT" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then
+            updatePower(self)
+            -- (a change to your mana: a tick for the mana tick light, unless it was a spell's cost)
+            if self.manaTick and (event == "UNIT_POWER_FREQUENT" or event == "UNIT_POWER_UPDATE") then
+                local ptype = select(2, ...)
+                if not isSecret(ptype) and ptype == "MANA" then pcall(ns.manaTickEvent, self) end
+            end
         elseif event == "PLAYER_UPDATE_RESTING" then
             if self.updateRest then self.updateRest() end
             updateIndicators(self)
@@ -3503,6 +3541,11 @@ local function createFrame(unit)
             pcall(updateDamagePrediction, frames.focus, same and spellID or nil)
         elseif event:find("^UNIT_SPELLCAST_") then
             -- (what a spell spent shows as the mana trail, when your power drops: updateManaTrail)
+            -- any spell that went off (instants too): the five second rule, if it cost mana
+            if event == "UNIT_SPELLCAST_SUCCEEDED" and self.manaTick then
+                local _, _, spellID = ...
+                pcall(ns.manaSpend, self, spellID)
+            end
             -- only the cast being shown ends it (a failed second spell mid-cast leaves it alone)
             local _, guid = ...
             local mine = true
