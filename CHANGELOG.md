@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.4
+- Mana tick (player page): a light that runs along your mana bar. After you spend mana it crosses the bar over 5 seconds in white (the five second rule); then in blue it sweeps the bar every 2 seconds, growing as it goes and sparkling at the end as each mana tick lands. Shows while you're below full mana.
+
 ## 1.16.3
 - Spell costs: pick the textures too. Cost texture for the cast preview and Trail texture for the trail (your power bar's own fill to start with; SharedMedia textures listed too).
 

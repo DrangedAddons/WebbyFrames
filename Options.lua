@@ -562,7 +562,7 @@ Opt.SEARCH_WORDS = {
     colorMode = "hp color class reaction", rpHealthColor = "hp color class", petColor = "hp color",
     npcColor = "hp color mob enemy", healthFade = "hp red low health gradient color",
     healPrediction = "heal prediction hots", absorbs = "shield absorb", damageTrail = "hit lost red hp",
-    damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
+    damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", manaTick = "mp5 regen regeneration spark five second rule 5sr", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
     threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
     dispelGlow = "cleanse decurse magic curse poison disease debuff", dispelWho = "cleanse decurse debuff",
     rpDispelStyle = "cleanse decurse debuff", rpDispelIcon = "cleanse decurse magic curse poison disease debuff",
@@ -1860,6 +1860,7 @@ local function buildSettings()
             B.under(cost, shown,
                 B.swatch("Trail colour", colourOf("costTrailColor"), function(r, g, b) setSetting(unit, "costTrailColor", { r, g, b }) end,
                     "The colour of the trail left by what a spell just used. Click to change it."))
+            B.check("manaTick", "Mana tick", "A light that runs along your mana bar: after you spend mana, across it over 5 seconds in white (the five second rule); then in blue every 2 seconds, growing as it goes and sparkling at the end as each mana tick lands. Shows while you're below full mana.", true)
             if myClass == "DRUID" then
                 local druid = B.check("druidMana", "Druid mana", "While you're in bear or cat form, your mana shows in a slim bar under the frame. Drag it anywhere in Edit Mode.", true)
                 B.under(druid, isOn("druidMana"),

@@ -117,6 +117,7 @@ local DEFAULT_SETTINGS = {
     druidBars = "form",      -- player, druids in a form: "form" (the frame's bar: form power; slim bar: mana) or "mana" (the other way round)
     restTint = false,        -- player: the resting Zzz takes the frame colour
     costPredict = true,      -- player: while casting, the spell's cost shows on the power bar
+    manaTick = true,         -- player: a light at the mana fill's end, growing until the next mana tick
     costShade = 55,          -- player: how much lighter (above 0) or darker (below 0) the cost shows
     cornerStyle = "retail",  -- player: the corner accent's art, Retail's or Forever's own
     petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (Default: as drawn)
@@ -1397,6 +1398,78 @@ local function updateManaTrail(f, maxP, curP, token)
     t:Show()
 end
 
+-- The mana tick, across the whole mana bar, as the classic "five second rule" addons show it:
+--   - after you spend mana, the light travels the bar's length over 5 seconds, in soft white (no
+--     regen from spirit until that's over);
+--   - then, in blue, it sweeps the bar every 2 seconds, growing as it goes, a star sparkling in it,
+--     and bursts at the end as the tick's mana lands (the game's regen clock keeps running even
+--     while regen is paused, so the sweeps stay in step with it).
+-- The ticks are seen as your mana going up on its own, the spending as it going down. Hidden at full
+-- mana, and until a tick or a spend has been seen. (Your mana can be hidden from addons in combat:
+-- then it carries on from the last tick seen.)
+local MANA_TICK, MANA_RULE = 2, 5
+local function updateManaTick(f, curP, maxP, isMana)
+    local mt = f.manaTick
+    if not (isMana and getSetting("player", "manaTick")) then
+        if mt then mt:Hide(); mt.last = nil end
+        return
+    end
+    if not mt then
+        mt = CreateFrame("Frame", nil, f.mp)
+        mt:SetFrameLevel(f.mp:GetFrameLevel() + 4)
+        mt:SetSize(1, 1)
+        mt.glow = mt:CreateTexture(nil, "OVERLAY")
+        mt.glow:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+        mt.glow:SetBlendMode("ADD")
+        mt.glow:SetPoint("CENTER")
+        mt.glow:SetVertexColor(0.55, 0.82, 1)
+        mt.star = mt:CreateTexture(nil, "OVERLAY", nil, 1)
+        mt.star:SetTexture("Interface\\Cooldown\\star4")
+        mt.star:SetBlendMode("ADD")
+        mt.star:SetPoint("CENTER")
+        mt.star:SetVertexColor(0.8, 0.93, 1)
+        mt:SetScript("OnUpdate", function(self)
+            local now = GetTime()
+            local h, w = f.mp:GetHeight() or 10, f.mp:GetWidth() or 100
+            local p, k, burst
+            if self.ruleUntil and now < self.ruleUntil then
+                -- the five second rule: steady across the bar, soft white, no sparkle
+                p = 1 - (self.ruleUntil - now) / MANA_RULE
+                k, burst = 0.35, 0
+                self.glow:SetVertexColor(1, 1, 1)
+                self.star:SetVertexColor(1, 1, 1)
+            else
+                -- the regen ticks: sweeping every 2 seconds, swelling towards the tick, a burst as it lands
+                local since = now - (self.tickAt or now)
+                p = (since % MANA_TICK) / MANA_TICK
+                k = p * p
+                burst = math.max(0, 1 - since / 0.35)
+                self.glow:SetVertexColor(0.55, 0.82, 1)
+                self.star:SetVertexColor(0.8, 0.93, 1)
+            end
+            -- (a burst shows at the bar's end, where the sweep just finished)
+            self:ClearAllPoints()
+            self:SetPoint("CENTER", f.mp, "LEFT", (burst > 0 and 1 or p) * w, 0)
+            self.glow:SetSize(4 + 10 * k + 8 * burst, h * (0.9 + 1.1 * k + burst))
+            self.glow:SetAlpha(math.min(1, 0.15 + 0.85 * k + burst))
+            local s = h * (0.5 + 1.5 * k + 2.2 * burst)
+            self.star:SetSize(s, s)
+            self.star:SetAlpha(math.min(1, (k > 0.3 and 0.2 + 0.8 * k or 0) + burst))
+            pcall(self.star.SetRotation, self.star, now * 1.4)
+        end)
+        f.manaTick = mt
+    end
+    local cur = (not isSecret(curP)) and tonumber(curP) or nil
+    local max = (not isSecret(maxP)) and tonumber(maxP) or nil
+    if cur and mt.last then
+        if cur > mt.last then mt.tickAt = GetTime()                       -- (mana up on its own: a tick)
+        elseif cur < mt.last then mt.ruleUntil = GetTime() + MANA_RULE end  -- (spent: the five second rule)
+    end
+    if cur then mt.last = cur end
+    local full = cur and max and cur >= max
+    mt:SetShown(((mt.tickAt ~= nil or mt.ruleUntil ~= nil) and not full) and true or false)
+end
+
 local function updatePower(f)
     local u = f.wfUnit
     if not UnitExists(u) then return end
@@ -1450,6 +1523,7 @@ local function updatePower(f)
         if swap then maxP, curP = UnitPowerMax(u, MANA), UnitPower(u, MANA) else maxP, curP = UnitPowerMax(u), UnitPower(u) end
         f.mpMaxNow = maxP
         pcall(updateManaTrail, f, maxP, curP, token)
+        pcall(updateManaTick, f, curP, maxP, not isSecret(token) and token == "MANA")
     end
     if f.costBar then pcall(updateCostPrediction, f) end
     -- a druid in bear or cat form: their mana in the slim bar under the frame
