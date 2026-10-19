@@ -1845,6 +1845,15 @@ local function buildSettings()
                         if v == 0 then return "Off" end
                         return string.format(v > 0 and "Lighter %d%%" or "Darker %d%%", math.abs(v))
                     end))
+            -- the colours they light up in (white to start with)
+            local function colourOf(key) return function() local c = get(key); return type(c) == "table" and c or { 1, 1, 1 } end end
+            local function shade() return tonumber(get("costShade")) or 55 end
+            B.under(cost, function() return get("costPredict") and shade() > 0 end,
+                B.swatch("Cost colour", colourOf("costColor"), function(r, g, b) setSetting(unit, "costColor", { r, g, b }) end,
+                    "The colour the cost lights up in while you cast (with Shading set lighter). Click to change it."))
+            B.under(cost, function() return get("costPredict") and shade() ~= 0 end,
+                B.swatch("Trail colour", colourOf("costTrailColor"), function(r, g, b) setSetting(unit, "costTrailColor", { r, g, b }) end,
+                    "The colour of the trail left by what a spell just used. Click to change it."))
             if myClass == "DRUID" then
                 local druid = B.check("druidMana", "Druid mana", "While you're in bear or cat form, your mana shows in a slim bar under the frame. Drag it anywhere in Edit Mode.", true)
                 B.under(druid, isOn("druidMana"),

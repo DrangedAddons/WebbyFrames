@@ -1314,8 +1314,12 @@ local function shadeCostBar(bar, flash)
     local a = math.min(1, math.abs(v) / 100 + (flash and 0.25 or 0))
     local tex = bar:GetStatusBarTexture()
     if v > 0 or flash then
+        -- (lightened with a colour of your own: Cost colour for the preview, Trail colour for the
+        -- trail; white unless you pick one)
+        local c = getSetting("player", flash and "costTrailColor" or "costColor")
+        if type(c) ~= "table" then c = { 1, 1, 1 } end
         pcall(tex.SetBlendMode, tex, "ADD")
-        bar:SetStatusBarColor(1, 1, 1, a)
+        bar:SetStatusBarColor(c[1] or 1, c[2] or 1, c[3] or 1, a)
     else
         pcall(tex.SetBlendMode, tex, "BLEND")
         bar:SetStatusBarColor(0, 0, 0, a)

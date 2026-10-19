@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.2
+- Spell costs: pick the colours yourself. Cost colour for the cast preview (when Shading is set lighter) and Trail colour for the trail of what was just used; both white to start with (player page, Health and power).
+
 ## 1.16.1
 - Spell costs: the trail of what a spell just used shows again, in combat too. It now follows your power a moment late, as the health bar's recent damage does, instead of comparing amounts the game can hide in combat.
 - Raid-style tiles: "Your buffs" is now just "Buffs".
