@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.1
+- Spell costs: the trail of what a spell just used shows again, in combat too. It now follows your power a moment late, as the health bar's recent damage does, instead of comparing amounts the game can hide in combat.
+- Raid-style tiles: "Your buffs" is now just "Buffs".
+
 ## 1.16.0
 Edit Mode, made nicer
 - Every Webby frame and box has an amber outline and a name tag in Edit Mode, lit up when you pick it.

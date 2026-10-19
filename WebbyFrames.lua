@@ -1181,7 +1181,6 @@ local function followTrail(self, elapsed)
     self.pending = false
     self:SetScript("OnUpdate", nil)
     if not (SMOOTH and pcall(self.SetValue, self, self.target, SMOOTH)) then pcall(self.SetValue, self, self.target) end
-    self.shown = self.targetPlain       -- (the mana trail keeps track of where it stands)
 end
 
 local function updateDamageTrail(f, status)
@@ -1370,28 +1369,24 @@ local function updateManaTrail(f, maxP, curP, token)
         t.clip:SetPoint("BOTTOMRIGHT", f.mp, "BOTTOMRIGHT")
     end
     pcall(t.SetMinMaxValues, t, 0, maxP)
-    local now = (not isSecret(curP)) and tonumber(curP) or nil
-    local dropped = now and t.shown and t.token == token and now < t.shown
-    t.token = token
-    if dropped then
-        -- spent: the trail stays at the old value a moment, then catches up (followTrail); the cast
-        -- preview hands over to it now
-        f.costHold = nil
-        t.target, t.targetPlain = curP, now
+    -- It never compares numbers (in combat the game can hide your power from addons, and testing a
+    -- hidden number fails): the trail just follows your power a moment late. After a drop it still
+    -- shows the old amount, lit, past the fill's new end; when it rises the trail is under the fill,
+    -- where the clip hides it. A switch of power type (a druid's form) goes straight there.
+    f.costHold = nil              -- (the cast preview hands over to it: the power has moved)
+    local switched = isSecret(token) or t.token ~= token
+    t.token = (not isSecret(token)) and token or nil
+    t.target = curP
+    if switched then
+        t.pending = false
+        t:SetScript("OnUpdate", nil)
+        pcall(t.SetValue, t, curP)
+    else
         if not t.pending then
             t.pending, t.waited = true, 0
             t:SetScript("OnUpdate", followTrail)
         end
         t.wait = TRAIL_WAIT
-    elseif t.pending and now and t.shown and now < t.shown then
-        -- (still waiting and it ticked back up a little: catch up to that instead)
-        t.target, t.targetPlain = curP, now
-    else
-        -- regen, another power type, or a hidden value: straight there, no trail
-        t.pending = false
-        t:SetScript("OnUpdate", nil)
-        pcall(t.SetValue, t, curP)
-        t.shown = now
     end
     t:Show()
 end
