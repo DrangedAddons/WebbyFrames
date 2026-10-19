@@ -1026,9 +1026,9 @@ local function buildSettings()
                 local boxes = {}
                 for i, d in ipairs({ a, b }) do
                     local cb = Opt.newCheck(f)
-                    -- (the first box where the other rows' names start, so it lines up with them and stays clear of
-                    -- the section edge; the second at the controls' column)
-                    cb:SetPoint("LEFT", i == 1 and (L + 17 + 18 * (row.indent or 0)) or (CX - 10), 0)
+                    -- (the first switch where the other rows' names start, so it lines up with them; the second
+                    -- at the controls' column, with the other rows' controls)
+                    cb:SetPoint("LEFT", i == 1 and (L + 20 + 18 * (row.indent or 0)) or CX, 0)
                     local fs = Opt.text(f, 12)
                     fs:SetPoint("LEFT", cb, "RIGHT", 10, 0)
                     fs:SetText(d[2])
@@ -1083,7 +1083,7 @@ local function buildSettings()
                 local s = CreateFrame("Slider", nil, f, "BackdropTemplate")
                 s:SetOrientation("HORIZONTAL")
                 s:SetSize(150, 18)
-                s:SetPoint("LEFT", CX + 24, 0)
+                s:SetPoint("LEFT", CX + 23, 0)      -- (so the - button, 18 px and a 5 px gap to its left, starts on the controls' column)
                 -- (a thin track, the accent filling it up to a slim white thumb)
                 local track = Opt.rect(s, "BACKGROUND", { 1, 1, 1 }, 0.1)
                 track:SetPoint("LEFT"); track:SetPoint("RIGHT"); track:SetHeight(4)
@@ -1204,8 +1204,8 @@ local function buildSettings()
         function B.fade(read, set, tip)
             local fade = B.check("healthFade", "Fade to red as health drops", tip, false)
             local function fadeOn() return getSetting(read, "healthFade") and true or false end
-            local style = B.dropdown("fadeStyle", "Fade colours", "Automatic: the colour turns to red round the colour wheel (shamans, mages and warlocks each have their own route), fully red from 25% health.\n\nMy own: up to three colour stops, each at a health % you choose.", "auto",
-                { { "auto", "Automatic" }, { "custom", "My own" } })
+            local style = B.dropdown("fadeStyle", "Fade colours", "Automatic: the colour turns to red round the colour wheel (shamans, mages and warlocks each have their own route), fully red from 25% health.\n\nCustom: up to three colour stops, each at a health % you choose.", "auto",
+                { { "auto", "Automatic" }, { "custom", "Custom" } })
             B.under(fade, fadeOn, style)
             B.showIf(fadeOn, style)
             local function custom() return fadeOn() and getSetting(read, "fadeStyle") == "custom" end
@@ -1265,14 +1265,14 @@ local function buildSettings()
         B.pair(showItem("focustarget"), showItem("pet"))
         B.pair({ "show_party", "Party", "Show the party frames (and hide Blizzard's). Turned off, Blizzard's party frames come back after a /reload.", true })
         B.button("Position", "Open Edit Mode", openEditMode, "Drag the frames where you want them. They snap to each other and to the middle of the screen, and a frame dropped next to another moves with it.")
-        B.button("Start over", "Reset all frames", function()
+        B.button("Reset", "Reset all frames", function()
             for _, unit in ipairs(UNITS) do resetFrame(unit) end
         end, "Puts every frame back to its default options and position, for the current Edit Mode layout.")
 
         B.header("Profiles")
-        B.button("Share", "Export profile", function() Profiles.show("export") end,
+        B.button("Export", "Export profile", function() Profiles.show("export") end,
             "Every frame's options and position in this Edit Mode layout, as text you can copy and keep or share.")
-        B.button("Load", "Import profile", function() Profiles.show("import") end,
+        B.button("Import", "Import profile", function() Profiles.show("import") end,
             "Paste a profile exported here or on another character. It replaces this layout's options and positions.")
 
         B.header("Pick a frame on the left for its own options.")
@@ -1332,7 +1332,7 @@ local function buildSettings()
         local colour = B.dropdown("colorMode", "Health colour", "Every frame's health colour at once (the pet and the party's raid-style tiles follow as closely as their own choices allow). Each frame's page can then differ.", "smart", COLOR_MODES)
         local function byReaction() local m = getSetting("player", "colorMode"); return m == "smart" or m == "reaction" end
         local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs on every frame. Green lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
-            { { "reaction", "Red" }, { "green", "Green" }, { "custom", "My own" } })
+            { { "reaction", "Red" }, { "green", "Green" }, { "custom", "Custom" } })
         local npcCustom = B.swatch("Custom NPC colour", function()
             local c = getSetting("target", "npcColorRGB")
             return type(c) == "table" and c or { 0.1, 0.8, 0.1 }
@@ -1342,12 +1342,12 @@ local function buildSettings()
         B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
         B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
                { "absorbs", "Shields and heal absorbs", "Damage shields and healing absorbs on the health bars.", true })
-        B.pair({ "damageTrail", "Show recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true })
+        B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true })
 
         B.section("Buffs and debuffs", false)
-        local dispel = B.check("dispelGlow", "Dispel glow", "On every frame: when the unit has a debuff you can dispel, the frame takes its colour and pulses.", true)
+        local dispel = B.check("dispelGlow", "Dispel glow", "On every frame: when the unit has a debuff you can dispel, the frame takes the debuff type's colour and pulses.", true)
         B.under(dispel, function() return getSetting("player", "dispelGlow") and true or false end,
-            B.dropdown("dispelWho", "Dispel glow for", "Debuffs you can dispel yourself, or any debuff someone could dispel, on every frame.", "mine",
+            B.dropdown("dispelWho", "Glow for", "Debuffs you can dispel yourself, or any debuff someone could dispel, on every frame.", "mine",
                 { { "mine", "Ones I can dispel" }, { "all", "Any dispellable" } }))
         B.dropdown("auraTimer", "Time left", "How each icon shows the time it has left, on every frame.", "both",
             { { "both", "Sweep and numbers" }, { "swipe", "Sweep" }, { "numbers", "Numbers" }, { "none", "Nothing" } })
@@ -1376,7 +1376,7 @@ local function buildSettings()
         end
 
         -- Style and layout ----------------------------------------------------------------
-        B.section("Style and layout", true)
+        B.section("Style and layout")
         B.pair({ "frameShown", "Show party frames", "Turned off, Blizzard's party frames come back after a /reload. Also on the General page.", true })
         B.dropdown("partyStyle", "Style", "Portrait frames: like your own frame, with portraits. Raid style: flat tiles like Blizzard's raid-style party frames. The raid style is placed in Edit Mode on its own.", "portrait",
             { { "portrait", "Portrait frames" }, { "raid", "Raid style" } })
@@ -1423,7 +1423,7 @@ local function buildSettings()
                { "healerMana", "Healer mana", "A small list of your group's healers and their mana, placed in Edit Mode (Webby Healer Mana).", false })
         local fade = B.check("rangeFade", "Fade when out of range", "Members too far away for your spells fade out.", true)
         B.under(fade, on("rangeFade"),
-            B.slider("rangeAlpha", "Fade amount", "How see-through a member out of range is.", defaultFor("party", "rangeAlpha"), 0.1, 0.9, 0.05))
+            B.slider("rangeAlpha", "Out of range opacity", "How much of a member still shows while out of range: lower fades them more.", defaultFor("party", "rangeAlpha"), 0.1, 0.9, 0.05))
         B.dropdown("partyTooltip", "Tooltips", "When hovering a party member shows their tooltip.", "always",
             { { "always", "Always" }, { "ooc", "Out of combat" }, { "never", "Never" } })
 
@@ -1465,7 +1465,7 @@ local function buildSettings()
             B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor("party", "mpAlpha"), 0.2, 1, 0.05),
             B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
                    { "absorbs", "Shields and heal absorbs", "Damage shields past the end of the health, and healing absorbs eating back into it.", true }),
-            B.pair({ "damageTrail", "Show recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true }))
+            B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true }))
         B.showIf(raid,
             B.pair({ "rpPowerTank", "Power: tanks", "A slim power bar along the bottom of tanks' tiles.", true },
                    { "rpPowerHealer", "Power: healers", "A slim mana bar along the bottom of healers' tiles.", true }),
@@ -1479,7 +1479,7 @@ local function buildSettings()
         B.section("Buffs and debuffs", false)
         local dispel = B.check("dispelGlow", "Dispel glow", "When a member has a debuff you can dispel, their frame takes its colour (magic blue, curse purple, disease brown, poison green) and pulses.", true)
         B.under(dispel, on("dispelGlow"),
-            B.dropdown("dispelWho", "Dispel glow for", "Debuffs you can dispel yourself, or any debuff someone could dispel.", "mine",
+            B.dropdown("dispelWho", "Glow for", "Debuffs you can dispel yourself, or any debuff someone could dispel.", "mine",
                 { { "mine", "Ones I can dispel" }, { "all", "Any dispellable" } }))
         local look = B.dropdown("rpDispelStyle", "Dispel look", "How it shows on the tile, in the debuff type's colour, pulsing: a tint rising from the bottom, a flat tint, or just the coloured edge.", "gradient",
             { { "gradient", "Gradient" }, { "fill", "Flat tint" }, { "edge", "Edge only" } })
@@ -1493,16 +1493,16 @@ local function buildSettings()
             B.slider("rpAuraSize", "Icon size", "Their debuffs (bottom left) and your heals over time on them (bottom right). New sizes show on new icons; /reload for all of them.", defaultFor("party", "rpAuraSize"), 10, 24, 1, px))
         -- (the portrait frames' buffs and debuffs, as on the other frames)
         local function anyAuras() return portrait() and (get("auraBuffs") or get("auraDebuffs")) and true or false end
-        local buffs = B.check("auraBuffs", "Buffs", nil, defaultFor("party", "auraBuffs"))
+        local buffs = B.check("auraBuffs", "Buffs", "Each member's buffs, as icons by their frame.", defaultFor("party", "auraBuffs"))
         local buffOpts = {
             B.dropdown("auraStyle", "Style", "Retail: only the buffs you put on them (your heals over time, shields).\nEverything: all their buffs.", defaultFor("party", "auraStyle"),
                 { { "retail", "Retail" }, { "all", "Everything" } }),
-            B.slider("auraSize", "Size", nil, defaultFor("party", "auraSize"), 12, 40, 1, px),
+            B.slider("auraSize", "Size", "How big the buff icons are.", defaultFor("party", "auraSize"), 12, 40, 1, px),
         }
         B.under(buffs, on("auraBuffs"), unpack(buffOpts))
-        local debuffs = B.check("auraDebuffs", "Debuffs", "Debuffs always all show, the ones that matter first.", defaultFor("party", "auraDebuffs"))
+        local debuffs = B.check("auraDebuffs", "Debuffs", "Each member's debuffs, as icons by their frame, the ones that matter most first.", defaultFor("party", "auraDebuffs"))
         local debuffOpts = {
-            B.slider("auraDebuffSize", "Size", nil, defaultFor("party", "auraSize"), 12, 40, 1, px),
+            B.slider("auraDebuffSize", "Size", "How big the debuff icons are.", defaultFor("party", "auraSize"), 12, 40, 1, px),
             B.check("auraMine", "Only mine", "Only the debuffs you applied.", false),
             B.check("auraMineBig", "Bigger own debuffs", "Your own debuffs first and bigger, so you can keep track of them.", false),
         }
@@ -1548,7 +1548,7 @@ local function buildSettings()
         local isPlayer, isPet = unit == "player", unit == "pet"
 
         -- Frame ---------------------------------------------------------------------------
-        B.section("Frame", true)
+        B.section("Frame")
         if not ALWAYS_SHOWN[unit] then
             B.pair({ "frameShown", "Show this frame", "Turned off, the frame stays hidden, in Edit Mode too. Also on the General page.", true })
         end
@@ -1578,7 +1578,7 @@ local function buildSettings()
         end
         if isPet and myClass == "HUNTER" then
             B.dropdown("petHappy", "Pet happiness", "Your pet's mood, with its diet, damage and loyalty in the tooltip.\n\nCorner: at the portrait's bottom right, where your frame has its corner point and combat swords.\nLevel badge: at the portrait's bottom left, where your frame has its level circle (the tooltip gives the pet's level).", "corner",
-                { { "off", "Off" }, { "corner", "On the corner" }, { "badge", "Level badge" } })
+                { { "off", "Off" }, { "corner", "Corner" }, { "badge", "Level badge" } })
         end
 
         -- Health and power ----------------------------------------------------------------
@@ -1595,11 +1595,11 @@ local function buildSettings()
             B.dropdown("petColor", "Health colour", "Default: the bar as the game draws it (green). Or the same as your player frame's (your class colour, if that's what the player frame uses).", "player",
                 { { "plain", "Default" }, { "player", "Match the player frame" } })
         else
-            local colour = B.dropdown("colorMode", "Health colour", "How the health bar is coloured.", "smart", COLOR_MODES)
+            local colour = B.dropdown("colorMode", "Health colour", "Default: the bar as the game draws it (green).\nClass for players, reaction for NPCs: players in their class colour, NPCs red, yellow or green by how they feel about you.\nClass colour: players in their class colour, NPCs as drawn.\nBy reaction: everyone red, yellow or green by how they feel about you.\nDark: a flat dark bar.", "smart", COLOR_MODES)
             if not isPlayer then
                 local function byReaction() local m = get("colorMode"); return m == "smart" or m == "reaction" end
                 local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs. Green (or your own colour) lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
-                    { { "reaction", "Red" }, { "green", "Green" }, { "custom", "My own" } })
+                    { { "reaction", "Red" }, { "green", "Green" }, { "custom", "Custom" } })
                 local npcCustom = B.swatch("Custom NPC colour", function()
                     local c = get("npcColorRGB")
                     return type(c) == "table" and c or { 0.1, 0.8, 0.1 }
@@ -1613,10 +1613,10 @@ local function buildSettings()
         B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor(unit, "mpAlpha"), 0.2, 1, 0.05)
         B.pair({ "healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true },
                { "absorbs", "Shields and heal absorbs", "Damage shields in pale blue past the end of its health (and a glow at the end when they're more than the missing health), and healing absorbs eating back into it in red.", true })
-        B.pair({ "damageTrail", "Show recent damage", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true },
+        B.pair({ "damageTrail", "Recent damage", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true },
                (unit == "target" or unit == "focus") and { "damagePredict", "Preview spell damage", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true } or nil)
         if isPlayer then
-            local cost = B.check("costPredict", "Show spell costs", "On your mana (or other power) bar: while you cast, the part the spell will use is shaded; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true)
+            local cost = B.check("costPredict", "Spell costs", "On your mana (or other power) bar: while you cast, the part the spell will use is shaded; when any spell or ability goes off (instants too), what it used flashes past the end of the bar.", true)
             B.under(cost, isOn("costPredict"),
                 B.slider("costShade", "Shading", "How the cost shows on the bar while you cast: lighter (right) or darker (left), and by how much. The flash when a spell goes off always stays light.", 55, -100, 100, 5,
                     function(v)
@@ -1627,7 +1627,7 @@ local function buildSettings()
             if myClass == "DRUID" then
                 local druid = B.check("druidMana", "Druid mana", "While you're in bear or cat form, your mana shows in a slim bar under the frame. Drag it anywhere in Edit Mode.", true)
                 B.under(druid, isOn("druidMana"),
-                    B.dropdown("druidBars", "Druid bars", "In bear or cat form: the frame's bar shows your rage or energy and the slim bar your mana, or the frame's bar keeps your mana and the slim bar shows the form's rage or energy.", "form",
+                    B.dropdown("druidBars", "Bar order", "In bear or cat form: the frame's bar shows your rage or energy and the slim bar your mana, or the frame's bar keeps your mana and the slim bar shows the form's rage or energy.", "form",
                         { { "form", "Form power first" }, { "mana", "Mana first" } }))
             end
         end
@@ -1637,16 +1637,16 @@ local function buildSettings()
         local function anyAuras() return (get("auraBuffs") or get("auraDebuffs")) and true or false end
         local dispel = B.check("dispelGlow", "Dispel glow", "When the unit has a debuff you can dispel, the frame takes its colour (magic blue, curse purple, disease brown, poison green) and pulses, like the resting glow.", defaultFor(unit, "dispelGlow"))
         B.under(dispel, isOn("dispelGlow"),
-            B.dropdown("dispelWho", "Dispel glow for", "Debuffs you can dispel yourself, or any debuff someone could dispel (magic, curse, disease, poison).", "mine",
+            B.dropdown("dispelWho", "Glow for", "Debuffs you can dispel yourself, or any debuff someone could dispel (magic, curse, disease, poison).", "mine",
                 { { "mine", "Ones I can dispel" }, { "all", "Any dispellable" } }))
-        local buffs = B.check("auraBuffs", "Buffs", nil, defaultFor(unit, "auraBuffs"))
+        local buffs = B.check("auraBuffs", "Buffs", "The unit's buffs, as icons by the frame.", defaultFor(unit, "auraBuffs"))
         B.under(buffs, isOn("auraBuffs"),
             B.dropdown("auraStyle", "Style", "Retail: on a friend, only the buffs you put on them (your heals over time, shields); on an enemy, all their buffs.\nEverything: all their buffs.", defaultFor(unit, "auraStyle"),
                 { { "retail", "Retail" }, { "all", "Everything" } }),
-            B.slider("auraSize", "Size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, px))
-        local debuffs = B.check("auraDebuffs", "Debuffs", "Debuffs always all show, the ones that matter first.", defaultFor(unit, "auraDebuffs"))
+            B.slider("auraSize", "Size", "How big the buff icons are.", defaultFor(unit, "auraSize"), 12, 40, 1, px))
+        local debuffs = B.check("auraDebuffs", "Debuffs", "The unit's debuffs, as icons by the frame, the ones that matter most first.", defaultFor(unit, "auraDebuffs"))
         local debuffOpts = {
-            B.slider("auraDebuffSize", "Size", nil, defaultFor(unit, "auraSize"), 12, 40, 1, px),
+            B.slider("auraDebuffSize", "Size", "How big the debuff icons are.", defaultFor(unit, "auraSize"), 12, 40, 1, px),
             B.check("auraMine", "Only mine", "Only the debuffs you applied.", false),
         }
         if not OWN_CLASS[unit] then
@@ -1675,8 +1675,8 @@ local function buildSettings()
             B.check("weaponEnchants", "Weapon enchants", "Your weapons' temporary enchants and imbues (poisons, oils, stones, Rockbiter, Windfury, Flametongue...) as icons just before your buffs, with the time left. Hover for the details.", true)
             local bars = B.check("buffBars", "Buffs as timer bars", "Your buffs as bars with their icon, name and time left, in a block you place in Edit Mode (Webby Buff Bars).", false)
             B.under(bars, isOn("buffBars"),
-                B.dropdown("buffBarsWho", "Bars show", "Only the buffs you cast (on yourself), or every buff on you.", "mine",
-                    { { "mine", "My buffs" }, { "all", "All my buffs" } }),
+                B.dropdown("buffBarsWho", "Bars show", "Only the buffs you cast on yourself, or every buff on you.", "mine",
+                    { { "mine", "Buffs I cast" }, { "all", "All buffs on me" } }),
                 B.slider("buffBarsMax", "Most bars", "How many bars show at once.", 8, 1, 16, 1, whole),
                 B.slider("buffBarsWidth", "Bar width", "How wide each bar is.", 180, 100, 320, 1, px))
         end
@@ -1693,7 +1693,7 @@ local function buildSettings()
                 B.dropdown("threatShow", "Show", "A glow round the frame, your threat %, or both.", "both",
                     { { "both", "Glow and number" }, { "glow", "Glow only" }, { "number", "Number only" } }))
             B.under(threat, function() local m = get("threatShow"); return m == "both" or m == "number" end,
-                B.dropdown("threatStyle", "Threat number", "Your threat %. About 110% pulls aggro in melee and 130% at range. While you have aggro, it's your threat compared with the next highest in your group.\n\nJust the number: beside the raid marker on the portrait.\nBox: a small box above the end of the name.", "text",
+                B.dropdown("threatStyle", "Number style", "Your threat %. About 110% pulls aggro in melee and 130% at range. While you have aggro, it's your threat compared with the next highest in your group.\n\nJust the number: beside the raid marker on the portrait.\nIn a box: a small box above the end of the name.", "text",
                     { { "text", "Just the number" }, { "box", "In a box above the name" } }))
             B.under(threat, function() return get("threatShow") ~= "off" end,
                 B.dropdown("threatColors", "Threat colours", "The colour of the glow and the number.\nGreen to red: green when you're safe, turning red as you get closer to pulling aggro.\nBlizzard's: the game's own threat colours.", "gradient",

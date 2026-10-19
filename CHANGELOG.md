@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.14.3
+Settings tidy-up
+- Paired switches and sliders now line up with the rest of the rows and the controls column.
+- Every option has a tooltip (Buffs, Debuffs and their icon sizes had none; Click casting's Does, Rank and Cast on now explain themselves).
+- Clearer tooltips: Health colour explains each choice, Out of range opacity (was Fade amount) says what the number means, and Debuffs no longer contradicts Only mine.
+- Consistent names: Custom everywhere (was My own in places), Recent damage, Spell costs, Glow for, Bar order, Number style, Reset / Export / Import, and the buff bars' Buffs I cast / All buffs on me.
+
 ## 1.14.2
 Lighter in combat
 - Party frames only react to changes on you and your party (they were redrawing their icons for every unit about, nameplates included).
