@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.42
+- Shields simplified: always in the missing health after the health, and when there's more shield than that, the rest grows back over the health from the bar's right end. The Placement and Overshield options are gone.
+- The shield Preview shows a shield that fits in the missing health, without the extra slice over the health.
+
 ## 1.16.41
 - Shields stay inside the health bar, in two parts: in the missing health after the health, and what doesn't fit drawn back over the health, so the whole shield always shows, even at full health.
 - Shield placement (in the Shields section): Overlay (the above), Overlay reverse (all of it back over the health), Overlay reverse (full), Right edge or Left edge (all of it over the whole bar from that end). Overshield, for Overlay: Always, From left (the extra from the bar's start) or Never (missing health only).

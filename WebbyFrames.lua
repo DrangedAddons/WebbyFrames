@@ -114,9 +114,6 @@ local DEFAULT_SETTINGS = {
     -- shields: their texture ("default": the health bar's; "striped": Blizzard's stripes) and opacity;
     -- absorbColor unset until picked (pale blue)
     absorbTexture = "default", absorbAlpha = 0.7,
-    -- where shields go (overlay / overlayReverse / overlayReverseFull / right / left) and what's past
-    -- the missing health (always / fromleft / never): ns.placeShields
-    absorbPlacement = "overlay", overshield = "always",
     -- glows on shields and incoming heals: off / pulse / shimmer / snow / blizzard, and how strong, and
     -- the border glow (ns.barGlow)
     absorbGlow = "off", absorbGlowAlpha = 0.6, healGlow = "off", healGlowAlpha = 0.6,
@@ -1305,10 +1302,9 @@ local function updatePrediction(f)
         f.healBar = newOverlay(f, 0.1, 0.9, 0.3, 0.6)          -- incoming heals, everyone's: green
         -- Shields, in two parts, each in a frame that clips it (the shield's amount can be hidden from
         -- addons, so both parts are given all of it, and the clipping shows the right share of each):
-        --   absorbBar: in the missing health (missClip: the fill's end to the bar's end);
-        --   absorbBack: over the health (curClip: the bar's start to the fill's end, or the whole bar
-        --   for the edge placements), for what doesn't fit, or all of it.
-        -- (Shield placement and Overshield, laid out by placeShields)
+        --   absorbBar: in the missing health, after the heals (missClip: the fill's end to the bar's end);
+        --   absorbBack: what doesn't fit, back over the health from the bar's right end (curClip: the
+        --   bar's start to the fill's end). (Laid out by placeShields.)
         f.missClip = CreateFrame("Frame", nil, f.predClip)
         f.missClip:SetClipsChildren(true)
         f.missClip:SetFrameLevel(f.predClip:GetFrameLevel())
@@ -1334,19 +1330,16 @@ local function updatePrediction(f)
     local fill = f.hp:GetStatusBarTexture()
     local healTex = f.healBar:GetStatusBarTexture()
     local w = f.hp:GetWidth()
-    local place = getSetting(f.baseUnit, "absorbPlacement") or "overlay"
-    local over = getSetting(f.baseUnit, "overshield") or "always"
     -- The anchors sit on the health fill, which already moves. Re-anchor only when that fill, the
-    -- heal texture, the bar width or the shield's placement changes.
-    if fill and healTex
-        and (f.predFill ~= fill or f.predHealTex ~= healTex or f.predW ~= w or f.predPlace ~= place or f.predOver ~= over) then
-        f.predFill, f.predHealTex, f.predW, f.predPlace, f.predOver = fill, healTex, w, place, over
+    -- heal texture or the bar width changes.
+    if fill and healTex and (f.predFill ~= fill or f.predHealTex ~= healTex or f.predW ~= w) then
+        f.predFill, f.predHealTex, f.predW = fill, healTex, w
         -- the heals start at the end of the health fill
         f.healBar:ClearAllPoints()
         f.healBar:SetPoint("TOPLEFT", fill, "TOPRIGHT")
         f.healBar:SetPoint("BOTTOMLEFT", fill, "BOTTOMRIGHT")
         f.healBar:SetWidth(w)
-        ns.placeShields(f, fill, healTex, w, place, over)
+        ns.placeShields(f, fill, healTex, w)
     end
 
     local max = value(UnitHealthMax, u)
@@ -1378,61 +1371,32 @@ local function updatePrediction(f)
     ns.setShields(f, absorb)
 end
 
--- Where shields go (Shield placement), and what's past the missing health (Overshield):
---   overlay: in the missing health after the heals; what doesn't fit, back over the health from
---     its end (Overshield always), or from the bar's start (from left), or not shown (never);
---   overlayReverse: all of it back over the health from its end;
---   overlayReverseFull: the same, and what's more than the health in the missing health, from the
---     bar's start;
---   right / left: all of it over the whole bar from that end.
--- Both parts are bars the width of the health bar given the whole shield; the clipping frames show
--- the share of each (missClip: the missing health; curClip: the health, or the whole bar).
-function ns.placeShields(f, fill, healTex, w, place, over)
+-- Where shields go: in the missing health after the heals, and once that's full, what's left grows
+-- back over the health from the bar's right end, so the whole shield always shows and never past
+-- the bar's end. Both parts are bars the width of the health bar given the whole shield; the
+-- clipping frames show the share of each (missClip: the missing health; curClip: the health).
+function ns.placeShields(f, fill, healTex, w)
     local hp, fw, ab = f.hp, f.absorbBar, f.absorbBack
     local missClip, curClip = f.missClip, f.curClip
     missClip:ClearAllPoints(); curClip:ClearAllPoints(); fw:ClearAllPoints(); ab:ClearAllPoints()
     missClip:SetPoint("TOPLEFT", fill, "TOPRIGHT")
     missClip:SetPoint("BOTTOMRIGHT", hp, "BOTTOMRIGHT")
-    local full = place == "overlayReverseFull"
-    fw:SetReverseFill(false)
-    if full then
-        fw:SetPoint("TOPLEFT", hp, "TOPLEFT")
-        fw:SetPoint("BOTTOMLEFT", hp, "BOTTOMLEFT")
-    else
-        fw:SetPoint("TOPLEFT", healTex, "TOPRIGHT")
-        fw:SetPoint("BOTTOMLEFT", healTex, "BOTTOMRIGHT")
-    end
+    fw:SetPoint("TOPLEFT", healTex, "TOPRIGHT")
+    fw:SetPoint("BOTTOMLEFT", healTex, "BOTTOMRIGHT")
     fw:SetWidth(w)
-    if place == "right" or place == "left" then
-        curClip:SetAllPoints(hp)
-        ab:SetReverseFill(place == "right")
-        ab:SetPoint("TOP" .. place:upper(), hp, "TOP" .. place:upper())
-        ab:SetPoint("BOTTOM" .. place:upper(), hp, "BOTTOM" .. place:upper())
-    else
-        curClip:SetPoint("TOPLEFT", hp, "TOPLEFT")
-        curClip:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
-        if place == "overlayReverse" or full or over == "fromleft" then
-            -- (from the fill's end back into it; from left: the other way, from one bar's length
-            -- before the fill's end, so only what's more than the missing health shows, from the start)
-            ab:SetReverseFill(place ~= "overlay")
-            ab:SetPoint("TOPRIGHT", fill, "TOPRIGHT")
-            ab:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
-        else
-            ab:SetReverseFill(true)
-            ab:SetPoint("TOPRIGHT", hp, "TOPRIGHT")
-            ab:SetPoint("BOTTOMRIGHT", hp, "BOTTOMRIGHT")
-        end
-    end
+    curClip:SetPoint("TOPLEFT", hp, "TOPLEFT")
+    curClip:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+    ab:SetReverseFill(true)
+    ab:SetPoint("TOPRIGHT", hp, "TOPRIGHT")
+    ab:SetPoint("BOTTOMRIGHT", hp, "BOTTOMRIGHT")
     ab:SetWidth(w)
-    f.shieldFw = place == "overlay" or full       -- (the missing-health part used)
-    f.shieldOver = not (place == "overlay" and over == "never")
 end
 
--- The shield's amount into its parts (as placed by placeShields).
+-- The shield's amount into both its parts (as placed by placeShields).
 function ns.setShields(f, absorb)
     if not f.absorbBar then return end
-    if not (f.shieldFw and pcall(setBarValue, f, f.absorbBar, absorb)) then f.absorbBar:SetValue(0) end
-    if not (f.shieldOver and pcall(setBarValue, f, f.absorbBack, absorb)) then f.absorbBack:SetValue(0) end
+    if not pcall(setBarValue, f, f.absorbBar, absorb) then f.absorbBar:SetValue(0) end
+    if not pcall(setBarValue, f, f.absorbBack, absorb) then f.absorbBack:SetValue(0) end
 end
 
 -- Damage trail: when health drops, the part just lost stays on the bar in red for a moment, then slides
@@ -3882,8 +3846,8 @@ function ns.applyFxPreview(f)
     if not f.predBars then return end
     for _, b in ipairs(f.predBars) do b:SetMinMaxValues(0, 100) end
     f.healBar:SetValue(fx.heal and 20 or 0)
-    -- (a shield bigger than the missing health, so its placement and overshield show)
-    ns.setShields(f, fx.absorb and 50 or 0)
+    -- (a shield that fits in the missing health, after the heal)
+    ns.setShields(f, fx.absorb and 15 or 0)
     -- (a snowglobe glow shaken, to show it off)
     ns.barGlowShake(f.absorbBar); ns.barGlowShake(f.absorbBack); ns.barGlowShake(f.healBar)
 end
@@ -5235,7 +5199,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
-                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "absorbPlacement", "overshield","healTexture", "healColor","healAlpha", "absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healTexture", "healColor", "healAlpha","absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }
@@ -5604,7 +5568,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         C_Timer.After(0.3, function()
             setBarValue(f, f.hp, 60)
             f.healBar:SetValue(getSetting("player", "healPrediction") and 20 or 0)
-            ns.setShields(f, getSetting("player", "absorbs") and 50 or 0)
+            ns.setShields(f, getSetting("player", "absorbs") and 15 or 0)
         end)
         local ok, err = pcall(showHit, f, "WOUND", "CRITICAL", 1234)      -- and a combat number on the portrait
         if not ok then print("|cff33ccffWebby Frames:|r combat number failed: " .. tostring(err)) end
