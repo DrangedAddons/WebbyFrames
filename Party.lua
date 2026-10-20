@@ -198,7 +198,10 @@ function Party.paintPet(m, barsOnly)
         local font = resolveFont(getSetting("party", "font"))
         if m.font ~= font then
             m.font = font
-            pcall(function() local fp, fz, ff = m.name:GetFont(); m.name:SetFont(font or fp, fz, ff) end)
+            -- (its own font remembered, so Default goes back to it; other alphabets kept: ns.setFont)
+            if not m.name.wfFontOrig then m.name.wfFontOrig = { m.name:GetFont() } end
+            local o = m.name.wfFontOrig
+            pcall(ns.setFont, m.name, font or o[1], o[2], o[3])
         end
     end
     if m.sampleName then m.name:SetText(m.sampleName) end      -- (a sample member's pet)
@@ -1968,8 +1971,12 @@ function RP.layout()
         RP.placeShields(t, w - 2 * px)
         if font ~= t.font then
             t.font = font
+            -- (each string's own font remembered first, so Default goes back to it; set as a family that
+            -- keeps the game's fonts for other alphabets, ns.setFont: Korean or Chinese names aren't boxes)
             for _, fs in ipairs({ t.name, t.status, t.hpText, t.mpText, p.name }) do
-                pcall(function() local fp, fz, ff = fs:GetFont(); fs:SetFont(font or fp, fz, ff) end)
+                if not fs.wfFontOrig then fs.wfFontOrig = { fs:GetFont() } end
+                local o = fs.wfFontOrig
+                pcall(ns.setFont, fs, font or o[1], o[2], o[3])
             end
         end
         RP.placeAuras(t)

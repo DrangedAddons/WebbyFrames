@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.28
+- Names in Korean, Chinese or Cyrillic letters show properly instead of boxes. Fonts are now set as a family that keeps the game's own fonts for those alphabets, with your chosen font (or the default) for Latin letters. On the unit frames, the raid-style tiles and the party pets.
+- Raid-style tiles and party pets: setting Font back to Default goes back to the original font.
+
 ## 1.16.27
 - Health colour: a mob someone else tags turns grey again on your target and focus frames (the held colour is read again when its flags change).
 

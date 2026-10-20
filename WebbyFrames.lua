@@ -599,6 +599,44 @@ local function resolveFont(key)
     end
 end
 
+-- Setting a font file on a string drops the game's font family, and with it the fonts for other
+-- alphabets: Korean, Chinese and Cyrillic names then show as boxes. So a font is set as a family of our
+-- own: the chosen (or default) file for Latin letters, the game's own fonts for the rest. Cached per
+-- file, size and outline. Its colour and shadow are kept. (A client without font families: the plain
+-- file, as before.)
+ns.FONT_ALPHABETS = {
+    { "korean", "Fonts\\2002.TTF" }, { "simplifiedchinese", "Fonts\\ARKai_T.ttf" },
+    { "traditionalchinese", "Fonts\\blei00d.TTF" }, { "russian", "Fonts\\FRIZQT___CYR.TTF" },
+}
+ns.fontFamilies, ns.fontFamilyCount = {}, 0
+function ns.setFont(fs, path, size, flags)
+    if not (fs and path and size) then return false end
+    flags = flags or ""
+    if not CreateFontFamily then return fs:SetFont(path, size, flags) end
+    local key = path .. "|" .. size .. "|" .. flags
+    local fam = ns.fontFamilies[key]
+    if fam == nil then
+        local members = { { alphabet = "roman", file = path, height = size, flags = flags } }
+        for _, a in ipairs(ns.FONT_ALPHABETS) do
+            members[#members + 1] = { alphabet = a[1], file = a[2], height = size, flags = flags }
+        end
+        ns.fontFamilyCount = ns.fontFamilyCount + 1
+        local ok, obj = pcall(CreateFontFamily, "WebbyFramesFont" .. ns.fontFamilyCount, members)
+        fam = ok and obj or false
+        ns.fontFamilies[key] = fam
+    end
+    if not fam then return fs:SetFont(path, size, flags) end
+    -- (a font object brings its own colour and shadow: the string's are put back)
+    local r, g, b, a = fs:GetTextColor()
+    local sx, sy = fs:GetShadowOffset()
+    local sr, sg, sb, sa = fs:GetShadowColor()
+    fs:SetFontObject(fam)
+    if r then fs:SetTextColor(r, g, b, a) end
+    if sx then fs:SetShadowOffset(sx, sy) end
+    if sr then fs:SetShadowColor(sr, sg, sb, sa) end
+    return true
+end
+
 -- The chosen font, at each string's own size. Name and number size, colour and anchor are locked:
 -- the font's own size and colour, numbers centred on their bar.
 local function applyFont(f)
@@ -614,9 +652,10 @@ local function applyFont(f)
             local d = f.fontDefaults[fs]
             local size, ol = d[2], d[3]
             if fs ~= f.name and d[4] then fs:SetTextColor(d[4], d[5], d[6]) end
+            -- (as a family, so names in other alphabets still have their letters: ns.setFont)
             local ok = false
-            if path and size then ok = fs:SetFont(path, size, ol) end
-            if not ok and d[1] then fs:SetFont(d[1], size or d[2], ol) end
+            if path and size then ok = ns.setFont(fs, path, size, ol) end
+            if not ok and d[1] then ns.setFont(fs, d[1], size or d[2], ol) end
         end
     end
     for _, pair in ipairs({ { f.hpText, f.hp }, { f.mpText, f.mp } }) do
