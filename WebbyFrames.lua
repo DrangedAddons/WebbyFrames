@@ -111,6 +111,9 @@ local DEFAULT_SETTINGS = {
     -- dispelGlow: the party frame glows in the dispel colour when you can dispel something on it
     auraStyle = "all", dispelGlow = true, dispelWho = "mine", auraMineBig = false,   -- (auraMineBig: your own debuffs first, bigger)
     healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
+    -- shields: their texture ("default": the health bar's; "striped": Blizzard's stripes) and opacity;
+    -- absorbColor / healAbsorbColor unset until picked (pale blue / red)
+    absorbTexture = "default", absorbAlpha = 0.7,
     combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus, pet), one General switch
     -- icons and extras
     comboPoints = true,
@@ -924,16 +927,35 @@ end
 
 -- The overlays wear the frame's own bar texture (a chosen SharedMedia one, or the frame's tintable
 -- default fill), tinted, with the health bar's shape mask.
+-- Shields and heal absorbs have looks of their own (Shield texture, Shield colour, Shield opacity,
+-- Heal absorb colour): the shield in the health bar's texture, Blizzard's stripes, or any texture.
 local function styleOverlay(f, bar)
     local tex = f.customTex or f.hpStatusAtlas or PLAIN_FILL
+    local grey, striped = not f.customTex, false
+    local c = bar.color
+    if bar == f.absorbBar then
+        local key = getSetting(f.baseUnit, "absorbTexture") or "default"
+        if key == "striped" then tex, grey, striped = "Interface\\RaidFrame\\Shield-Overlay", false, true
+        elseif key ~= "default" then
+            local own = resolveTexture(key)
+            if own then tex, grey = own, false end
+        end
+        local sc = getSetting(f.baseUnit, "absorbColor")
+        local a = tonumber(getSetting(f.baseUnit, "absorbAlpha")) or c[4]
+        if type(sc) == "table" then c = { sc[1] or c[1], sc[2] or c[2], sc[3] or c[3], a } else c = { c[1], c[2], c[3], a } end
+    elseif bar == f.healAbsorbBar then
+        local hc = getSetting(f.baseUnit, "healAbsorbColor")
+        if type(hc) == "table" then c = { hc[1] or c[1], hc[2] or c[2], hc[3] or c[3], c[4] } end
+    end
     if bar.tex ~= tex then
         bar.tex = tex
         if not pcall(bar.SetStatusBarTexture, bar, tex) or not bar:GetStatusBarTexture() then bar:SetStatusBarTexture(PLAIN_FILL) end
         bar.masked, bar.grey = nil, nil
+        -- (the stripes repeat along the bar; anything else stretches)
+        local tx = bar:GetStatusBarTexture()
+        if tx then pcall(tx.SetHorizTile, tx, striped); pcall(tx.SetVertTile, tx, striped) end
     end
-    local c = bar.color
     bar:SetStatusBarColor(c[1], c[2], c[3], c[4])
-    local grey = not f.customTex
     if bar.grey ~= grey then
         local tx = bar:GetStatusBarTexture()
         if tx then tx:SetDesaturated(grey); bar.grey = grey end
@@ -4808,7 +4830,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
-                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healAbsorbColor", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }

@@ -6,7 +6,7 @@
 -- file builds it at login (Opt.build).
 local _, ns = ...
 local Opt = ns.Opt
-Opt.sections = {}       -- (every collapsible section on every page: all folded each time the window opens)
+Opt.sections = {}       -- (every collapsible section on every page: opened as you left them, Opt.state)
 local UNITS, UNIT_LABEL, frames, Party, Extras = ns.UNITS, ns.UNIT_LABEL, ns.frames, ns.Party, ns.Extras
 local getSetting, setSetting, defaultFor, frameOn, plain = ns.getSetting, ns.setSetting, ns.defaultFor, ns.frameOn, ns.plain
 local DEFAULT_SETTINGS, ALWAYS_SHOWN, OWN_CLASS, COLOR_MODES = ns.DEFAULT_SETTINGS, ns.ALWAYS_SHOWN, ns.OWN_CLASS, ns.COLOR_MODES
@@ -563,7 +563,7 @@ Opt.SEARCH_WORDS = {
     textMode = "hp mana values text", textFormat = "percent percentage values text",
     colorMode = "hp color class reaction", rpHealthColor = "hp color class", petColor = "hp color",
     npcColor = "hp color mob enemy", healthFade = "hp red low health gradient color",
-    healPrediction = "heal prediction hots", absorbs = "shield absorb", damageTrail = "hit lost red hp",
+    healPrediction = "heal prediction hots", absorbs = "shield absorb", absorbTexture = "shield absorb statusbar stripes", absorbAlpha = "shield absorb transparent", damageTrail = "hit lost red hp",
     damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", manaTick = "mp5 regen spark five second rule 5sr",
     manaTickSize = "mana tick mp5 spark", manaTickSparkle = "mana tick mp5 star", manaTickStar = "mana tick mp5 star shape", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
     threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
@@ -579,7 +579,7 @@ Opt.SEARCH_WORDS = {
     missingBuffs = "buff reminder fortitude intellect mark blessing", healerMana = "healer oom",
     druidMana = "bear cat form", druidBars = "bear cat form mana", comboPoints = "rogue cp",
     petHappy = "hunter loyalty feed", weaponEnchants = "poison oil sharpening stone imbue enchant",
-    buffBars = "timer bars", rpShieldStyle = "absorb", rpShieldEdge = "absorb",
+    buffBars = "timer bars", rpShieldStyle = "absorb statusbar stripes", rpShieldAlpha = "absorb shield transparent", rpShieldEdge = "absorb",
     rpDefensives = "cooldowns wall divine ice block barkskin", rpSelf = "me player", rpSolo = "alone",
     clickTooltip = "click casting bindings", clickAllFrames = "click casting bindings",
     clickCasting = "mouseover clique bindings spells",
@@ -718,11 +718,16 @@ function Opt.select(id)
     if not Opt.pages[id] then id = "general" end
     -- a frame turned off has no page to show
     if UNIT_LABEL[id] and not frameOn(id) then id = "all" end
-    Opt.current = id
     -- (picking a page ends a search)
     if Opt.searchBox and Opt.searchBox:GetText() ~= "" then Opt.searchBox:SetText(""); Opt.searchBox:ClearFocus() end
+    -- (the page being left keeps its scroll position; the one picked is remembered, and goes back to its own)
+    if id ~= Opt.current then Opt.saveScroll() end
+    local changed = id ~= Opt.current
+    Opt.current = id
+    Opt.state().page = id
     Opt.closeMenu()
     Opt.layout()
+    if changed then Opt.restoreScroll(id) end
 end
 
 -- The settings search, at the top of the window on every page: typing swaps the page for the
@@ -923,13 +928,14 @@ function Opt.buildWindow()
             t.fs:SetPoint("CENTER", 0, 1)
             t:SetScript("OnClick", function()
                 Opt.framesOpen = not Opt.framesOpen
+                Opt.state().framesOpen = Opt.framesOpen or nil
                 Opt.layoutNav()
             end)
             b.toggle = t
         end
         Opt.navButtons[id] = b
     end
-    Opt.framesOpen = false
+    Opt.framesOpen = Opt.state().framesOpen and true or false
     Opt.layoutNav()
 
     -- the page itself, scrolling
@@ -983,15 +989,50 @@ function Opt.buildWindow()
     a:SetToAlpha(1)
     a:SetDuration(0.14)
     pcall(a.SetSmoothing, a, "OUT")
-    -- every section starts folded each time the window opens
+    -- it opens as you left it (Opt.state): the same sections open, the frame pages under All frames
+    -- shown or folded away; openSettings puts it back on the same page and scroll position
     w:SetScript("OnShow", function()
         fade:Stop(); fade:Play()
-        for _, sec in ipairs(Opt.sections) do sec.expanded = false end
-        Opt.framesOpen = false      -- (the frame pages under All frames start folded away too)
+        local st = Opt.state()
+        for _, sec in ipairs(Opt.sections) do sec.expanded = st.open[sec.id] == true end
+        Opt.framesOpen = st.framesOpen and true or false
         Opt.layout()
     end)
-    w:SetScript("OnHide", function() Opt.closeMenu(); GameTooltip:Hide() end)
+    w:SetScript("OnHide", function()
+        Opt.saveScroll()
+        Opt.closeMenu()
+        GameTooltip:Hide()
+    end)
     return w
+end
+
+-- The window's state, kept in the saved settings so it's still there after a /reload: the page you
+-- were on (page), the sections you had open (open[page/section]), the frame pages shown under All
+-- frames (framesOpen) and how far down each page you'd scrolled (scroll[page]).
+function Opt.state()
+    local db = WebbyFramesDB
+    if type(db) ~= "table" then return { open = {}, scroll = {} } end
+    local s = db.optionsState
+    if type(s) ~= "table" then s = {}; db.optionsState = s end
+    if type(s.open) ~= "table" then s.open = {} end
+    if type(s.scroll) ~= "table" then s.scroll = {} end
+    return s
+end
+
+-- (the page on show's scroll position, kept; not while the search results are showing)
+function Opt.saveScroll()
+    if not (Opt.scroll and Opt.current) or (Opt.query or "") ~= "" then return end
+    local v = Opt.scroll:GetVerticalScroll()
+    Opt.state().scroll[Opt.current] = (v and v > 0) and math.floor(v + 0.5) or nil
+end
+
+-- (back to where that page was scrolled to, within its height now)
+function Opt.restoreScroll(id)
+    local v = Opt.state().scroll[id]
+    if not (v and Opt.scroll) then return end
+    local child = Opt.scroll:GetScrollChild()
+    local max = math.max(0, (child and child:GetHeight() or 0) - Opt.scroll:GetHeight())
+    Opt.scroll:SetVerticalScroll(math.min(v, max))
 end
 
 function openSettings(unit)
@@ -1005,7 +1046,11 @@ function openSettings(unit)
     end)
     Opt.window:Show()
     Opt.window:Raise()
-    Opt.select((unit and Opt.pages[unit]) and unit or Opt.current or "general")
+    -- (the page asked for, else the one you were on: this session, or the last one, saved)
+    local page = (unit and Opt.pages[unit]) and unit or Opt.current or Opt.state().page or "general"
+    Opt.select(page)
+    -- (opening on the page it was left on: its scroll position too)
+    Opt.restoreScroll(Opt.current)
 end
 
 -- (shared: the main file's /webby options and Edit Mode's Settings buttons open the window with it)
@@ -1156,7 +1201,8 @@ local function buildSettings()
             end })
         end
         function B.section(text, open)
-            local sec = { expanded = false, title = text }
+            -- (its id, page and name, is how the window remembers it open: Opt.state)
+            local sec = { expanded = false, title = text, id = tostring(page.id) .. "/" .. text }
             Opt.sections[#Opt.sections + 1] = sec
             current = nil
             -- (a card's top: a bar with the section's name in capitals and a chevron; the rows under it
@@ -1177,6 +1223,7 @@ local function buildSettings()
                 chev:SetPoint("RIGHT", -12, 0)
                 b:SetScript("OnClick", function()
                     sec.expanded = not sec.expanded
+                    Opt.state().open[sec.id] = sec.expanded or nil
                     pcall(PlaySound, SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or 856)
                     Opt.layout()
                 end)
@@ -1390,6 +1437,27 @@ local function buildSettings()
                 row.controls = { b }
             end })
         end
+        -- The shields' looks, under the "Shields and heal absorbs" switch (its row: parent). read: whose
+        -- settings to show; setc(key, colour) saves a colour (one frame, or all of them).
+        function B.shields(parent, read, setc)
+            local function on() return getSetting(read, "absorbs") and true or false end
+            local function choices()
+                local l = { { "default", "Same as health bar" }, { "striped", "Blizzard stripes" } }
+                for _, c in ipairs(textureChoices()) do if c[1] ~= "default" then l[#l + 1] = c end end
+                return l
+            end
+            local function colour(key, d) return function() local c = getSetting(read, key); return type(c) == "table" and c or d end end
+            local rows = {
+                B.dropdown("absorbTexture", "Shield texture", "How damage shields look past the end of the health: in the health bar's own texture, Blizzard's raid-frame stripes, or any texture (SharedMedia ones too).", "default", choices),
+                B.swatch("Shield colour", colour("absorbColor", { 0.7, 0.9, 1 }), function(r, g, b) setc("absorbColor", { r, g, b }) end,
+                    "The shields' colour (pale blue to start with). Click to change it."),
+                B.slider("absorbAlpha", "Shield opacity", "How solid the shields are.", 0.7, 0.1, 1, 0.05),
+                B.swatch("Heal absorb colour", colour("healAbsorbColor", { 0.9, 0.1, 0.1 }), function(r, g, b) setc("healAbsorbColor", { r, g, b }) end,
+                    "The colour of healing absorbs eating back into the health (red to start with). Click to change it."),
+            }
+            B.under(parent, on, unpack(rows))
+            return rows
+        end
         -- Buff and debuff layout details (in the Buffs and debuffs section).
         function B.auraDetails()
             return B.dropdown("auraGrowth", "Rows grow", "To the right: the first icon at the left end. To the left: the first icon at the right end, with the row filling leftwards.", "right",
@@ -1555,8 +1623,9 @@ local function buildSettings()
         B.under(colour, byReaction, npc)
         B.under(npc, function() return byReaction() and getSetting("target", "npcColor") == "custom" end, npcCustom)
         B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
-        B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
+        local shieldRow = B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
                { "absorbs", "Shields and heal absorbs", "Damage shields and healing absorbs on the health bars.", true })
+        B.shields(shieldRow, "player", function(k, v) setAll(nil, k, v) end)
         B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true })
 
         B.section("Buffs and debuffs", false)
@@ -1692,14 +1761,22 @@ local function buildSettings()
         B.showIf(portrait,
             B.slider("hpAlpha", "Health bar opacity", "How solid the health fill is.", defaultFor("party", "hpAlpha"), 0.2, 1, 0.05),
             B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor("party", "mpAlpha"), 0.2, 1, 0.05),
-            B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
-                   { "absorbs", "Shields and heal absorbs", "Damage shields past the end of the health, and healing absorbs eating back into it.", true }),
             B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true }))
+        -- (the portrait frames' shields and their looks)
+        local shieldRow = B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
+                   { "absorbs", "Shields and heal absorbs", "Damage shields past the end of the health, and healing absorbs eating back into it. Their looks are below.", true })
+        B.showIf(portrait, shieldRow, unpack(B.shields(shieldRow, "party", function(k, v) setSetting("party", k, v) end)))
         B.showIf(raid,
             B.pair({ "rpPowerTank", "Tank power bars", "A slim power bar along the bottom of tanks' tiles.", true },
                    { "rpPowerHealer", "Healer power bars", "A slim mana bar along the bottom of healers' tiles.", true }),
             B.pair({ "rpPowerDPS", "Damage power bars", "A slim power bar along the bottom of damage dealers' tiles (and anyone with no role).", false }),
-            B.dropdown("rpShieldStyle", "Shield look", "Shields (absorbs) as Blizzard's stripes, or a plain white overlay.", "striped", { { "striped", "Striped" }, { "plain", "Plain" } }),
+            B.dropdown("rpShieldStyle", "Shield look", "Shields (absorbs) as Blizzard's stripes, a plain overlay, or any texture (SharedMedia ones too).", "striped", function()
+                local l = { { "striped", "Striped" }, { "plain", "Plain" } }
+                for _, c in ipairs(textureChoices()) do if c[1] ~= "default" then l[#l + 1] = c end end
+                return l
+            end),
+            swatch("rpShieldColor", "Shield colour", "The shields' colour (white to start with). Click to change it.", { 1, 1, 1 }),
+            B.slider("rpShieldAlpha", "Shield opacity", "How solid the shields are.", 0.75, 0.1, 1, 0.05),
             B.pair({ "rpShieldEdge", "Shields from the right", "Shields drawn from the right edge over the health, so a member at full health still shows theirs. Off: straight after the health.", false }),
             swatch("rpDeadColor", "Dead colour", "The tile's colour while a member is dead or a ghost.", { 0.3, 0.1, 0.1 }),
             swatch("rpOfflineColor", "Offline colour", "The tile's colour while a member is offline.", { 0.35, 0.35, 0.35 }))
@@ -1851,8 +1928,9 @@ local function buildSettings()
         B.fade(unit, setSetting, "As health drops, the health colour (whichever you picked above) shifts towards red, or through your own stops.")
         B.slider("hpAlpha", "Health bar opacity", "How solid the health fill is: lower lets the frame art and the background show through.", defaultFor(unit, "hpAlpha"), 0.2, 1, 0.05)
         B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor(unit, "mpAlpha"), 0.2, 1, 0.05)
-        B.pair({ "healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true },
-               { "absorbs", "Shields and heal absorbs", "Damage shields in pale blue past the end of its health (and a glow at the end when they're more than the missing health), and healing absorbs eating back into it in red.", true })
+        local shieldRow = B.pair({ "healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true },
+               { "absorbs", "Shields and heal absorbs", "Damage shields past the end of its health (and a glow at the end when they're more than the missing health), and healing absorbs eating back into it. Their looks are below.", true })
+        B.shields(shieldRow, unit, function(k, v) setSetting(unit, k, v) end)
         B.pair({ "damageTrail", "Recent damage", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true },
                (unit == "target" or unit == "focus") and { "damagePredict", "Preview spell damage", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true } or nil)
         if isPlayer then

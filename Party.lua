@@ -1653,16 +1653,18 @@ function RP.placeShields(t, w)
         t.absorb:SetReverseFill(false)
     end
     t.absorb:SetWidth(w)
-    if get("rpShieldStyle") == "plain" then
-        t.absorb:SetStatusBarTexture(RP.WHITE)
-        t.absorb:SetStatusBarColor(1, 1, 1, 0.4)
-    else
-        t.absorb:SetStatusBarTexture(RP.STRIPES)
-        local st = t.absorb:GetStatusBarTexture()
-        pcall(st.SetHorizTile, st, true)
-        pcall(st.SetVertTile, st, true)
-        t.absorb:SetStatusBarColor(1, 1, 1, 0.75)
-    end
+    -- the look: Blizzard's stripes, plain, or any texture (Shield look), in Shield colour and opacity
+    local style = get("rpShieldStyle") or "striped"
+    local striped = style == "striped"
+    local tex = striped and RP.STRIPES or (style == "plain" and RP.WHITE) or resolveTexture(style) or RP.WHITE
+    t.absorb:SetStatusBarTexture(tex)
+    local st = t.absorb:GetStatusBarTexture()
+    if st then pcall(st.SetHorizTile, st, striped); pcall(st.SetVertTile, st, striped) end
+    local c = get("rpShieldColor")
+    if type(c) ~= "table" then c = { 1, 1, 1 } end
+    -- (the opacity unset: the old looks, stripes 75%, plain 40%)
+    local a = tonumber(get("rpShieldAlpha")) or (striped and 0.75 or 0.4)
+    t.absorb:SetStatusBarColor(c[1] or 1, c[2] or 1, c[3] or 1, a)
 end
 
 function RP.paintPrediction(t)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.29
+- Shield looks (under Shields and heal absorbs, every frame and the portrait party): Shield texture (the health bar's, Blizzard's stripes, or any texture), Shield colour, Shield opacity and Heal absorb colour. Raid-style tiles: Shield look takes any texture too, with a Shield colour and opacity.
+- The settings window opens as you left it: the same page, the same sections open, the frame pages under All frames shown or folded, and each page's scroll position. Kept after a /reload.
+
 ## 1.16.28
 - Names in Korean, Chinese or Cyrillic letters show properly instead of boxes. Fonts are now set as a family that keeps the game's own fonts for those alphabets, with your chosen font (or the default) for Latin letters. On the unit frames, the raid-style tiles and the party pets.
 - Raid-style tiles and party pets: setting Font back to Default goes back to the original font.
