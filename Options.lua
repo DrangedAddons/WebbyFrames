@@ -563,7 +563,7 @@ Opt.SEARCH_WORDS = {
     textMode = "hp mana values text", textFormat = "percent percentage values text",
     colorMode = "hp color class reaction", rpHealthColor = "hp color class", petColor = "hp color",
     npcColor = "hp color mob enemy", healthFade = "hp red low health gradient color",
-    healPrediction = "heal prediction hots", absorbs = "shield absorb", absorbTexture = "shield absorb statusbar stripes", absorbAlpha = "shield absorb transparent", damageTrail = "hit lost red hp",
+    healPrediction = "heal prediction hots", healTexture = "heal prediction incoming statusbar", healAlpha = "heal incoming transparent", absorbs = "shield absorb", absorbTexture = "shield absorb statusbar stripes", absorbAlpha = "shield absorb transparent", damageTrail = "hit lost red hp",
     damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", manaTick = "mp5 regen spark five second rule 5sr",
     manaTickSize = "mana tick mp5 spark", manaTickSparkle = "mana tick mp5 star", manaTickStar = "mana tick mp5 star shape", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
     threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
@@ -1439,23 +1439,119 @@ local function buildSettings()
         end
         -- The shields' looks, under the "Shields and heal absorbs" switch (its row: parent). read: whose
         -- settings to show; setc(key, colour) saves a colour (one frame, or all of them).
+        -- Incoming heals' and shields' looks, under the "Incoming heals / Shields and heal absorbs" row
+        -- (parent), and a live preview of both. read: whose settings to show; setc(key, colour) saves a
+        -- colour (one frame, or all of them). Returns every row (the party page shows them only for the
+        -- portrait frames).
         function B.shields(parent, read, setc)
+            local function healsOn() return getSetting(read, "healPrediction") and true or false end
             local function on() return getSetting(read, "absorbs") and true or false end
-            local function choices()
-                local l = { { "default", "Same as health bar" }, { "striped", "Blizzard stripes" } }
-                for _, c in ipairs(textureChoices()) do if c[1] ~= "default" then l[#l + 1] = c end end
-                return l
+            local function textures(striped)
+                return function()
+                    local l = { { "default", "Same as health bar" } }
+                    if striped then l[2] = { "striped", "Blizzard stripes" } end
+                    for _, c in ipairs(textureChoices()) do if c[1] ~= "default" then l[#l + 1] = c end end
+                    return l
+                end
             end
             local function colour(key, d) return function() local c = getSetting(read, key); return type(c) == "table" and c or d end end
-            local rows = {
-                B.dropdown("absorbTexture", "Shield texture", "How damage shields look past the end of the health: in the health bar's own texture, Blizzard's raid-frame stripes, or any texture (SharedMedia ones too).", "default", choices),
+            local healRows = {
+                B.dropdown("healTexture", "Heal texture", "How incoming heals look past the end of the health: in the health bar's own texture, or any texture (SharedMedia ones too).", "default", textures(false)),
+                B.swatch("Heal colour", colour("healColor", { 0.1, 0.9, 0.3 }), function(r, g, b) setc("healColor", { r, g, b }) end,
+                    "Your own heals on their way (green to start with). Click to change it."),
+                B.swatch("Others' heal colour", colour("otherHealColor", { 0.05, 0.6, 0.2 }), function(r, g, b) setc("otherHealColor", { r, g, b }) end,
+                    "Everyone else's heals on their way (a darker green to start with). Click to change it."),
+                B.slider("healAlpha", "Heal opacity", "How solid incoming heals are (everyone else's a shade fainter).", 0.6, 0.1, 1, 0.05),
+            }
+            B.under(parent, healsOn, unpack(healRows))
+            local shieldRows = {
+                B.dropdown("absorbTexture", "Shield texture", "How damage shields look past the end of the health: in the health bar's own texture, Blizzard's raid-frame stripes, or any texture (SharedMedia ones too).", "default", textures(true)),
                 B.swatch("Shield colour", colour("absorbColor", { 0.7, 0.9, 1 }), function(r, g, b) setc("absorbColor", { r, g, b }) end,
                     "The shields' colour (pale blue to start with). Click to change it."),
                 B.slider("absorbAlpha", "Shield opacity", "How solid the shields are.", 0.7, 0.1, 1, 0.05),
                 B.swatch("Heal absorb colour", colour("healAbsorbColor", { 0.9, 0.1, 0.1 }), function(r, g, b) setc("healAbsorbColor", { r, g, b }) end,
                     "The colour of healing absorbs eating back into the health (red to start with). Click to change it."),
             }
-            B.under(parent, on, unpack(rows))
+            B.under(parent, on, unpack(shieldRows))
+            -- the preview: a health bar at 55%, your heal and someone else's, a shield and a heal absorb,
+            -- drawn the way this frame draws them now (redrawn with every change)
+            local preview = B.custom(30, function(f, row)
+                local lbl = Opt.text(f, 12)
+                lbl:SetPoint("LEFT", L + 20 + 18 * (row.indent or 0), 0)
+                lbl:SetText("Preview")
+                row.texts = { lbl }
+                local box = CreateFrame("Frame", nil, f, "BackdropTemplate")
+                box:SetSize(CW, 16)
+                box:SetPoint("LEFT", CX, 0)
+                Opt.dark(box, 0.4, { 0, 0, 0 })
+                local hp = CreateFrame("StatusBar", nil, box)
+                hp:SetPoint("TOPLEFT", 1, -1)
+                hp:SetPoint("BOTTOMRIGHT", -1, 1)
+                hp:SetMinMaxValues(0, 100)
+                hp:SetValue(55)
+                local clip = CreateFrame("Frame", nil, hp)       -- (the overlays stop at the bar's end)
+                clip:SetAllPoints(hp)
+                clip:SetClipsChildren(true)
+                clip:SetFrameLevel(hp:GetFrameLevel() + 1)
+                local function overlay(r, g, b, a, reverse)
+                    local s = CreateFrame("StatusBar", nil, clip)
+                    s:SetFrameLevel(clip:GetFrameLevel())
+                    s.color = { r, g, b, a }
+                    s:SetMinMaxValues(0, 100)
+                    if reverse then s:SetReverseFill(true) end
+                    return s
+                end
+                local fake = { baseUnit = read }
+                fake.healBar = overlay(0.1, 0.9, 0.3, 0.6)
+                fake.otherHealBar = overlay(0.05, 0.6, 0.2, 0.5)
+                fake.absorbBar = overlay(0.7, 0.9, 1, 0.7)
+                fake.healAbsorbBar = overlay(0.9, 0.1, 0.1, 0.6, true)
+                row.controls = {}
+                row.refresh = function()
+                    -- (the frame's own health texture, as on the frame)
+                    local fr = ns.frames and ns.frames[read]
+                    fake.customTex = fr and fr.customTex
+                    fake.hpStatusAtlas = fr and fr.hpStatusAtlas
+                    local tex = fake.customTex or fake.hpStatusAtlas or "Interface\\TargetingFrame\\UI-StatusBar"
+                    if hp.tex ~= tex then
+                        hp.tex = tex
+                        if not pcall(hp.SetStatusBarTexture, hp, tex) or not hp:GetStatusBarTexture() then
+                            hp:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+                        end
+                        local t = hp:GetStatusBarTexture()
+                        if t then t:SetDesaturated(not fake.customTex) end
+                        for _, b in ipairs({ fake.healBar, fake.otherHealBar, fake.absorbBar, fake.healAbsorbBar }) do b.tex = nil end
+                    end
+                    hp:SetStatusBarColor(0.1, 0.8, 0.1)
+                    local fill, w = hp:GetStatusBarTexture(), hp:GetWidth()
+                    local function after(bar, rel)
+                        bar:ClearAllPoints()
+                        bar:SetPoint("TOPLEFT", rel, "TOPRIGHT")
+                        bar:SetPoint("BOTTOMLEFT", rel, "BOTTOMRIGHT")
+                        bar:SetWidth(w)
+                    end
+                    after(fake.healBar, fill)
+                    after(fake.otherHealBar, fake.healBar:GetStatusBarTexture())
+                    after(fake.absorbBar, fake.otherHealBar:GetStatusBarTexture())
+                    fake.healAbsorbBar:ClearAllPoints()
+                    fake.healAbsorbBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT")
+                    fake.healAbsorbBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+                    fake.healAbsorbBar:SetWidth(w)
+                    local heals, shields = healsOn(), on()
+                    for _, b in ipairs({ fake.healBar, fake.otherHealBar, fake.absorbBar, fake.healAbsorbBar }) do
+                        if ns.styleOverlay then pcall(ns.styleOverlay, fake, b) end
+                    end
+                    fake.healBar:SetValue(heals and 14 or 0)
+                    fake.otherHealBar:SetValue(heals and 8 or 0)
+                    fake.absorbBar:SetValue(shields and 12 or 0)
+                    fake.healAbsorbBar:SetValue(shields and 9 or 0)
+                end
+            end)
+            B.under(parent, function() return healsOn() or on() end, preview)
+            local rows = {}
+            for _, r in ipairs(healRows) do rows[#rows + 1] = r end
+            for _, r in ipairs(shieldRows) do rows[#rows + 1] = r end
+            rows[#rows + 1] = preview
             return rows
         end
         -- Buff and debuff layout details (in the Buffs and debuffs section).

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.30
+- Incoming heal looks (under Incoming heals, every frame and the portrait party): Heal texture, Heal colour (yours), Others' heal colour and Heal opacity.
+- A live Preview under the heal and shield options: a health bar with incoming heals, a shield and a heal absorb, drawn as you have them set, changing as you change them.
+
 ## 1.16.29
 - Shield looks (under Shields and heal absorbs, every frame and the portrait party): Shield texture (the health bar's, Blizzard's stripes, or any texture), Shield colour, Shield opacity and Heal absorb colour. Raid-style tiles: Shield look takes any texture too, with a Shield colour and opacity.
 - The settings window opens as you left it: the same page, the same sections open, the frame pages under All frames shown or folded, and each page's scroll position. Kept after a /reload.

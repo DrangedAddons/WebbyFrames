@@ -114,6 +114,9 @@ local DEFAULT_SETTINGS = {
     -- shields: their texture ("default": the health bar's; "striped": Blizzard's stripes) and opacity;
     -- absorbColor / healAbsorbColor unset until picked (pale blue / red)
     absorbTexture = "default", absorbAlpha = 0.7,
+    -- incoming heals: their texture ("default": the health bar's); healColor / otherHealColor and
+    -- healAlpha unset until picked (green / darker green, as drawn before)
+    healTexture = "default",
     combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus, pet), one General switch
     -- icons and extras
     comboPoints = true,
@@ -946,6 +949,18 @@ local function styleOverlay(f, bar)
     elseif bar == f.healAbsorbBar then
         local hc = getSetting(f.baseUnit, "healAbsorbColor")
         if type(hc) == "table" then c = { hc[1] or c[1], hc[2] or c[2], hc[3] or c[3], c[4] } end
+    elseif bar == f.healBar or bar == f.otherHealBar then
+        -- incoming heals (Heal texture, Heal colour, Others' heal colour, Heal opacity)
+        local key = getSetting(f.baseUnit, "healTexture") or "default"
+        if key ~= "default" then
+            local own = resolveTexture(key)
+            if own then tex, grey = own, false end
+        end
+        local mine = bar == f.healBar
+        local hc = getSetting(f.baseUnit, mine and "healColor" or "otherHealColor")
+        local a = tonumber(getSetting(f.baseUnit, "healAlpha"))
+        a = a and (mine and a or a * 0.85) or c[4]        -- (others' a shade fainter, as before)
+        if type(hc) == "table" then c = { hc[1] or c[1], hc[2] or c[2], hc[3] or c[3], a } else c = { c[1], c[2], c[3], a } end
     end
     if bar.tex ~= tex then
         bar.tex = tex
@@ -4830,7 +4845,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
-                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healAbsorbColor", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healAbsorbColor", "healTexture", "healColor", "otherHealColor", "healAlpha", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }
@@ -5344,6 +5359,7 @@ ns.defaultTip, ns.isSecret, ns.plain = defaultTip, isSecret, plain
 ns.unitData, ns.resolveTexture, ns.defaultFor, ns.updateIndicators = unitData, resolveTexture, defaultFor, updateIndicators
 -- (and for the settings window, Options.lua)
 ns.UNITS, ns.UNIT_LABEL, ns.frames, ns.Extras, ns.setSetting = UNITS, UNIT_LABEL, frames, Extras, setSetting
+ns.styleOverlay = styleOverlay     -- (the settings' heal and shield preview draws with it)
 ns.DEFAULT_SETTINGS, ns.ALWAYS_SHOWN, ns.OWN_CLASS, ns.COLOR_MODES = DEFAULT_SETTINGS, ALWAYS_SHOWN, OWN_CLASS, COLOR_MODES
 ns.hasCastAndThreat, ns.textureChoices, ns.fontChoices, ns.Profiles = hasCastAndThreat, textureChoices, fontChoices, Profiles
 ns.moveTipToDefault, ns.addonVersion = moveTipToDefault, addonVersion
