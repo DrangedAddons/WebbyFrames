@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.16.34
+- Shield and heal glows: no longer turn the heal or shield pure white. The glow is now a brighter shade of the bar's own colour, with paler flakes and shimmer.
+- Turning a glow off and back on now starts its animation again, and it restarts when the heal or shield comes back after emptying.
+- Snowglobe: more, bigger flakes.
+- A glow that fails now says why in chat, once, instead of failing silently.
+
 ## 1.16.33
 - Shield glow and Heal glow: Soft pulse (a soft glow breathing in and out), Shimmer (a band of light sweeping across) or Snowglobe (glowing flakes drifting down inside, swirling up whenever the shield changes or a heal comes in), each with a Glow strength. On every frame, the portrait party and the raid-style tiles; the Preview tickboxes show them too.
 

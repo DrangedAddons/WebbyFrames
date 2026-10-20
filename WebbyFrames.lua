@@ -986,7 +986,11 @@ local function styleOverlay(f, bar)
         local shield = bar == f.absorbBar
         local mode = getSetting(f.baseUnit, shield and "absorbGlow" or "healGlow") or "off"
         local s = tonumber(getSetting(f.baseUnit, shield and "absorbGlowAlpha" or "healGlowAlpha")) or 0.6
-        pcall(ns.barGlow, bar, mode, c[1], c[2], c[3], s)
+        local ok, err = pcall(ns.barGlow, bar, mode, c[1], c[2], c[3], s)
+        if not ok and not ns.glowErr then          -- (said once, so a broken glow isn't silent)
+            ns.glowErr = true
+            print("|cffffd100Webby Frames|r glow: " .. tostring(err))
+        end
     end
 end
 
@@ -1006,6 +1010,7 @@ function ns.barGlow(bar, mode, r, g, b, strength)
     end
     if not fx then
         fx = CreateFrame("Frame", nil, bar)
+        fx:Hide()          -- (shown once it's coloured: never a bare white wash)
         fx:SetFrameLevel(bar:GetFrameLevel() + 1)
         fx:SetClipsChildren(true)
         fx.wash = fx:CreateTexture(nil, "OVERLAY")
@@ -1015,8 +1020,8 @@ function ns.barGlow(bar, mode, r, g, b, strength)
         local ag = fx.wash:CreateAnimationGroup()
         ag:SetLooping("BOUNCE")
         local a = ag:CreateAnimation("Alpha")
-        a:SetFromAlpha(0.08)
-        a:SetToAlpha(0.65)
+        a:SetFromAlpha(0.05)
+        a:SetToAlpha(0.6)
         a:SetDuration(1.1)
         pcall(a.SetSmoothing, a, "IN_OUT")
         fx.washAg = ag
@@ -1032,6 +1037,11 @@ function ns.barGlow(bar, mode, r, g, b, strength)
         fx.bandAg = bg
         fx.motes = {}
         fx:SetScript("OnUpdate", function(self, dt) ns.barGlowSnow(self, bar, dt) end)
+        -- (back in view, the heal or shield coming back: its animation going again)
+        fx:SetScript("OnShow", function(self)
+            if self.mode == "pulse" and not self.washAg:IsPlaying() then self.washAg:Play()
+            elseif self.mode == "shimmer" and not self.bandAg:IsPlaying() then self.bandAg:Play() end
+        end)
         bar.wfFx = fx
     end
     if fx.fill ~= fill then
@@ -1041,22 +1051,34 @@ function ns.barGlow(bar, mode, r, g, b, strength)
     end
     -- (only when the look changed: the colour a paler version of the bar's, the strength, the mode,
     -- the bar's size)
-    local w, h = bar:GetWidth() or 100, bar:GetHeight() or 10
+    -- (the bar hangs off the health fill, so its size can be secret: then the overlay holder's)
+    local w, h
+    for _, region in ipairs({ bar, bar:GetParent() }) do
+        local ok, rw, rh = pcall(region.GetSize, region)
+        if ok and rw and rh and not isSecret(rw) and not isSecret(rh) then w, h = rw, rh; break end
+    end
+    w, h = math.max(w or 100, 1), math.max(h or 10, 1)
     local sig = mode .. math.floor(r * 50) .. math.floor(g * 50) .. math.floor(b * 50) .. math.floor(strength * 20) .. math.floor(w) .. math.floor(h)
     if fx.sig == sig and fx:IsShown() then return end
     fx.sig = sig
-    local cr, cg, cb = 0.4 + r * 0.6, 0.4 + g * 0.6, 0.4 + b * 0.6
+    -- The glow is light added on top, so the wash is in the bar's own colour: it brightens it
+    -- without bleaching it (anything paler added over the bar turns it white). The band and the
+    -- flakes are small, so they can be a little paler, to read as light. Glow strength 0 is a
+    -- faint glow, 100 full.
+    local cr, cg, cb = 0.3 + r * 0.7, 0.3 + g * 0.7, 0.3 + b * 0.7
     fx.cr, fx.cg, fx.cb, fx.h, fx.w = cr, cg, cb, h, w
-    fx:SetAlpha(strength)
-    fx.wash:SetVertexColor(cr, cg, cb)
+    fx:SetAlpha(0.3 + 0.7 * strength)
+    fx.wash:SetVertexColor(r, g, b)
     fx.band:SetVertexColor(cr, cg, cb)
     fx.mode = mode
+    -- (shown before its animations start: the game doesn't play them on a hidden frame)
+    fx:Show()
     -- pulse: the wash breathing
     if mode == "pulse" then
         fx.washAg:Play()
     else
         fx.washAg:Stop()
-        fx.wash:SetAlpha(mode == "shimmer" and 0.18 or 0.12)
+        fx.wash:SetAlpha(mode == "shimmer" and 0.1 or 0.15)
     end
     -- shimmer: the band sweeping from the left end to past the right
     if mode == "shimmer" then
@@ -1073,7 +1095,7 @@ function ns.barGlow(bar, mode, r, g, b, strength)
     end
     -- snow: the flakes (moved by barGlowSnow, every frame while shown)
     if mode == "snow" then
-        for i = 1, 14 do
+        for i = 1, 24 do
             local m = fx.motes[i]
             if not m then
                 m = { tex = fx:CreateTexture(nil, "OVERLAY", nil, 2) }
@@ -1082,7 +1104,7 @@ function ns.barGlow(bar, mode, r, g, b, strength)
                 fx.motes[i] = m
                 m.x, m.y = math.random() * w, (math.random() - 0.5) * h
                 m.vx, m.vy, m.phase = 0, 0, math.random() * 6.28
-                m.size = h * (0.16 + math.random() * 0.16)
+                m.size = math.max(3, h * (0.3 + math.random() * 0.25))
             end
             m.tex:SetVertexColor(cr, cg, cb)
             m.tex:SetSize(m.size, m.size)
@@ -1093,7 +1115,6 @@ function ns.barGlow(bar, mode, r, g, b, strength)
         fx.snowing = nil
         for _, m in ipairs(fx.motes) do m.tex:Hide() end
     end
-    fx:Show()
 end
 
 -- One frame of the snowglobe: the flakes fall slowly, swaying, and wrap round to the top; a shake
@@ -1122,7 +1143,7 @@ function ns.barGlowSnow(fx, bar, dt)
         if m.x < 0 then m.x = m.x + w elseif m.x > w then m.x = m.x - w end
         m.tex:ClearAllPoints()
         m.tex:SetPoint("CENTER", fx, "LEFT", m.x, m.y)
-        m.tex:SetAlpha(0.55 + 0.45 * math.sin(now * 3 + m.phase))
+        m.tex:SetAlpha(0.5 + 0.3 * math.sin(now * 3 + m.phase))
     end
 end
 
