@@ -111,6 +111,9 @@ local DEFAULT_SETTINGS = {
     -- dispelGlow: the party frame glows in the dispel colour when you can dispel something on it
     auraStyle = "all", dispelGlow = true, dispelWho = "mine", auraMineBig = false,   -- (auraMineBig: your own debuffs first, bigger)
     healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
+    -- recent damage: the health bar's own fill, red, until you pick otherwise (Damage trail texture,
+    -- colour, delay, opacity). Delay is how long a hit stays; steady damage still catches up.
+    damageTrailTexture = "default", damageTrailAlpha = 0.9, damageTrailDelay = 0.4,
     -- shields: their texture ("default": the health bar's; "striped": Blizzard's stripes) and opacity;
     -- absorbColor unset until picked (pale blue)
     absorbTexture = "default", absorbAlpha = 0.7,
@@ -959,6 +962,16 @@ local function styleOverlay(f, bar)
         local hc = getSetting(f.baseUnit, "healColor")
         local a = tonumber(getSetting(f.baseUnit, "healAlpha")) or c[4]
         if type(hc) == "table" then c = { hc[1] or c[1], hc[2] or c[2], hc[3] or c[3], a } else c = { c[1], c[2], c[3], a } end
+    elseif bar == f.hpTrail then
+        -- recent damage (Trail texture, Trail colour, Opacity). Default: the health bar's own fill, red.
+        local key = getSetting(f.baseUnit, "damageTrailTexture") or "default"
+        if key ~= "default" then
+            local own = resolveTexture(key)
+            if own then tex, grey = own, false end
+        end
+        local dc = getSetting(f.baseUnit, "damageTrailColor")
+        local a = tonumber(getSetting(f.baseUnit, "damageTrailAlpha")) or c[4]
+        if type(dc) == "table" then c = { dc[1] or c[1], dc[2] or c[2], dc[3] or c[3], a } else c = { c[1], c[2], c[3], a } end
     end
     if bar.tex ~= tex then
         bar.tex = tex
@@ -1429,10 +1442,12 @@ function ns.setShields(f, absorb)
     if not pcall(fs.SetText, fs, text) then fs:SetText("") end
 end
 
--- Damage trail: when health drops, the part just lost stays on the bar in red for a moment, then slides
+-- Damage trail: when health drops, the part just lost stays on the bar for a moment, then slides
 -- away. A bar under the health fill (createDamageTrail) that keeps the old health and follows the new
 -- after a short wait, so it shows only where the fill has gone. Secret-safe: values only go to setters.
 -- (Healing needs nothing: the fill grows over it, and it catches up underneath.)
+-- The mana trail uses the same wait. Recent damage reads its own delay and scales the cap with it
+-- (0.4s stays a 1s cap), so a longer delay is not cut short under steady damage.
 local TRAIL_WAIT, TRAIL_MAXWAIT = 0.4, 1.0     -- seconds after the last hit; at most this long under steady damage
 
 local function createDamageTrail(f)
@@ -1672,7 +1687,9 @@ end
 local function followTrail(self, elapsed)
     self.wait = self.wait - elapsed
     self.waited = self.waited + elapsed
-    if self.wait > 0 and self.waited < TRAIL_MAXWAIT then return end
+    -- (recent damage sets its own cap from Delay; the mana trail keeps TRAIL_MAXWAIT)
+    local cap = self.maxWait or TRAIL_MAXWAIT
+    if self.wait > 0 and self.waited < cap then return end
     self.pending = false
     self:SetScript("OnUpdate", nil)
     if not (SMOOTH and pcall(self.SetValue, self, self.target, SMOOTH)) then pcall(self.SetValue, self, self.target) end
@@ -1715,7 +1732,11 @@ local function updateDamageTrail(f, status)
             t.pending, t.waited = true, 0
             t:SetScript("OnUpdate", followTrail)
         end
-        t.wait = TRAIL_WAIT
+        -- Delay: how long a hit stays. The cap keeps the old ratio (0.4s waited at most 1s).
+        local delay = tonumber(getSetting(f.baseUnit, "damageTrailDelay")) or TRAIL_WAIT
+        if delay < 0 then delay = 0 elseif delay > 2 then delay = 2 end
+        t.wait = delay
+        t.maxWait = delay * (TRAIL_MAXWAIT / TRAIL_WAIT)
     end
     t:Show()
 end
@@ -5328,7 +5349,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
-                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healTexture", "healColor", "healAlpha","absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healTexture", "healColor", "healAlpha","absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damageTrailTexture", "damageTrailColor", "damageTrailAlpha", "damageTrailDelay", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }

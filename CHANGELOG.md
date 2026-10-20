@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.47
+- Recent damage has its own look, under that switch on every frame, the portrait party and All frames: texture (the health bar's own, or any SharedMedia texture), colour (red until you pick one), delay (how long a hit stays, 0.4s) and opacity.
+
 ## 1.16.46
 - Channelled spells preview one hit at a time (a missile, a wave, a tick) instead of the whole cast: it moves down the health as each one lands, with the recent damage trail showing the hit that just did. Channelled heals the same.
 

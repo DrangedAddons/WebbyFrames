@@ -569,7 +569,9 @@ Opt.SEARCH_WORDS = {
     npcColor = "hp color mob enemy", healthFade = "hp red low health gradient color",
     healPrediction = "heal prediction hots", healTexture = "heal prediction incoming statusbar", healGlow = "heal glow pulse shimmer snowglobe blizzard snowstorm sparkle", absorbGlow = "shield absorb glow pulse shimmer snowglobe blizzard snowstorm sparkle",
     healBorder = "heal glow edge outline proc", absorbBorder = "shield absorb glow edge outline proc", healAlpha = "heal incoming transparent", absorbs = "shield absorb", absorbTexture = "shield absorb statusbar stripes",
-    absorbAlpha = "shield absorb transparent", damageTrail = "hit lost red hp",
+    absorbAlpha = "shield absorb transparent", damageTrail = "hit lost red hp trail",
+    damageTrailTexture = "recent damage trail statusbar", damageTrailColor = "recent damage trail color colour",
+    damageTrailDelay = "recent damage trail wait linger", damageTrailAlpha = "recent damage trail transparent opacity alpha",
     damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", manaTick = "mp5 regen spark five second rule 5sr",
     manaTickSize = "mana tick mp5 spark", manaTickSparkle = "mana tick mp5 star", manaTickStar = "mana tick mp5 star shape", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
     threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
@@ -1448,6 +1450,28 @@ local function buildSettings()
                 row.controls = { b }
             end })
         end
+        -- Recent damage: texture, colour, delay and opacity, shown under that switch.
+        function B.trailLooks(read, setc)
+            local function textures()
+                local l = { { "default", "Same as health bar" } }
+                for _, c in ipairs(textureChoices()) do if c[1] ~= "default" then l[#l + 1] = c end end
+                return l
+            end
+            local function tag(row)
+                if row then row.find = (row.find or "") .. " recent damage trail" end
+                return row
+            end
+            return
+                tag(B.dropdown("damageTrailTexture", "Texture", "The fill of the health just lost. Default: the health bar's own. SharedMedia textures are listed too.", "default", textures)),
+                tag(B.swatch("Colour", function()
+                    local c = getSetting(read, "damageTrailColor")
+                    return type(c) == "table" and c or { 1, 0.15, 0.1 }
+                end, function(r, g, b) setc("damageTrailColor", { r, g, b }) end,
+                    "The colour of the health just lost (red to start with). Click to change it.")),
+                tag(B.slider("damageTrailDelay", "Delay", "How long the health just lost stays after a hit before it slides away. While health keeps dropping, it stays at most two and a half times this long.", 0.4, 0, 2, 0.1,
+                    function(v) return string.format("%.1f s", v) end)),
+                tag(B.slider("damageTrailAlpha", "Opacity", "How solid the health just lost is.", 0.9, 0.1, 1, 0.05))
+        end
         -- Two sections of their own: Incoming heals and Shields, each with its switch and
         -- looks. read: whose settings to show; setc(key, colour) saves a colour (one frame, or all of
         -- them); targets(): the live frames the Preview tickboxes show an effect on.
@@ -1690,7 +1714,9 @@ local function buildSettings()
         B.under(numbers, function() return getSetting("player", "textMode") ~= "off" end,
             B.dropdown("textFormat", "Number format", "Totals, percentages, or both.", "value",
                 { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
-        B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true })
+        local trail = B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays for a moment, then slides away.", true })
+        local trailTex, trailColour, trailDelay, trailAlpha = B.trailLooks("player", function(k, v) setAll(nil, k, v) end)
+        B.under(trail, function() return getSetting("player", "damageTrail") and true or false end, trailTex, trailColour, trailDelay, trailAlpha)
 
         B.section("Health colour", false)
         local colour = B.dropdown("colorMode", "Health colour", "Every frame's health colour at once (the pet and the party's raid-style tiles follow as closely as their own choices allow). Each frame's page can then differ.", "smart", COLOR_MODES)
@@ -1822,8 +1848,11 @@ local function buildSettings()
                 defaultFor("party", "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
         B.showIf(portrait,
             B.slider("hpAlpha", "Health bar opacity", "How solid the health fill is.", defaultFor("party", "hpAlpha"), 0.2, 1, 0.05),
-            B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor("party", "mpAlpha"), 0.2, 1, 0.05),
-            B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true }))
+            B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor("party", "mpAlpha"), 0.2, 1, 0.05))
+        local trail = B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays for a moment, then slides away.", true })
+        local trailTex, trailColour, trailDelay, trailAlpha = B.trailLooks("party", function(k, v) setSetting("party", k, v) end)
+        B.under(trail, on("damageTrail"), trailTex, trailColour, trailDelay, trailAlpha)
+        B.showIf(portrait, trail, trailTex, trailColour, trailDelay, trailAlpha)
         B.showIf(raid,
             B.pair({ "rpPowerTank", "Tank power bars", "A slim power bar along the bottom of tanks' tiles.", true },
                    { "rpPowerHealer", "Healer power bars", "A slim mana bar along the bottom of healers' tiles.", true }),
@@ -2005,8 +2034,10 @@ local function buildSettings()
                 defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
         B.slider("hpAlpha", "Health bar opacity", "How solid the health fill is: lower lets the frame art and the background show through.", defaultFor(unit, "hpAlpha"), 0.2, 1, 0.05)
         B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor(unit, "mpAlpha"), 0.2, 1, 0.05)
-        B.pair({ "damageTrail", "Recent damage", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true },
+        local trail = B.pair({ "damageTrail", "Recent damage", "When its health drops, the part just lost stays for a moment, then slides away, so you can see how big each hit was.", true },
                (unit == "target" or unit == "focus") and { "damagePredict", "Preview spell damage", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true } or nil)
+        local trailTex, trailColour, trailDelay, trailAlpha = B.trailLooks(unit, function(k, v) setSetting(unit, k, v) end)
+        B.under(trail, isOn("damageTrail"), trailTex, trailColour, trailDelay, trailAlpha)
 
         -- Health colour -------------------------------------------------------------------
         B.section("Health colour", false)
