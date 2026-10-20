@@ -2194,7 +2194,7 @@ local function buildSettings()
                 B.dropdown("threatShow", "Display", "A glow round the frame, your threat %, or both.", "both",
                     { { "both", "Glow and number" }, { "glow", "Glow only" }, { "number", "Number only" } }))
             B.under(threat, function() local m = get("threatShow"); return m == "both" or m == "number" end,
-                B.dropdown("threatStyle", "Number style", "Your threat %. About 110% pulls aggro in melee and 130% at range. While you have aggro, it's your threat compared with the next highest in your group.\n\nJust the number: beside the raid marker on the portrait.\nIn a box: a small box above the end of the name.", "text",
+                B.dropdown("threatStyle", "Number style", "The game's own threat %. About 110% pulls in melee and 130% at range. While you have aggro, it's the game's lead over the next person, and it can pass 255%.\n\nJust the number: beside the raid marker on the portrait.\nIn a box: a small box above the end of the name.", "text",
                     { { "text", "Just the number" }, { "box", "In a box above the name" } }))
             B.under(threat, function() return get("threatShow") ~= "off" end,
                 B.dropdown("threatColors", "Threat colours", "The colour of the glow and the number.\nGreen to red: green when you're safe, turning red as you get closer to pulling aggro.\nBlizzard's: the game's own threat colours.", "gradient",

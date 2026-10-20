@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.16.48
+- The threat number is the game's own: the raw percent until you are tanking (about 110% pulls in melee, 130% at range), then the game's lead over the next person, which keeps climbing past 255%.
+- Solo, threat hides while you are the only one on the mob. A pet with threat shows it again. In a group it shows as usual.
+- The level number on the player and target frames is one point larger.
+- `/webby threat` is gone.
+
 ## 1.16.47
 - Recent damage has its own look, under that switch on every frame, the portrait party and All frames: texture (the health bar's own, or any SharedMedia texture), colour (red until you pick one), delay (how long a hit stays, 0.4s) and opacity.
 

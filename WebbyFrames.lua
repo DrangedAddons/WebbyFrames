@@ -2694,9 +2694,9 @@ local function updateIndicators(f)
     end
 end
 
--- Threat percentage, the way Foofi's ThreatDisplay reads the raw number: yours against the mob's
--- current target (melee pulls at about 110%, ranged at about 130%). While you hold aggro that raw
--- number freezes, so updateThreat uses your threat against the next highest in the group instead.
+-- Threat percentage, the same number as the default target frame. Raw % against whoever the mob is
+-- hitting (about 110% pulls in melee, 130% at range) until you are tanking, then the game's own lead
+-- (UnitThreatPercentageOfLead), which keeps climbing past 255. No group walk for the number.
 -- Colour is the gradient (green to red on the scaled percent) or Blizzard's own threat colours.
 -- An older saved choice (status, colourblind, class) reads as the gradient.
 local function threatColor(base, status, scaled)
@@ -2712,7 +2712,7 @@ local function threatColor(base, status, scaled)
     return r, g, b
 end
 
--- One roster, rebuilt when the group changes. The 0.2s threat tick only reads it.
+-- One roster, rebuilt when the group changes. The solo hide reads it.
 local threatRoster = { "pet" }
 local function rebuildThreatRoster()
     for i = 2, #threatRoster do threatRoster[i] = nil end
@@ -2730,23 +2730,6 @@ local function rebuildThreatRoster()
     end
 end
 
--- While you hold aggro the raw % stops updating (it's measured against the mob's target: you), so then
--- the % is your threat against the next highest in your group, pets included: 255% = 2.55 times theirs.
--- 100 when no one else is on the mob; nil when the amounts can't be read.
-local function threatOverNext(mob)
-    local _, _, _, _, mine = UnitDetailedThreatSituation("player", mob)
-    if not mine or mine <= 0 then return nil end
-    local second = 0
-    for _, gu in ipairs(threatRoster) do
-        if UnitExists(gu) and not UnitIsUnit(gu, "player") then
-            local _, _, _, _, v = UnitDetailedThreatSituation(gu, mob)
-            if v and v > second then second = v end
-        end
-    end
-    if second <= 0 then return 100 end
-    return math.floor(mine / second * 100 + 0.5)
-end
-
 -- Your threat on u: status, scaled %, and the % to show. Run inside pcall (the values can be hidden,
 -- and testing a hidden one errors): an error means nothing to show.
 function ns.readThreat(u, wantNumber)
@@ -2754,14 +2737,29 @@ function ns.readThreat(u, wantNumber)
     -- PvP: players (and their pets and totems) have no threat to show
     if UnitIsPlayer(u) or UnitPlayerControlled(u) then return end
     local tanking, st, sc, raw = UnitDetailedThreatSituation("player", u)
-    local pct = raw or sc
-    -- holding aggro: the raw % would sit frozen, so measure against the next highest instead.
-    -- Glow-only uses the status from the call above; the group scan is only for the number.
-    if tanking and wantNumber then
-        local ok, over = pcall(threatOverNext, u)
-        if ok and over then pct = over end
+    -- The default frame's number (UnitFrame_UpdateThreatIndicator): raw until you are tanking, then
+    -- the game's lead. A hidden lead is handed straight to the font; comparing it would throw. 0 and
+    -- nil show nothing, as the default frame does.
+    local pct = raw
+    if tanking and wantNumber and UnitThreatPercentageOfLead then
+        local ok, lead = pcall(UnitThreatPercentageOfLead, "player", u)
+        if ok then
+            if isSecret(lead) or (type(lead) == "number" and lead ~= 0) then pct = lead else pct = nil end
+        end
     end
     return st, sc, pct
+end
+
+-- Solo only: true when your pet has threat on this mob. False when you are the only one. In a group
+-- updateThreat does not call this, and the threat shows as usual.
+local function threatHasCompany(mob)
+    for _, gu in ipairs(threatRoster) do
+        if UnitExists(gu) and not UnitIsUnit(gu, "player") then
+            local _, _, _, _, v = UnitDetailedThreatSituation(gu, mob)
+            if v and v > 0 then return true end
+        end
+    end
+    return false
 end
 
 local function updateThreat(f)
@@ -2789,6 +2787,12 @@ local function updateThreat(f)
         end
         glowOn = wantGlow and not isSecret(status) and status >= 1
         if glowOn then f.threatGlow:SetVertexColor(r, g, b) end
+    end
+    -- Solo and alone on the mob: hide. A pet with threat shows it again. In a group it shows as usual,
+    -- and this scan does not run. A value that can't be read leaves it shown.
+    if (shown or glowOn) and not IsInGroup() and not isSecret(status) and status and status >= 2 then
+        local ok, company = pcall(threatHasCompany, f.wfUnit)
+        if ok and company == false then shown, glowOn = false, false end
     end
     local byMarker = not inBox and f.threatBadge ~= nil
     f.threatText:SetShown(shown and not byMarker)
@@ -5741,28 +5745,6 @@ SlashCmdList.WEBBYFRAMES = function(msg)
             if not ok2 then print("|cff33ccffWebby Frames:|r crit failed: " .. tostring(err2)) end
         end)
         print("|cff33ccffWebby Frames:|r a normal hit, then a crit, on your portrait.")
-    elseif msg == "threat" then
-        -- what the game reports for your target's threat: yours, then everyone else's in your group
-        local mob = "target"
-        if not UnitExists(mob) then print("|cff33ccffWebby Frames:|r target a mob first."); return end
-        local function line(who)
-            local ok, err = pcall(function()
-                local tanking, status, scaled, raw, value = UnitDetailedThreatSituation(who, mob)
-                if value == nil and status == nil then return end
-                print(string.format("  %s (%s): tanking %s, status %s, pull meter %s, raw %s, threat %s",
-                    tostring(UnitName(who)), who, tostring(tanking), tostring(status), tostring(scaled), tostring(raw), tostring(value)))
-            end)
-            if not ok then print("  " .. who .. ": can't be read (" .. tostring(err) .. ")") end
-        end
-        print("|cff33ccffWebby Frames:|r threat on " .. tostring(UnitName(mob)) .. ":")
-        line("player")
-        local units = { "pet" }
-        if IsInRaid() then for i = 1, 40 do units[#units + 1] = "raid" .. i; units[#units + 1] = "raidpet" .. i end
-        else for i = 1, 4 do units[#units + 1] = "party" .. i; units[#units + 1] = "partypet" .. i end end
-        for _, gu in ipairs(units) do if UnitExists(gu) and not UnitIsUnit(gu, "player") then line(gu) end end
-        local over
-        local ok, err = pcall(function() over = threatOverNext(mob) end)
-        print("  your % of the next highest: " .. (ok and tostring(over) or ("can't be worked out (" .. tostring(err) .. ")")))
     elseif msg == "export" or msg == "import" then
         Profiles.show(msg)
     elseif msg == "corner" then
@@ -5849,7 +5831,6 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         print("  /webby test - preview heals, shields and a combat number on your frame")
         print("  /webby crit - a normal hit, then a crit, on your portrait")
         print("  /webby party - a sample party on your party frames")
-        print("  /webby threat - what the game reports for your target's threat")
         print("  /webby cost - what the spell cost bar saw on your last cast")
         print("  /webby corner x y - fine-tune where the corner accent sits (right / up, in pixels)")
         print("  /webby export, /webby import - share a profile   /webby errors - anything that went wrong")

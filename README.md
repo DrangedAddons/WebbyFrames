@@ -18,7 +18,7 @@ Unzip the `WebbyFrames` folder into `World of Warcraft/_classic_beta_/Interface/
 - Everything is saved per Edit Mode layout. Profiles can be exported and imported as text (General page).
 
 Commands: `/webby` (options), `/webby edit`, `/webby reset`, `/webby test` (preview heals, shields and a combat
-number), `/webby threat` (what the game reports for your target's threat), `/webby export` / `import`,
+number), `/webby export` / `import`,
 `/webby errors`, `/webby help`.
 
 ## Options per frame
