@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.38
+- Incoming heals are one heal now, yours and everyone else's together, with one set of options: Heal texture, Heal colour, Heal opacity and the glows. Others' heal colour is gone, and a glow or border covers the whole heal in one piece.
+
 ## 1.16.37
 - A new glow, Blizzard: a snowstorm, lots of small flakes driven down and across by the wind.
 - Heal border glow and Shield border glow: Blizzard's spell alert glow round incoming heals or shields, in their colour. With any glow, or on its own; Glow strength sets it too. On every frame, the portrait party and the raid-style tiles.

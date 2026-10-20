@@ -1503,10 +1503,8 @@ local function buildSettings()
             local healRows = {
                 B.dropdown("healTexture", "Heal texture", "How incoming heals look past the end of the health: in the health bar's own texture, or any texture (SharedMedia ones too).", "default", textures(false)),
                 B.swatch("Heal colour", colour("healColor", { 0.1, 0.9, 0.3 }), function(r, g, b) setc("healColor", { r, g, b }) end,
-                    "Your own heals on their way (green to start with). Click to change it.", preview("heal", "your incoming heal")),
-                B.swatch("Others' heal colour", colour("otherHealColor", { 0.05, 0.6, 0.2 }), function(r, g, b) setc("otherHealColor", { r, g, b }) end,
-                    "Everyone else's heals on their way (a darker green to start with). Click to change it.", preview("other", "someone else's incoming heal")),
-                B.slider("healAlpha", "Heal opacity", "How solid incoming heals are (everyone else's a shade fainter).", 0.6, 0.1, 1, 0.05),
+                    "Heals on their way, yours and everyone else's (green to start with). Click to change it.", preview("heal", "an incoming heal")),
+                B.slider("healAlpha", "Heal opacity", "How solid incoming heals are.", 0.6, 0.1, 1, 0.05),
                 glowDrop("healGlow", "Heal"),
                 glowBorder("healBorder", "Heal"),
                 glowStrength("healGlow", "healGlowAlpha", "healBorder"),

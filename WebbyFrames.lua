@@ -953,16 +953,14 @@ local function styleOverlay(f, bar)
         local hc = getSetting(f.baseUnit, "healAbsorbColor")
         if type(hc) == "table" then c = { hc[1] or c[1], hc[2] or c[2], hc[3] or c[3], c[4] } end
     elseif bar == f.healBar or bar == f.otherHealBar then
-        -- incoming heals (Heal texture, Heal colour, Others' heal colour, Heal opacity)
+        -- incoming heals, everyone's, on the one bar (Heal texture, Heal colour, Heal opacity)
         local key = getSetting(f.baseUnit, "healTexture") or "default"
         if key ~= "default" then
             local own = resolveTexture(key)
             if own then tex, grey = own, false end
         end
-        local mine = bar == f.healBar
-        local hc = getSetting(f.baseUnit, mine and "healColor" or "otherHealColor")
-        local a = tonumber(getSetting(f.baseUnit, "healAlpha"))
-        a = a and (mine and a or a * 0.85) or c[4]        -- (others' a shade fainter, as before)
+        local hc = getSetting(f.baseUnit, "healColor")
+        local a = tonumber(getSetting(f.baseUnit, "healAlpha")) or c[4]
         if type(hc) == "table" then c = { hc[1] or c[1], hc[2] or c[2], hc[3] or c[3], a } else c = { c[1], c[2], c[3], a } end
     end
     if bar.tex ~= tex then
@@ -1324,29 +1322,30 @@ local function updatePrediction(f)
     for _, bar in ipairs(f.predBars) do
         if max then pcall(bar.SetMinMaxValues, bar, 0, max) end
     end
-    -- incoming heals: through the calculator when the client has it (yours and others' apart), else
-    -- the older all-in-one total on the first bar
-    local mine, others
+    -- incoming heals: everyone's together on the first bar, one look and one glow (through the
+    -- calculator when the client has it, clamped like Blizzard's, else the older total); the second
+    -- bar, once everyone else's, stays empty
+    local mine
     f.overGlow:SetAlpha(0)          -- (lit again below while there's an overshield)
     if wantHeals and not dead then
         local calc = healCalculator(f)
         local ok = calc and pcall(UnitGetDetailedHealPrediction, u, "player", calc)
-        local _, m, o
+        local m
         if ok then
             -- (overshield: the answer may be hidden, so it goes straight to the glow's alpha)
             local okA, _, over = pcall(calc.GetDamageAbsorbs, calc)
             if okA and wantAbsorbs and (isSecret(over) or over ~= nil) and f.overGlow.SetAlphaFromBoolean then
                 pcall(f.overGlow.SetAlphaFromBoolean, f.overGlow, over, 0.9, 0)
             end
-            ok, _, m, o = pcall(calc.GetIncomingHeals, calc)
+            ok, m = pcall(calc.GetIncomingHeals, calc)          -- (all, yours, others')
         end
-        if ok then mine, others = m, o else mine, others = value(UnitGetIncomingHeals, u), nil end
+        if ok then mine = m else mine = value(UnitGetIncomingHeals, u) end
     end
     local absorb = (wantAbsorbs and not dead) and value(UnitGetTotalAbsorbs, u) or nil
     local healAbsorb = (wantAbsorbs and not dead) and value(UnitGetTotalHealAbsorbs, u) or nil
     -- (a missing value counts as none; the heal bars stay at 0 so the shield still starts at the health end)
     if not pcall(setBarValue, f, f.healBar, mine) then f.healBar:SetValue(0) end
-    if not pcall(setBarValue, f, f.otherHealBar, others) then f.otherHealBar:SetValue(0) end
+    f.otherHealBar:SetValue(0)
     if not pcall(setBarValue, f, f.absorbBar, absorb) then f.absorbBar:SetValue(0) end
     if not pcall(setBarValue, f, f.healAbsorbBar, healAbsorb) then f.healAbsorbBar:SetValue(0) end
 end
@@ -3797,8 +3796,8 @@ function ns.applyFxPreview(f)
     f.previewing = true
     if not f.predBars then return end
     for _, b in ipairs(f.predBars) do b:SetMinMaxValues(0, 100) end
-    f.healBar:SetValue(fx.heal and 15 or 0)
-    f.otherHealBar:SetValue(fx.other and 9 or 0)
+    f.healBar:SetValue(fx.heal and 20 or 0)
+    f.otherHealBar:SetValue(0)
     f.absorbBar:SetValue(fx.absorb and 12 or 0)
     f.healAbsorbBar:SetValue(fx.healAbsorb and 10 or 0)
     -- (a snowglobe glow shaken, to show it off)
@@ -5520,8 +5519,8 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         for _, b in ipairs({ f.healBar, f.otherHealBar, f.absorbBar, f.healAbsorbBar }) do b:SetMinMaxValues(0, 100) end
         C_Timer.After(0.3, function()
             setBarValue(f, f.hp, 60)
-            f.healBar:SetValue(getSetting("player", "healPrediction") and 12 or 0)
-            f.otherHealBar:SetValue(getSetting("player", "healPrediction") and 8 or 0)
+            f.healBar:SetValue(getSetting("player", "healPrediction") and 20 or 0)
+            f.otherHealBar:SetValue(0)
             f.absorbBar:SetValue(getSetting("player", "absorbs") and 15 or 0)
             f.healAbsorbBar:SetValue(getSetting("player", "absorbs") and 10 or 0)
         end)
