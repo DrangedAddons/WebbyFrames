@@ -1393,7 +1393,8 @@ function ns.placeShields(f, fill, healTex, w)
 end
 
 -- The shield's amount into both its parts (as placed by placeShields), and its number: at the
--- health bar's right end, in the shield's colour, while the mouse is on the health bar (refreshText).
+-- health bar's right end, in the shield's colour, shown as the health's number is (the frame's
+-- Numbers setting: always, on mouseover or never; refreshText).
 function ns.setShields(f, absorb)
     if not f.absorbBar then return end
     if not pcall(setBarValue, f, f.absorbBar, absorb) then f.absorbBar:SetValue(0) end
@@ -1405,6 +1406,7 @@ function ns.setShields(f, absorb)
         fs:SetJustifyH("RIGHT")
         fs:Hide()
         f.shieldText = fs
+        if refreshText then refreshText(f) end      -- (shown now if its Numbers setting is Always)
     end
     if not fs then return end
     local font, size, flags = f.hpText:GetFont()
@@ -4172,9 +4174,9 @@ function refreshText(f)
     -- Dead / Ghost / Offline always shows, whatever the text mode
     f.hpText:SetShown((always or f.statusText or (over and f.hoverHP)) and true or false)
     f.mpText:SetShown((always or (over and f.hoverMP)) and true or false)
-    -- the shield's number: while the mouse is on the health bar (whatever the numbers setting)
+    -- the shield's number: by the frame's Numbers setting, as the health's (Never: none)
     if f.shieldText then
-        f.shieldText:SetShown((f.hoverHP and getSetting(f.baseUnit, "absorbs") and not f.statusText) and true or false)
+        f.shieldText:SetShown(((always or (over and f.hoverHP)) and getSetting(f.baseUnit, "absorbs") and not f.statusText) and true or false)
     end
 end
 
@@ -4505,8 +4507,7 @@ local function addHover(f)
     end)
     f:HookScript("OnEnter", function(self)
         self.hover = true
-        -- (the shield's number shows on mouseover too, whatever the numbers setting)
-        watch:SetShown(self.textMode == "mouseover" or self.shieldText ~= nil)
+        watch:SetShown(self.textMode == "mouseover")
         if self.baseUnit == "party" and Party.tipAllowed and not Party.tipAllowed() then return end
         pcall(function()
             defaultTip(self)
