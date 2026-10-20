@@ -3535,6 +3535,54 @@ local function updateAll(f)
     safely(updateThreat, f); safely(updateAuras, f); safely(Extras.update, f)
 end
 
+-- The settings' Preview tickboxes: one effect (heal: your incoming heal, other: everyone else's, absorb:
+-- a shield, healAbsorb: a heal absorb) shown on the live frame, so you can see it as it really looks.
+-- While any is on, the frame shows made-up values: health at 60% (room for them), and each effect
+-- ticked at a share of the bar. Real health updates wait (f.previewing) until the last one is off.
+function ns.applyFxPreview(f)
+    local fx = f and f.fxPreview
+    if not fx then return end
+    -- (the overlays made, styled and anchored by the normal code, on a 60% fill, then given their shares)
+    f.previewing = nil
+    f.hp:SetMinMaxValues(0, 100)
+    f.hp:SetValue(60)
+    pcall(updatePrediction, f)
+    f.previewing = true
+    if not f.predBars then return end
+    for _, b in ipairs(f.predBars) do b:SetMinMaxValues(0, 100) end
+    f.healBar:SetValue(fx.heal and 15 or 0)
+    f.otherHealBar:SetValue(fx.other and 9 or 0)
+    f.absorbBar:SetValue(fx.absorb and 12 or 0)
+    f.healAbsorbBar:SetValue(fx.healAbsorb and 10 or 0)
+end
+
+function ns.setFxPreview(f, kind, on)
+    if not (f and f.hp) then return end
+    local fx = f.fxPreview or {}
+    fx[kind] = on and true or nil
+    if next(fx) then
+        f.fxPreview = fx
+        ns.applyFxPreview(f)
+    else
+        -- the last one off: back to the real values
+        f.fxPreview, f.previewing = nil, nil
+        pcall(updateAll, f)
+    end
+end
+
+-- (every preview off: the settings window closed)
+function ns.clearFxPreviews()
+    local list = {}
+    for _, unit in ipairs(UNITS) do list[#list + 1] = frames[unit] end
+    for i = 1, Party.SLOTS do list[#list + 1] = Party.members[i] end
+    for _, f in pairs(list) do
+        if f and f.fxPreview then
+            f.fxPreview, f.previewing = nil, nil
+            pcall(updateAll, f)
+        end
+    end
+end
+
 -- Several unit events often land in one frame (health, heal prediction, an absorb). Paint once,
 -- before the frame is drawn. Events run before OnUpdate.
 ns.paintQ, ns.paintN = {}, 0
@@ -3979,6 +4027,8 @@ local function setSetting(unit, key, value)
         pcall(updatePower, f)
         if InCombatLockdown() then pendingApply = true else applyUnit(f) end
         if lib and f == frames[unit] then lib:RefreshFrameSettings(f) end
+        -- (a heal or shield preview on it: shown again in the new look)
+        if f.fxPreview then pcall(ns.applyFxPreview, f) end
     end
     -- the pet's bar can follow the player frame's colour
     if unit == "player" and frames.pet then frames.pet.colorHold = nil; pcall(updateHealth, frames.pet) end

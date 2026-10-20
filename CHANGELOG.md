@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.31
+- Heal and shield previews on the live frame: Your heal, Others' heal, Shield and Heal absorb each have a Preview tickbox beside their colour. Tick any one, or any mix, and it shows on the frame itself (at 60% health), in the look you're setting, changing as you change it. Untick it, or close the settings, to go back. Replaces the all-in-one preview bar.
+
 ## 1.16.30
 - Incoming heal looks (under Incoming heals, every frame and the portrait party): Heal texture, Heal colour (yours), Others' heal colour and Heal opacity.
 - A live Preview under the heal and shield options: a health bar with incoming heals, a shield and a heal absorb, drawn as you have them set, changing as you change them.
