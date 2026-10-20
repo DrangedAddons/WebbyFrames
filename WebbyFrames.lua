@@ -94,6 +94,10 @@ local DEFAULT_SETTINGS = {
     portraitStyle = "picture",   -- "picture" or "class" (class icon for players)
     -- cast bar (target and focus): Blizzard's own bar drives one built into our frame
     castShow = true, castText = true, castIcon = true,
+    -- the cast bar's looks: its texture ("default": the frame's health texture), a spark on the fill's
+    -- edge, how it goes when a cast ends (off / fade / flash) and how long that takes. Its colours
+    -- (castColorCast, Channel, Locked, Interrupted) are unset until picked: CAST_COLORS then.
+    castTexture = "default", castSpark = true, castFade = "fade", castFadeTime = 0.5,
     -- frame art colour: "default" (gold, as drawn), "class" or "custom" (frameColor = { r, g, b })
     frameTint = "default",
     -- health bar extras
@@ -2335,6 +2339,19 @@ local CAST_COLORS = {
     interrupted     = { 0.9, 0.1, 0.1 },    -- interrupted / failed: red
 }
 
+-- (each cast type's own colour option; unset, its CAST_COLORS one)
+ns.CAST_COLOR_KEY = {
+    [CAST_COLORS.standard] = "castColorCast", [CAST_COLORS.empowered] = "castColorCast",
+    [CAST_COLORS.channel] = "castColorChannel", [CAST_COLORS.uninterruptable] = "castColorLocked",
+    [CAST_COLORS.interrupted] = "castColorInterrupted",
+}
+function ns.castRGB(unit, c)
+    local key = ns.CAST_COLOR_KEY[c]
+    local v = key and getSetting(unit, key)
+    if type(v) == "table" then return v[1] or c[1], v[2] or c[2], v[3] or c[3] end
+    return c[1], c[2], c[3]
+end
+
 local function castBoxHeight() local h = 0; for _, v in ipairs(CAST_ART.rowH) do h = h + v end; return h end
 
 -- Points a texture at a rectangle of the target frame art, given in frame coordinates (y1 above y2).
@@ -2385,8 +2402,75 @@ local function newCastBar(f)
     cb.text:SetPoint("CENTER", cb, "CENTER", 0, 0)
     cb.text:SetWidth(110)
     cb.text:SetWordWrap(false)
+    -- the flash over the bar as a cast ends (Cast bar fade: Flash and fade), cut by the box's mask
+    cb.flash = top:CreateTexture(nil, "ARTWORK")
+    cb.flash:SetAllPoints(cb)
+    cb.flash:SetTexture("Interface\\Buttons\\WHITE8X8")
+    cb.flash:SetBlendMode("ADD")
+    cb.flash:AddMaskTexture(cb.boxMask)
+    cb.flash:Hide()
+    -- the spark on the fill's moving edge (Spark), cut by the box's mask too
+    cb.spark = top:CreateTexture(nil, "OVERLAY")
+    cb.spark:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+    cb.spark:SetBlendMode("ADD")
+    cb.spark:AddMaskTexture(cb.boxMask)
+    cb.spark:Hide()
     box:Hide()
     return cb
+end
+
+-- The cast bar fading out as a cast ends (Cast bar fade), instead of vanishing:
+--   Fade: it fades away over the fade time.
+--   Flash and fade: a finished cast fills the bar, a bright flash washes over it and dies down as the
+--   bar fades; an interrupted one flashes red. (Blizzard's own bar fades with an animation we can't
+--   read, so ours runs its own.)
+function ns.castFadeStart(f)
+    local cb = f.cb
+    local box = cb and cb.box
+    if not (box and box:IsShown()) or box.fading then return end
+    local style = getSetting(f.baseUnit, "castFade") or "fade"
+    if style == "off" then box:Hide(); return end
+    local interrupted = f.castColor == CAST_COLORS.interrupted
+    box.fading = {
+        start = GetTime(),
+        len = math.max(0.1, tonumber(getSetting(f.baseUnit, "castFadeTime")) or 0.5),
+        flash = style == "flash",
+    }
+    box:SetAlpha(1)
+    cb.spark:Hide()
+    if box.fading.flash then
+        if not interrupted then
+            -- (finished: the bar full)
+            local okM, _, max = pcall(cb.GetMinMaxValues, cb)
+            if okM then pcall(cb.SetValue, cb, max) end
+            cb.flash:SetVertexColor(1, 1, 1)
+        else
+            -- (interrupted: a flash in the interrupted colour, brightened)
+            local r, g, b = ns.castRGB(f.baseUnit, CAST_COLORS.interrupted)
+            cb.flash:SetVertexColor(math.min(1, r + 0.2), math.min(1, g + 0.15), math.min(1, b + 0.15))
+        end
+        cb.flash:SetAlpha(0.85)
+        cb.flash:Show()
+    end
+    box:SetScript("OnUpdate", function(self)
+        local fd = self.fading
+        if not fd then self:SetScript("OnUpdate", nil); return end
+        local t = (GetTime() - fd.start) / fd.len
+        if t >= 1 then ns.castFadeStop(f); self:Hide(); return end
+        -- (the flash dies down in the first third; the bar itself eases out over the whole time)
+        if fd.flash then cb.flash:SetAlpha(0.85 * math.max(0, 1 - t * 3)) end
+        self:SetAlpha(1 - t * t)
+    end)
+end
+
+-- (a fade cut short: a new cast, the option turned off, the frame shows someone else)
+function ns.castFadeStop(f)
+    local cb = f.cb
+    local box = cb and cb.box
+    if not box then return end
+    box.fading = nil
+    box:SetScript("OnUpdate", nil)
+    cb.flash:Hide()
 end
 
 local function placeCastbar(f)
@@ -2394,6 +2478,7 @@ local function placeCastbar(f)
     if not (bar and cb) then return end
     -- Blizzard's bar keeps running in its own (invisible, parked) frame; ours shows its progress
     if not getSetting(f.baseUnit, "castShow") then
+        ns.castFadeStop(f)
         cb.box:Hide()
         return
     end
@@ -2416,13 +2501,18 @@ local function placeCastbar(f)
             t:SetPoint("BOTTOMRIGHT", box, "TOPRIGHT", 0, -(y + CAST_ART.rowH[t.row]))
         end
     end
-    -- the frame's own bar texture (a chosen SharedMedia one, or the default tintable fill) ...
-    local fill = f.customTex or (BAR_FILE.target .. "Health-Status")
+    -- its own texture (Cast bar texture), else the frame's bar texture (a chosen SharedMedia one, or the
+    -- default tintable fill, which is greyed to take the colour cleanly) ...
+    local own = resolveTexture(getSetting(f.baseUnit, "castTexture"))
+    local fill = own or f.customTex or (BAR_FILE.target .. "Health-Status")
+    cb.fillPlain = not (own or f.customTex)
     if cb.fill ~= fill then
         cb.fill = fill
         cb:SetStatusBarTexture(fill)
         cb.fillMasked = nil
     end
+    f.castColor = nil        -- (the colours are applied afresh: an option may have changed)
+    cb.sparkFill = nil
     -- the box's end cut along the portrait ring (once per texture)
     if not cb.boxMaskSet then
         cb.boxMaskSet = true
@@ -2478,10 +2568,12 @@ local function mirrorCastbar(f)
     local bar, cb = f.castbar, f.cb
     local box = cb.box
     if not getSetting(f.baseUnit, "castShow") or not bar:IsShown() then
-        if box:IsShown() then box:Hide() end
+        if box:IsShown() and not box.fading then box:Hide() end
         f.castColor, f.castText, f.castIconTex = nil, nil, nil
         return
     end
+    -- (a new cast while the last one was still fading: back to the live bar)
+    if box.fading then ns.castFadeStop(f) end
     pcall(cb.SetMinMaxValues, cb, bar:GetMinMaxValues())
     pcall(cb.SetValue, cb, bar:GetValue())
     box:SetAlpha(bar:GetAlpha())
@@ -2490,9 +2582,26 @@ local function mirrorCastbar(f)
     -- colour, spell name and icon hold still for the whole cast. Value and alpha do not.
     if f.castColor ~= c then
         f.castColor = c
-        cb:SetStatusBarColor(c[1], c[2], c[3], 1)
+        -- (in your own colour for this cast type, if you picked one)
+        local r, g, b = ns.castRGB(f.baseUnit, c)
+        cb:SetStatusBarColor(r, g, b, 1)
         local tex = cb:GetStatusBarTexture()
-        if tex then tex:SetDesaturated(not f.customTex) end
+        if tex then tex:SetDesaturated(cb.fillPlain and true or false) end
+        cb.spark:SetVertexColor(math.min(1, r * 0.5 + 0.6), math.min(1, g * 0.5 + 0.6), math.min(1, b * 0.5 + 0.6))
+    end
+    -- the spark on the fill's edge (re-anchored when the fill texture changes)
+    if getSetting(f.baseUnit, "castSpark") then
+        local tex = cb:GetStatusBarTexture()
+        if tex and cb.sparkFill ~= tex then
+            cb.sparkFill = tex
+            cb.spark:ClearAllPoints()
+            cb.spark:SetPoint("CENTER", tex, "RIGHT", 0, 0)
+            local h = cb:GetHeight() or 10
+            cb.spark:SetSize(10, h * 2.4)
+        end
+        if not cb.spark:IsShown() then cb.spark:Show() end
+    elseif cb.spark:IsShown() then
+        cb.spark:Hide()
     end
     if bar.Text then
         local okT, text = pcall(bar.Text.GetText, bar.Text)
@@ -2530,7 +2639,15 @@ local function adoptCastbar(f, barName)
     bar:HookScript("OnUpdate", function() mirrorCastbar(f) end)
     bar:HookScript("OnHide", function()
         local box = f.cb and f.cb.box
-        if box and box:IsShown() then box:Hide() end
+        if not (box and box:IsShown()) then return end
+        -- the cast ended: fade out (Cast bar fade), or straight away if the frame now shows someone
+        -- else or the cast bar is off
+        if getSetting(f.baseUnit, "castShow") and UnitExists(f.wfUnit) then
+            pcall(ns.castFadeStart, f)
+            if not box.fading then box:Hide() end
+        else
+            box:Hide()
+        end
     end)
     placeCastbar(f)
 end
@@ -4549,7 +4666,8 @@ end
 ---------------------------------------------------------------------------
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
-                    "castShow", "castText", "castIcon", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
+                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }

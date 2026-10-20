@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.25
+- Cast bars (target, focus): they fade out when a cast ends instead of vanishing. When a cast ends: Fade, Flash and fade (a finished cast fills the bar and flashes bright as it fades; an interrupted one flashes red), or Off. Fade time to choose.
+- Cast bar looks: a spark on the fill's edge, its own texture (or the health bar's, as before), and your own colours for casting, channelling, can't interrupt and interrupted.
+
 ## 1.16.24
 - Combat numbers: hits were dropped before they could draw, so nothing showed, crit or not. The font is set before the text again.
 

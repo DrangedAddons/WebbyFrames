@@ -572,6 +572,7 @@ Opt.SEARCH_WORDS = {
     auraBuffs = "hots auras", auraDebuffs = "dots auras", rpBuffs = "hots auras", rpDebuffs = "dots auras", auraMine = "dots my debuffs", auraMineBig = "dots my debuffs",
     auraTimer = "cooldown duration timer countdown swipe", auraPos = "auras buffs debuffs",
     castShow = "castbar casting spell interrupt kick", castText = "castbar spell", castIcon = "castbar spell",
+    castTexture = "castbar statusbar", castSpark = "castbar", castFade = "castbar fade flash", castFadeTime = "castbar fade",
     partyGap = "gap padding", rpGap = "gap padding", rangeFade = "range distance alpha", rangeAlpha = "range distance alpha fade",
     partyTooltip = "mouseover hover", partyStyle = "raid frames compact grid tiles portrait", partySort = "order role sort",
     partyLayout = "horizontal vertical", rpPets = "pet minion", partyPets = "pet minion", rpPetPos = "pets", rpPetHeight = "pets",
@@ -1952,9 +1953,28 @@ local function buildSettings()
         if hasCastAndThreat(unit) then
             B.section("Cast bar and threat", false)
             local cast = B.check("castShow", "Cast bar", "What the unit is casting, under its mana bar: yellow for a cast, green for a channel, grey when you can't interrupt it, red when interrupted.", true)
-            B.under(cast, isOn("castShow"),
+            local castOn = isOn("castShow")
+            B.under(cast, castOn,
                 B.pair({ "castText", "Spell name", "The spell's name on the bar.", true },
-                       { "castIcon", "Spell icon", "At the bar's left end.", true }))
+                       { "castIcon", "Spell icon", "At the bar's left end.", true }),
+                B.dropdown("castTexture", "Cast bar texture", "The cast bar's fill. Default: the same as the frame's health bar. SharedMedia textures are listed too.", "default", textureChoices),
+                B.check("castSpark", "Spark", "A bright spark on the edge of the fill as the cast runs.", true))
+            local fade = B.dropdown("castFade", "When a cast ends", "Fade: the bar fades away.\nFlash and fade: a finished cast fills the bar and flashes bright as it fades; an interrupted one flashes red.\nOff: it goes straight away.", "fade",
+                { { "fade", "Fade" }, { "flash", "Flash and fade" }, { "off", "Off" } })
+            B.under(cast, castOn, fade)
+            B.under(fade, function() return castOn() and get("castFade") ~= "off" end,
+                B.slider("castFadeTime", "Fade time", "How long it takes to fade away.", 0.5, 0.2, 1.5, 0.1,
+                    function(v) return string.format("%.1f s", v) end))
+            -- each cast type's colour (unpicked: the usual yellow, green, grey and red)
+            local function castSwatch(key, text, tip, d)
+                return B.swatch(text, function() local c = get(key); return type(c) == "table" and c or d end,
+                    function(r, g, b) setSetting(unit, key, { r, g, b }) end, tip .. " Click to change it.")
+            end
+            B.under(cast, castOn,
+                castSwatch("castColorCast", "Casting colour", "The bar while the unit casts.", { 1.0, 0.70, 0.0 }),
+                castSwatch("castColorChannel", "Channel colour", "The bar while the unit channels.", { 0.0, 0.85, 0.2 }),
+                castSwatch("castColorLocked", "Can't interrupt colour", "The bar for a cast that can't be interrupted.", { 0.6, 0.6, 0.6 }),
+                castSwatch("castColorInterrupted", "Interrupted colour", "The bar when a cast is interrupted or fails.", { 0.9, 0.1, 0.1 }))
             local threat = B.check("threatOn", "Threat", "Your threat on hostile mobs: a glow round the frame and / or your threat %, both in your threat colour.", true)
             B.under(threat, function() return get("threatShow") ~= "off" end,
                 B.dropdown("threatShow", "Display", "A glow round the frame, your threat %, or both.", "both",
