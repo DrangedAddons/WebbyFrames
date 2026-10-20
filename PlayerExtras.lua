@@ -1,7 +1,7 @@
 -- Webby Frames: player extras. Your weapons' enchants and imbues as icons just before your buffs, and
 -- your buffs as timer bars in a block of their own. Loads after WebbyFrames.lua (see the .toc), which
--- shares its helpers through ns. (Weapon imbues the way EllesmereUI reads them on Forever, used with its
--- author's permission: an imbue is its own enchant type there, so C_Item.GetWeaponEnchantInfo, which
+-- shares its helpers through ns. (Weapon imbues on Forever: an imbue is its own enchant type there,
+-- so C_Item.GetWeaponEnchantInfo, which
 -- lists every enchant per weapon, is read rather than the older GetWeaponEnchantInfo.)
 local _, ns = ...
 local getSetting, unitData, defaultTip, isSecret, frames = ns.getSetting, ns.unitData, ns.defaultTip, ns.isSecret, ns.frames

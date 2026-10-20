@@ -722,8 +722,7 @@ end
 -- any language works: you know a spell if you know any of its ranks; a member has a buff if they have
 -- it under the spell's name in your language. Worked out when a member's buffs change (UNIT_AURA), the
 -- group changes or you learn a spell, at most twice a second, and out of combat (buffing is); in combat
--- the icons stay as they were. (After EllesmereUI's Forever "Missing Buffs", used with its author's
--- permission.)
+-- the icons stay as they were.
 -- { cast: every rank you could know (group versions first), has: the buffs that count }
 Party.BUFFS = {
     { cast = { 21562, 21564, 25392, 48162, 1243, 1244, 1245, 2791, 10937, 10938, 25389, 48161 }, has = { 1243, 21562 } },   -- Fortitude
@@ -1092,8 +1091,7 @@ end
 -- and your heals over time, and fading out of range. You can be one of the tiles
 -- (Include yourself); pets get small tiles beside their owners. The same click casting as the portrait
 -- frames (ns.RaidParty.tiles, petTiles). Placed in Edit Mode on its own, with a sample party.
--- (The layout and the combat-safe dispel highlight follow Blizzard's CompactUnitFrame and EllesmereUI's
--- raid frames, the latter used with its author's permission.)
+-- (The layout and the combat-safe dispel highlight follow Blizzard's CompactUnitFrame.)
 local RP = { tiles = {}, petTiles = {}, MAX = 5 }
 ns.RaidParty = RP
 
@@ -1667,10 +1665,10 @@ function RP.placeShields(t, w)
     t.absorb:SetStatusBarColor(c[1] or 1, c[2] or 1, c[3] or 1, a)
     -- the glows (Shield glow, Heal glow: the party's, as on the portrait frames)
     if ns.barGlow then
-        pcall(ns.barGlow, t.absorb, get("absorbGlow") or "off", c[1] or 1, c[2] or 1, c[3] or 1, tonumber(get("absorbGlowAlpha")) or 0.6)
+        pcall(ns.barGlow, t.absorb, get("absorbGlow") or "off", c[1] or 1, c[2] or 1, c[3] or 1, tonumber(get("absorbGlowAlpha")) or 0.6, get("absorbBorder") and true or false)
         local hr, hg, hb = 0.1, 0.9, 0.3
         pcall(function() hr, hg, hb = t.heal:GetStatusBarColor() end)
-        pcall(ns.barGlow, t.heal, get("healGlow") or "off", hr, hg, hb, tonumber(get("healGlowAlpha")) or 0.6)
+        pcall(ns.barGlow, t.heal, get("healGlow") or "off", hr, hg, hb, tonumber(get("healGlowAlpha")) or 0.6, get("healBorder") and true or false)
     end
 end
 

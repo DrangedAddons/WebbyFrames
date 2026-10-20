@@ -3,7 +3,7 @@
 -- open their menu, or cast a spell on them, at the rank you choose, on them or on their target. Loads
 -- after WebbyFrames.lua and Party.lua (see the .toc); its settings page is added to the window through
 -- ns.pages. (The page's layout, ranks, Cast on and Also target follow NeoHeal's click casting (MIT);
--- hover keys and resurrect EllesmereUI's, used with its author's permission, and Clique.)
+-- hover keys and resurrect Clique's.)
 local _, ns = ...
 local Party = ns.Party
 local Click = {}

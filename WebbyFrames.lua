@@ -116,6 +116,7 @@ local DEFAULT_SETTINGS = {
     absorbTexture = "default", absorbAlpha = 0.7,
     -- glows on shields and incoming heals: off / pulse / shimmer / snow, and how strong (ns.barGlow)
     absorbGlow = "off", absorbGlowAlpha = 0.6, healGlow = "off", healGlowAlpha = 0.6,
+    absorbBorder = false, healBorder = false,
     -- incoming heals: their texture ("default": the health bar's); healColor / otherHealColor and
     -- healAlpha unset until picked (green / darker green, as drawn before)
     healTexture = "default",
@@ -986,7 +987,8 @@ local function styleOverlay(f, bar)
         local shield = bar == f.absorbBar
         local mode = getSetting(f.baseUnit, shield and "absorbGlow" or "healGlow") or "off"
         local s = tonumber(getSetting(f.baseUnit, shield and "absorbGlowAlpha" or "healGlowAlpha")) or 0.6
-        local ok, err = pcall(ns.barGlow, bar, mode, c[1], c[2], c[3], s)
+        local edge = getSetting(f.baseUnit, shield and "absorbBorder" or "healBorder") and true or false
+        local ok, err = pcall(ns.barGlow, bar, mode, c[1], c[2], c[3], s, edge)
         if not ok and not ns.glowErr then          -- (said once, so a broken glow isn't silent)
             ns.glowErr = true
             print("|cffffd100Webby Frames|r glow: " .. tostring(err))
@@ -997,13 +999,30 @@ end
 -- A glow on a heal or shield bar, over its fill only (a frame clipped to the fill texture, so it's
 -- exactly where the heal or shield is, however its amount is hidden from addons):
 --   pulse: a soft wash in its colour, breathing in and out (an animation: no Lua while it runs);
---   shimmer: a band of light sweeping across it every couple of seconds (an animation too);
---   snow: a snowglobe. Little glowing flakes drift down through it, swaying; when it changes
---   (barGlowShake: a shield gained or hit, a heal coming in) they swirl up and settle again.
+--   shimmer: a band of light sweeping across it, about once a second;
+--   snow: a snowglobe. Glowing flakes float in it, bobbing and drifting; when it changes
+--   (barGlowShake: a shield gained or hit, a heal coming in) they swirl up and settle again;
+--   blizzard: a snowstorm. Lots of small flakes driven down and across by the wind.
+-- border: a glowing edge round it as well (or on its own): ns.barGlowEdge.
 -- Called on every restyle, so it only does anything when the look has changed.
-function ns.barGlow(bar, mode, r, g, b, strength)
+local GLOW_FLAKES = { snow = 48, blizzard = 90 }
+function ns.barGlow(bar, mode, r, g, b, strength, border)
     local fx = bar.wfFx
     local fill = bar:GetStatusBarTexture()
+    if not GLOW_FLAKES[mode] and mode ~= "pulse" and mode ~= "shimmer" then mode = "off" end
+    -- (the bar hangs off the health fill, so its size can be secret: then the overlay holder's)
+    local w, h
+    for _, region in ipairs({ bar, bar:GetParent() }) do
+        local ok, rw, rh = pcall(region.GetSize, region)
+        if ok and rw and rh and not isSecret(rw) and not isSecret(rh) then w, h = rw, rh; break end
+    end
+    w, h = math.max(w or 100, 1), math.min(math.max(h or 10, 1), 40)
+    -- The glow is light added on top, so the wash is in the bar's own colour: it brightens it
+    -- without bleaching it (anything paler added over the bar turns it white). The band, the
+    -- flakes and the border are small, so they can be a little paler, to read as light. Glow
+    -- strength 0 is a faint glow, 100 full.
+    local cr, cg, cb = 0.3 + r * 0.7, 0.3 + g * 0.7, 0.3 + b * 0.7
+    ns.barGlowEdge(bar, fill, border and fill and true or false, cr, cg, cb, 0.3 + 0.7 * strength, h)
     if mode == "off" or not fill then
         if fx then fx:Hide(); fx.sig = nil end
         return
@@ -1044,23 +1063,10 @@ function ns.barGlow(bar, mode, r, g, b, strength)
         fx:ClearAllPoints()
         fx:SetAllPoints(fill)
     end
-    -- (only when the look changed: the colour a paler version of the bar's, the strength, the mode,
-    -- the bar's size)
-    -- (the bar hangs off the health fill, so its size can be secret: then the overlay holder's)
-    local w, h
-    for _, region in ipairs({ bar, bar:GetParent() }) do
-        local ok, rw, rh = pcall(region.GetSize, region)
-        if ok and rw and rh and not isSecret(rw) and not isSecret(rh) then w, h = rw, rh; break end
-    end
-    w, h = math.max(w or 100, 1), math.max(h or 10, 1)
+    -- (only when the look changed: the colour, the strength, the mode, the bar's size)
     local sig = mode .. math.floor(r * 50) .. math.floor(g * 50) .. math.floor(b * 50) .. math.floor(strength * 20) .. math.floor(w) .. math.floor(h)
     if fx.sig == sig and fx:IsShown() then return end
     fx.sig = sig
-    -- The glow is light added on top, so the wash is in the bar's own colour: it brightens it
-    -- without bleaching it (anything paler added over the bar turns it white). The band and the
-    -- flakes are small, so they can be a little paler, to read as light. Glow strength 0 is a
-    -- faint glow, 100 full.
-    local cr, cg, cb = 0.3 + r * 0.7, 0.3 + g * 0.7, 0.3 + b * 0.7
     fx.cr, fx.cg, fx.cb, fx.h, fx.w = cr, cg, cb, h, w
     fx:SetAlpha(0.3 + 0.7 * strength)
     fx.wash:SetVertexColor(r, g, b)
@@ -1068,7 +1074,7 @@ function ns.barGlow(bar, mode, r, g, b, strength)
     fx.mode = mode
     -- (shown before its animations start: the game doesn't play them on a hidden frame)
     fx:Show()
-    -- pulse: the wash breathing
+    -- pulse: the wash breathing (a faint steady wash under the others)
     if mode == "pulse" then
         fx.washAg:Play()
     else
@@ -1077,36 +1083,102 @@ function ns.barGlow(bar, mode, r, g, b, strength)
     end
     -- shimmer: the band sweeping across (moved by barGlowSnow too)
     if mode == "shimmer" then fx.band:Show() else fx.band:Hide() end
-    -- snow: the flakes (moved by barGlowSnow, every frame while shown)
-    if mode == "snow" then
-        for i = 1, 48 do
-            local m = fx.motes[i]
+    -- snow and blizzard: the flakes (moved by barGlowSnow, every frame while shown), sized from
+    -- the bar's height each time, within limits
+    local n = GLOW_FLAKES[mode] or 0
+    for i = 1, math.max(n, #fx.motes) do
+        local m = fx.motes[i]
+        if i <= n then
             if not m then
                 m = { tex = fx:CreateTexture(nil, "OVERLAY", nil, 2) }
                 m.tex:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask")
                 m.tex:SetBlendMode("ADD")
                 fx.motes[i] = m
                 m.x, m.y = math.random() * w, (math.random() - 0.5) * h
-                m.vx, m.vy, m.phase = 0, 0, math.random() * 6.28
-                m.size = math.max(3, h * (0.3 + math.random() * 0.25))
+                m.vx, m.vy, m.phase, m.k = 0, 0, math.random() * 6.28, math.random()
             end
+            local size = mode == "blizzard" and math.min(math.max(h * (0.15 + 0.15 * m.k), 2), 4)
+                or math.min(math.max(h * (0.3 + 0.25 * m.k), 3), 7)
             m.tex:SetVertexColor(cr, cg, cb)
-            m.tex:SetSize(m.size, m.size)
+            m.tex:SetSize(size, size)
             m.tex:Show()
+        elseif m then
+            m.tex:Hide()
         end
-        fx.snowing = true
-    else
-        fx.snowing = nil
-        for _, m in ipairs(fx.motes) do m.tex:Hide() end
     end
+    fx.snowing = n > 0 or nil
+    fx.flakes = n
 end
 
--- One frame of the shimmer or the snowglobe.
--- Shimmer: the spark sweeps left to right across the fill in 0.6s, then a half-second rest. The texture shows
--- half its width across the fill, so the one spark in it crosses from just off the left end to
--- just off the right (the copies either side of it stay out of view).
--- Snowglobe: the flakes float, sinking slowly as they bob and drift, and wrap round to the top; a
--- shake throws them up and sideways, and they slow back down to floating.
+-- The border glow: Blizzard's modern spell alert loop: the proc flipbook (6 x 5, 30 frames a second), desaturated and
+-- tinted, 1.4 times the size of what it's round, with a faint untinted copy added on top for the
+-- sparkle. Here it's round the heal or shield: in a frame outside the health bar's clipping so it
+-- can spill above and below, but cut off at the fill's own ends, so it's only ever as long as the
+-- heal or shield (and gone when that's empty: its width is hidden from addons). Hidden with the bar.
+local EDGE_ATLAS = "UI-HUD-ActionBar-Proc-Loop-Flipbook"
+function ns.barGlowEdge(bar, fill, on, cr, cg, cb, alpha, h)
+    local eg = bar.wfEdge
+    if not on then
+        if eg then eg.on = nil; eg.sig = nil; eg:Hide() end
+        return
+    end
+    if not eg then
+        eg = CreateFrame("Frame", nil, bar:GetParent() and bar:GetParent():GetParent() or bar)
+        eg:SetClipsChildren(true)
+        eg:Hide()
+        local function flip(layer, add)
+            local tex = eg:CreateTexture(nil, "OVERLAY", nil, layer)
+            if add then tex:SetBlendMode("ADD") end
+            local ag = tex:CreateAnimationGroup()
+            ag:SetLooping("REPEAT")
+            local a = ag:CreateAnimation("FlipBook")
+            a:SetFlipBookRows(6)
+            a:SetFlipBookColumns(5)
+            a:SetFlipBookFrames(30)
+            a:SetDuration(1.0)
+            a:SetFlipBookFrameWidth(0)
+            a:SetFlipBookFrameHeight(0)
+            return tex, ag
+        end
+        eg.tex, eg.ag = flip(6)
+        eg.ants, eg.antsAg = flip(7, true)
+        eg:SetScript("OnShow", function(self) self.ag:Play(); self.antsAg:Play() end)
+        eg:SetScript("OnHide", function(self) self.ag:Stop(); self.antsAg:Stop() end)
+        bar:HookScript("OnShow", function() if eg.on then eg:Show() end end)
+        bar:HookScript("OnHide", function() eg:Hide() end)
+        bar.wfEdge = eg
+    end
+    eg.on = true
+    local sig = math.floor(cr * 50) .. math.floor(cg * 50) .. math.floor(cb * 50) .. math.floor(alpha * 20) .. math.floor(h) .. tostring(fill)
+    if eg.sig ~= sig then
+        eg.sig = sig
+        local pad = h * 0.2           -- (1.4 times the height: 0.2 of it above and below)
+        eg:SetFrameLevel(bar:GetFrameLevel() + 2)
+        eg:ClearAllPoints()
+        eg:SetPoint("TOPLEFT", fill, "TOPLEFT", 0, pad)
+        eg:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, -pad)
+        for _, tex in ipairs({ eg.tex, eg.ants }) do
+            tex:ClearAllPoints()
+            tex:SetPoint("TOPLEFT", fill, "TOPLEFT", -pad, pad)
+            tex:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", pad, -pad)
+            tex:SetAtlas(EDGE_ATLAS)
+        end
+        eg.tex:SetDesaturated(true)
+        eg.tex:SetVertexColor(cr, cg, cb)
+        eg.ants:SetAlpha(0.35)
+        eg:SetAlpha(alpha)
+        if eg:IsShown() then eg.ag:Stop(); eg.ag:Play(); eg.antsAg:Stop(); eg.antsAg:Play() end
+    end
+    if bar:IsShown() and not eg:IsShown() then eg:Show() end
+end
+
+-- One frame of the shimmer or the snow.
+-- Shimmer: the spark sweeps left to right across the fill in 0.6s, then a half-second rest. The
+-- texture shows half its width across the fill, so the one spark in it crosses from just off the
+-- left end to just off the right (the copies either side of it stay out of view).
+-- Snowglobe: the flakes float, sinking slowly as they bob and drift, and wrap round to the top.
+-- Blizzard: the flakes are driven down and across by the wind, wrapping round.
+-- Either way a shake throws them up and sideways, and they slow back down.
 function ns.barGlowSnow(fx, bar, dt)
     if fx.mode == "shimmer" then
         local t = GetTime() % 1.1
@@ -1119,20 +1191,24 @@ function ns.barGlowSnow(fx, bar, dt)
     dt = math.min(dt or 0.016, 0.05)
     local h, w = fx.h or 10, fx.w or 100
     local now = GetTime()
+    local storm = fx.mode == "blizzard"
+    local fall, wind = storm and h * 4 or h * 0.12, storm and h * 3 or 0
+    local sway, bob = storm and h * 0.3 or h * 0.7, storm and 0 or h * 0.5
     if fx.shook then
         fx.shook = nil
-        for _, m in ipairs(fx.motes) do
-            m.vy = h * (1.5 + math.random() * 2.5)
+        for i = 1, fx.flakes do
+            local m = fx.motes[i]
+            m.vy = h * (1.5 + math.random() * 2.5) + (storm and fall or 0)
             m.vx = (math.random() - 0.5) * h * 6
         end
     end
     local damp = math.max(0, 1 - 2.2 * dt)
-    for _, m in ipairs(fx.motes) do
-        -- back towards floating: a slow sink, bobbing up and down and drifting side to side
-        m.vy = (m.vy + h * 0.12) * damp - h * 0.12
+    for i = 1, fx.flakes do
+        local m = fx.motes[i]
+        m.vy = (m.vy + fall) * damp - fall
         m.vx = m.vx * damp
-        m.x = m.x + (m.vx + math.sin(now * 0.9 + m.phase) * h * 0.7) * dt
-        m.y = m.y + (m.vy + math.cos(now * 1.3 + m.phase * 1.7) * h * 0.5) * dt
+        m.x = m.x + (m.vx + wind + math.sin(now * 0.9 + m.phase) * sway) * dt
+        m.y = m.y + (m.vy + math.cos(now * 1.3 + m.phase * 1.7) * bob) * dt
         if m.y < -h * 0.7 then m.y = h * 0.7; m.x = math.random() * w end
         if m.y > h * 0.9 then m.y = h * 0.9; m.vy = -m.vy * 0.4 end
         if m.x < 0 then m.x = m.x + w elseif m.x > w then m.x = m.x - w end
@@ -1142,7 +1218,7 @@ function ns.barGlowSnow(fx, bar, dt)
     end
 end
 
--- The heal or shield changed: shake the snowglobe.
+-- The heal or shield changed: shake the snow.
 function ns.barGlowShake(bar)
     local fx = bar and bar.wfFx
     if fx and fx.snowing then fx.shook = true end
@@ -5076,7 +5152,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
-                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healAbsorbColor", "healTexture", "healColor", "otherHealColor", "healAlpha", "absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healAbsorbColor", "healTexture", "healColor", "otherHealColor", "healAlpha", "absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }

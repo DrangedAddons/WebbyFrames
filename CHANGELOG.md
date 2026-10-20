@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.16.37
+- A new glow, Blizzard: a snowstorm, lots of small flakes driven down and across by the wind.
+- Heal border glow and Shield border glow: Blizzard's spell alert glow round incoming heals or shields, in their colour. With any glow, or on its own; Glow strength sets it too. On every frame, the portrait party and the raid-style tiles.
+- Snowglobe flakes can no longer grow huge.
+
 ## 1.16.36
 - Shimmer: twice as fast, a sweep about every second.
 - Snowglobe: twice the flakes, and they float now (bobbing and drifting, sinking slowly) instead of falling.
@@ -210,7 +215,7 @@ Raid-style party frames
 - Party page, Style: Raid style. The party as flat tiles, like Blizzard's raid-style party frames: class-coloured health with incoming heals and absorbs, a slim power bar, name, role, leader, raid marker, ready check / summon / resurrection in the middle, a white edge on your target, the threat colour on whoever has aggro, a pulsing tint for a debuff you can dispel, their debuffs and your heals over time, fading out of range.
 - Options: tile width, height and spacing, include yourself, power bars and their texture, health and mana numbers (the same Numbers and Style options as the other frames: always, on mouseover or never; totals, percentages or both), icon size; stacked or side by side and group or role order like the portrait frames. Placed in Edit Mode on its own; shown in a party, hidden in a raid.
 - Click casting works on the tiles too.
-- More for the raid-style tiles (ideas from EllesmereUI's party and raid frames, used with its author's permission): health colours (class, dark with the missing part in class colour, custom, or green to red by health) with a shade for the missing part; power bars per role (tanks, healers, damage); name colour, position and length; a light edge on mouseover; pets as small tiles beside their owners; show when solo; AFK and dead / offline colours; striped or plain shields, optionally from the right edge so full-health shields show.
+- More for the raid-style tiles: health colours (class, dark with the missing part in class colour, custom, or green to red by health) with a shade for the missing part; power bars per role (tanks, healers, damage); name colour, position and length; a light edge on mouseover; pets as small tiles beside their owners; show when solo; AFK and dead / offline colours; striped or plain shields, optionally from the right edge so full-health shields show.
 - The tiles' dispel highlight is now drawn by the game, so it works in combat too: a gradient, flat tint or edge in the debuff type's colour, pulsing, with the type's icon.
 - Big defensive cooldowns (Shield Wall, Divine Shield, Pain Suppression, Ice Block, Barkskin and more) as a large icon in the middle of the tile.
 - Both party styles: missing buffs (icons of buffs a member lacks that you can cast, a paladin blessing by role), a healer mana list placed in Edit Mode, tooltips always / out of combat / never, and how faded out-of-range members are.

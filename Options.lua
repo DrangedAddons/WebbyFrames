@@ -552,6 +552,10 @@ end
 
 -- Words people search for that aren't in a setting's name (by setting key), so "kick" finds Cast bar and
 -- "oom" Healer mana. Only ever whole settings: section headings aren't searched (too broad).
+-- (the shield and heal glows, on every frame page and the raid tiles alike)
+Opt.GLOW_CHOICES = { { "off", "Off" }, { "pulse", "Soft pulse" }, { "shimmer", "Shimmer" }, { "snow", "Snowglobe" }, { "blizzard", "Blizzard" } }
+Opt.GLOW_TIP = "Soft pulse: a soft glow breathing in and out.\nShimmer: a band of light sweeping across about once a second.\nSnowglobe: glowing flakes floating inside; when it changes they swirl up and settle again.\nBlizzard: a snowstorm, lots of small flakes driven down and across by the wind."
+Opt.BORDER_TIP = "Blizzard's spell alert glow round it, in its colour. Goes with any glow, or on its own."
 Opt.SEARCH_WORDS = {
     enabled = "enable disable turn off addon", combatNumbers = "floating combat text fct damage numbers",
     combatStyle = "straight fountain static animation scroll combat numbers",
@@ -563,7 +567,8 @@ Opt.SEARCH_WORDS = {
     textMode = "hp mana values text", textFormat = "percent percentage values text",
     colorMode = "hp color class reaction", rpHealthColor = "hp color class", petColor = "hp color",
     npcColor = "hp color mob enemy", healthFade = "hp red low health gradient color",
-    healPrediction = "heal prediction hots", healTexture = "heal prediction incoming statusbar", healGlow = "heal glow pulse shimmer snowglobe sparkle", absorbGlow = "shield absorb glow pulse shimmer snowglobe sparkle", healAlpha = "heal incoming transparent", absorbs = "shield absorb", absorbTexture = "shield absorb statusbar stripes", absorbAlpha = "shield absorb transparent", damageTrail = "hit lost red hp",
+    healPrediction = "heal prediction hots", healTexture = "heal prediction incoming statusbar", healGlow = "heal glow pulse shimmer snowglobe blizzard snowstorm sparkle", absorbGlow = "shield absorb glow pulse shimmer snowglobe blizzard snowstorm sparkle",
+    healBorder = "heal glow edge outline proc", absorbBorder = "shield absorb glow edge outline proc", healAlpha = "heal incoming transparent", absorbs = "shield absorb", absorbTexture = "shield absorb statusbar stripes", absorbAlpha = "shield absorb transparent", damageTrail = "hit lost red hp",
     damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", manaTick = "mp5 regen spark five second rule 5sr",
     manaTickSize = "mana tick mp5 spark", manaTickSparkle = "mana tick mp5 star", manaTickStar = "mana tick mp5 star shape", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
     threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
@@ -1460,12 +1465,14 @@ local function buildSettings()
             local function colour(key, d) return function() local c = getSetting(read, key); return type(c) == "table" and c or d end end
             -- a glow on the heals or the shield (ns.barGlow), and how strong; the strength only while it glows
             local function glowDrop(key, what)
-                return B.dropdown(key, what .. " glow", "A glow on " .. what:lower() .. "s, in their colour.\n\nSoft pulse: a soft glow breathing in and out.\nShimmer: a band of light sweeping across every couple of seconds.\nSnowglobe: little glowing flakes drifting down inside, swaying; when it changes they swirl up and settle again.\n\nTick Preview above to see it on the frame.", "off",
-                    { { "off", "Off" }, { "pulse", "Soft pulse" }, { "shimmer", "Shimmer" }, { "snow", "Snowglobe" } })
+                return B.dropdown(key, what .. " glow", "A glow on " .. what:lower() .. "s, in their colour.\n\n" .. Opt.GLOW_TIP .. "\n\nTick Preview above to see it on the frame.", "off", Opt.GLOW_CHOICES)
             end
-            local function glowStrength(key, alphaKey)
-                local s = B.slider(alphaKey, "Glow strength", "How bright the glow is.", 0.6, 0.1, 1, 0.05)
-                B.showIf(function() return (getSetting(read, key) or "off") ~= "off" end, s)
+            local function glowBorder(key, what)
+                return B.check(key, what .. " border glow", Opt.BORDER_TIP .. "\n\nTick Preview above to see it on the frame.", false)
+            end
+            local function glowStrength(key, alphaKey, borderKey)
+                local s = B.slider(alphaKey, "Glow strength", "How bright the glow and the border glow are.", 0.6, 0.1, 1, 0.05)
+                B.showIf(function() return (getSetting(read, key) or "off") ~= "off" or getSetting(read, borderKey) end, s)
                 return s
             end
             -- a Preview tickbox after a colour's swatch: that one effect, on the live frame(s)
@@ -1501,7 +1508,8 @@ local function buildSettings()
                     "Everyone else's heals on their way (a darker green to start with). Click to change it.", preview("other", "someone else's incoming heal")),
                 B.slider("healAlpha", "Heal opacity", "How solid incoming heals are (everyone else's a shade fainter).", 0.6, 0.1, 1, 0.05),
                 glowDrop("healGlow", "Heal"),
-                glowStrength("healGlow", "healGlowAlpha"),
+                glowBorder("healBorder", "Heal"),
+                glowStrength("healGlow", "healGlowAlpha", "healBorder"),
             }
             B.under(parent, healsOn, unpack(healRows))
             local shieldRows = {
@@ -1510,7 +1518,8 @@ local function buildSettings()
                     "The shields' colour (pale blue to start with). Click to change it.", preview("absorb", "a damage shield")),
                 B.slider("absorbAlpha", "Shield opacity", "How solid the shields are.", 0.7, 0.1, 1, 0.05),
                 glowDrop("absorbGlow", "Shield"),
-                glowStrength("absorbGlow", "absorbGlowAlpha"),
+                glowBorder("absorbBorder", "Shield"),
+                glowStrength("absorbGlow", "absorbGlowAlpha", "absorbBorder"),
                 B.swatch("Heal absorb colour", colour("healAbsorbColor", { 0.9, 0.1, 0.1 }), function(r, g, b) setc("healAbsorbColor", { r, g, b }) end,
                     "The colour of healing absorbs eating back into the health (red to start with). Click to change it.", preview("healAbsorb", "a heal absorb")),
             }
@@ -1848,10 +1857,10 @@ local function buildSettings()
             end),
             swatch("rpShieldColor", "Shield colour", "The shields' colour (white to start with). Click to change it.", { 1, 1, 1 }),
             B.slider("rpShieldAlpha", "Shield opacity", "How solid the shields are.", 0.75, 0.1, 1, 0.05),
-            B.dropdown("absorbGlow", "Shield glow", "A glow on shields, in their colour.\n\nSoft pulse: a soft glow breathing in and out.\nShimmer: a band of light sweeping across every couple of seconds.\nSnowglobe: little glowing flakes drifting down inside, swaying; when the shield changes they swirl up and settle again.", "off",
-                { { "off", "Off" }, { "pulse", "Soft pulse" }, { "shimmer", "Shimmer" }, { "snow", "Snowglobe" } }),
-            B.dropdown("healGlow", "Heal glow", "The same glows on incoming heals, in their colour; a heal coming in shakes the snowglobe.", "off",
-                { { "off", "Off" }, { "pulse", "Soft pulse" }, { "shimmer", "Shimmer" }, { "snow", "Snowglobe" } }),
+            B.dropdown("absorbGlow", "Shield glow", "A glow on shields, in their colour.\n\n" .. Opt.GLOW_TIP, "off", Opt.GLOW_CHOICES),
+            B.dropdown("healGlow", "Heal glow", "The same glows on incoming heals, in their colour; a heal coming in shakes the snow.", "off", Opt.GLOW_CHOICES),
+            B.pair({ "absorbBorder", "Shield border glow", Opt.BORDER_TIP, false },
+                   { "healBorder", "Heal border glow", Opt.BORDER_TIP, false }),
             B.pair({ "rpShieldEdge", "Shields from the right", "Shields drawn from the right edge over the health, so a member at full health still shows theirs. Off: straight after the health.", false }),
             swatch("rpDeadColor", "Dead colour", "The tile's colour while a member is dead or a ghost.", { 0.3, 0.1, 0.1 }),
             swatch("rpOfflineColor", "Offline colour", "The tile's colour while a member is offline.", { 0.35, 0.35, 0.35 }))
