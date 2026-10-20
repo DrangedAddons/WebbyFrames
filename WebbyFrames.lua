@@ -114,6 +114,8 @@ local DEFAULT_SETTINGS = {
     -- shields: their texture ("default": the health bar's; "striped": Blizzard's stripes) and opacity;
     -- absorbColor / healAbsorbColor unset until picked (pale blue / red)
     absorbTexture = "default", absorbAlpha = 0.7,
+    -- glows on shields and incoming heals: off / pulse / shimmer / snow, and how strong (ns.barGlow)
+    absorbGlow = "off", absorbGlowAlpha = 0.6, healGlow = "off", healGlowAlpha = 0.6,
     -- incoming heals: their texture ("default": the health bar's); healColor / otherHealColor and
     -- healAlpha unset until picked (green / darker green, as drawn before)
     healTexture = "default",
@@ -979,6 +981,155 @@ local function styleOverlay(f, bar)
         bar.masked = true
         pcall(function() bar:GetStatusBarTexture():AddMaskTexture(f.hpMask) end)
     end
+    -- the glow on it (Shield glow / Heal glow), in its colour
+    if bar == f.absorbBar or bar == f.healBar or bar == f.otherHealBar then
+        local shield = bar == f.absorbBar
+        local mode = getSetting(f.baseUnit, shield and "absorbGlow" or "healGlow") or "off"
+        local s = tonumber(getSetting(f.baseUnit, shield and "absorbGlowAlpha" or "healGlowAlpha")) or 0.6
+        pcall(ns.barGlow, bar, mode, c[1], c[2], c[3], s)
+    end
+end
+
+-- A glow on a heal or shield bar, over its fill only (a frame clipped to the fill texture, so it's
+-- exactly where the heal or shield is, however its amount is hidden from addons):
+--   pulse: a soft wash in its colour, breathing in and out (an animation: no Lua while it runs);
+--   shimmer: a band of light sweeping across it every couple of seconds (an animation too);
+--   snow: a snowglobe. Little glowing flakes drift down through it, swaying; when it changes
+--   (barGlowShake: a shield gained or hit, a heal coming in) they swirl up and settle again.
+-- Called on every restyle, so it only does anything when the look has changed.
+function ns.barGlow(bar, mode, r, g, b, strength)
+    local fx = bar.wfFx
+    local fill = bar:GetStatusBarTexture()
+    if mode == "off" or not fill then
+        if fx then fx:Hide(); fx.sig = nil end
+        return
+    end
+    if not fx then
+        fx = CreateFrame("Frame", nil, bar)
+        fx:SetFrameLevel(bar:GetFrameLevel() + 1)
+        fx:SetClipsChildren(true)
+        fx.wash = fx:CreateTexture(nil, "OVERLAY")
+        fx.wash:SetAllPoints()
+        fx.wash:SetTexture("Interface\\Buttons\\WHITE8X8")
+        fx.wash:SetBlendMode("ADD")
+        local ag = fx.wash:CreateAnimationGroup()
+        ag:SetLooping("BOUNCE")
+        local a = ag:CreateAnimation("Alpha")
+        a:SetFromAlpha(0.08)
+        a:SetToAlpha(0.65)
+        a:SetDuration(1.1)
+        pcall(a.SetSmoothing, a, "IN_OUT")
+        fx.washAg = ag
+        fx.band = fx:CreateTexture(nil, "OVERLAY", nil, 1)
+        fx.band:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+        fx.band:SetBlendMode("ADD")
+        local bg = fx.band:CreateAnimationGroup()
+        bg:SetLooping("REPEAT")
+        fx.bandMove = bg:CreateAnimation("Translation")
+        fx.bandMove:SetDuration(1.4)
+        fx.bandMove:SetEndDelay(0.9)
+        pcall(fx.bandMove.SetSmoothing, fx.bandMove, "IN_OUT")
+        fx.bandAg = bg
+        fx.motes = {}
+        fx:SetScript("OnUpdate", function(self, dt) ns.barGlowSnow(self, bar, dt) end)
+        bar.wfFx = fx
+    end
+    if fx.fill ~= fill then
+        fx.fill = fill
+        fx:ClearAllPoints()
+        fx:SetAllPoints(fill)
+    end
+    -- (only when the look changed: the colour a paler version of the bar's, the strength, the mode,
+    -- the bar's size)
+    local w, h = bar:GetWidth() or 100, bar:GetHeight() or 10
+    local sig = mode .. math.floor(r * 50) .. math.floor(g * 50) .. math.floor(b * 50) .. math.floor(strength * 20) .. math.floor(w) .. math.floor(h)
+    if fx.sig == sig and fx:IsShown() then return end
+    fx.sig = sig
+    local cr, cg, cb = 0.4 + r * 0.6, 0.4 + g * 0.6, 0.4 + b * 0.6
+    fx.cr, fx.cg, fx.cb, fx.h, fx.w = cr, cg, cb, h, w
+    fx:SetAlpha(strength)
+    fx.wash:SetVertexColor(cr, cg, cb)
+    fx.band:SetVertexColor(cr, cg, cb)
+    fx.mode = mode
+    -- pulse: the wash breathing
+    if mode == "pulse" then
+        fx.washAg:Play()
+    else
+        fx.washAg:Stop()
+        fx.wash:SetAlpha(mode == "shimmer" and 0.18 or 0.12)
+    end
+    -- shimmer: the band sweeping from the left end to past the right
+    if mode == "shimmer" then
+        fx.band:SetSize(h * 2.5, h * 2)
+        fx.band:ClearAllPoints()
+        fx.band:SetPoint("CENTER", fx, "LEFT", -h * 1.5, 0)
+        fx.bandMove:SetOffset(w + h * 3, 0)
+        fx.bandAg:Stop()
+        fx.bandAg:Play()
+        fx.band:Show()
+    else
+        fx.bandAg:Stop()
+        fx.band:Hide()
+    end
+    -- snow: the flakes (moved by barGlowSnow, every frame while shown)
+    if mode == "snow" then
+        for i = 1, 14 do
+            local m = fx.motes[i]
+            if not m then
+                m = { tex = fx:CreateTexture(nil, "OVERLAY", nil, 2) }
+                m.tex:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask")
+                m.tex:SetBlendMode("ADD")
+                fx.motes[i] = m
+                m.x, m.y = math.random() * w, (math.random() - 0.5) * h
+                m.vx, m.vy, m.phase = 0, 0, math.random() * 6.28
+                m.size = h * (0.16 + math.random() * 0.16)
+            end
+            m.tex:SetVertexColor(cr, cg, cb)
+            m.tex:SetSize(m.size, m.size)
+            m.tex:Show()
+        end
+        fx.snowing = true
+    else
+        fx.snowing = nil
+        for _, m in ipairs(fx.motes) do m.tex:Hide() end
+    end
+    fx:Show()
+end
+
+-- One frame of the snowglobe: the flakes fall slowly, swaying, and wrap round to the top; a shake
+-- throws them up and sideways, and they slow back down to the gentle fall.
+function ns.barGlowSnow(fx, bar, dt)
+    if not fx.snowing then return end
+    dt = math.min(dt or 0.016, 0.05)
+    local h, w = fx.h or 10, fx.w or 100
+    local now = GetTime()
+    if fx.shook then
+        fx.shook = nil
+        for _, m in ipairs(fx.motes) do
+            m.vy = h * (1.5 + math.random() * 2.5)
+            m.vx = (math.random() - 0.5) * h * 6
+        end
+    end
+    local damp = math.max(0, 1 - 2.2 * dt)
+    for _, m in ipairs(fx.motes) do
+        -- back towards the gentle fall
+        m.vy = (m.vy + h * 0.28) * damp - h * 0.28
+        m.vx = m.vx * damp
+        m.x = m.x + (m.vx + math.sin(now * 1.6 + m.phase) * h * 0.35) * dt
+        m.y = m.y + m.vy * dt
+        if m.y < -h * 0.7 then m.y = h * 0.7; m.x = math.random() * w end
+        if m.y > h * 0.9 then m.y = h * 0.9; m.vy = -m.vy * 0.4 end
+        if m.x < 0 then m.x = m.x + w elseif m.x > w then m.x = m.x - w end
+        m.tex:ClearAllPoints()
+        m.tex:SetPoint("CENTER", fx, "LEFT", m.x, m.y)
+        m.tex:SetAlpha(0.55 + 0.45 * math.sin(now * 3 + m.phase))
+    end
+end
+
+-- The heal or shield changed: shake the snowglobe.
+function ns.barGlowShake(bar)
+    local fx = bar and bar.wfFx
+    if fx and fx.snowing then fx.shook = true end
 end
 
 local function value(fn, u)
@@ -3558,6 +3709,8 @@ function ns.applyFxPreview(f)
     f.otherHealBar:SetValue(fx.other and 9 or 0)
     f.absorbBar:SetValue(fx.absorb and 12 or 0)
     f.healAbsorbBar:SetValue(fx.healAbsorb and 10 or 0)
+    -- (a snowglobe glow shaken, to show it off)
+    ns.barGlowShake(f.absorbBar); ns.barGlowShake(f.healBar); ns.barGlowShake(f.otherHealBar)
 end
 
 function ns.setFxPreview(f, kind, on)
@@ -4336,7 +4489,11 @@ local function createFrame(unit)
             -- the spell landed (or missed): its next combat event after the cast
             self.hitAt = GetTime()
             if self.dmgFlying then landDamage(self) end
-        elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then ns.markPaint(self, "pred")
+        elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then
+            ns.markPaint(self, "pred")
+            -- (a snowglobe glow on the shield or the heals: shaken)
+            if event == "UNIT_ABSORB_AMOUNT_CHANGED" then ns.barGlowShake(self.absorbBar)
+            elseif event == "UNIT_HEAL_PREDICTION" then ns.barGlowShake(self.healBar); ns.barGlowShake(self.otherHealBar) end
         else ns.markPaint(self, "all") end
     end)
     -- smooth energy / rage / focus ticks on your own frame (every change: the plain power update would
@@ -4476,7 +4633,11 @@ local function createSmallFrame(unit, wf, index)
             -- the spell landed (or missed): its next combat event after the cast
             self.hitAt = GetTime()
             if self.dmgFlying then landDamage(self) end
-        elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then ns.markPaint(self, "pred")
+        elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then
+            ns.markPaint(self, "pred")
+            -- (a snowglobe glow on the shield or the heals: shaken)
+            if event == "UNIT_ABSORB_AMOUNT_CHANGED" then ns.barGlowShake(self.absorbBar)
+            elseif event == "UNIT_HEAL_PREDICTION" then ns.barGlowShake(self.healBar); ns.barGlowShake(self.otherHealBar) end
         else ns.markPaint(self, "all") end
     end)
     -- Party slots that are not in use (party off, or raid style) register nothing. Party.listen
@@ -4899,7 +5060,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
-                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healAbsorbColor", "healTexture", "healColor", "otherHealColor", "healAlpha", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healAbsorbColor", "healTexture", "healColor", "otherHealColor", "healAlpha", "absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }

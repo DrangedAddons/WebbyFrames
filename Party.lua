@@ -1665,6 +1665,13 @@ function RP.placeShields(t, w)
     -- (the opacity unset: the old looks, stripes 75%, plain 40%)
     local a = tonumber(get("rpShieldAlpha")) or (striped and 0.75 or 0.4)
     t.absorb:SetStatusBarColor(c[1] or 1, c[2] or 1, c[3] or 1, a)
+    -- the glows (Shield glow, Heal glow: the party's, as on the portrait frames)
+    if ns.barGlow then
+        pcall(ns.barGlow, t.absorb, get("absorbGlow") or "off", c[1] or 1, c[2] or 1, c[3] or 1, tonumber(get("absorbGlowAlpha")) or 0.6)
+        local hr, hg, hb = 0.1, 0.9, 0.3
+        pcall(function() hr, hg, hb = t.heal:GetStatusBarColor() end)
+        pcall(ns.barGlow, t.heal, get("healGlow") or "off", hr, hg, hb, tonumber(get("healGlowAlpha")) or 0.6)
+    end
 end
 
 function RP.paintPrediction(t)
@@ -1805,6 +1812,8 @@ function RP.onEvent(t, event)
         RP.paintName(t)
     elseif event == "UNIT_HEAL_PREDICTION" or event == "UNIT_ABSORB_AMOUNT_CHANGED" then
         RP.paintPrediction(t)
+        -- (a snowglobe glow: shaken)
+        if ns.barGlowShake then ns.barGlowShake(event == "UNIT_ABSORB_AMOUNT_CHANGED" and t.absorb or t.heal) end
     elseif event == "UNIT_THREAT_SITUATION_UPDATE" then
         RP.paintGlow(t)
     elseif event == "PLAYER_TARGET_CHANGED" then

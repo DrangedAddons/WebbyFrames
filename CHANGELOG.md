@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.33
+- Shield glow and Heal glow: Soft pulse (a soft glow breathing in and out), Shimmer (a band of light sweeping across) or Snowglobe (glowing flakes drifting down inside, swirling up whenever the shield changes or a heal comes in), each with a Glow strength. On every frame, the portrait party and the raid-style tiles; the Preview tickboxes show them too.
+
 ## 1.16.32
 - Heal and shield previews: the recent damage trail no longer paints the drop to the preview's 60% health red. It's hidden while a preview is on.
 
