@@ -1020,27 +1020,22 @@ function ns.barGlow(bar, mode, r, g, b, strength)
         local ag = fx.wash:CreateAnimationGroup()
         ag:SetLooping("BOUNCE")
         local a = ag:CreateAnimation("Alpha")
-        a:SetFromAlpha(0.05)
-        a:SetToAlpha(0.6)
-        a:SetDuration(1.1)
+        a:SetFromAlpha(0)
+        a:SetToAlpha(0.75)
+        a:SetDuration(0.9)
         pcall(a.SetSmoothing, a, "IN_OUT")
         fx.washAg = ag
+        -- (the shimmer: a spark the size of the fill, its texture scrolled through it, so it
+        -- crosses the heal or shield end to end however wide that is; addons can't know its width)
         fx.band = fx:CreateTexture(nil, "OVERLAY", nil, 1)
-        fx.band:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+        fx.band:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark", "REPEAT", "CLAMP")
         fx.band:SetBlendMode("ADD")
-        local bg = fx.band:CreateAnimationGroup()
-        bg:SetLooping("REPEAT")
-        fx.bandMove = bg:CreateAnimation("Translation")
-        fx.bandMove:SetDuration(1.4)
-        fx.bandMove:SetEndDelay(0.9)
-        pcall(fx.bandMove.SetSmoothing, fx.bandMove, "IN_OUT")
-        fx.bandAg = bg
+        fx.band:SetAllPoints()
         fx.motes = {}
         fx:SetScript("OnUpdate", function(self, dt) ns.barGlowSnow(self, bar, dt) end)
-        -- (back in view, the heal or shield coming back: its animation going again)
+        -- (back in view, the heal or shield coming back: the pulse going again)
         fx:SetScript("OnShow", function(self)
-            if self.mode == "pulse" and not self.washAg:IsPlaying() then self.washAg:Play()
-            elseif self.mode == "shimmer" and not self.bandAg:IsPlaying() then self.bandAg:Play() end
+            if self.mode == "pulse" and not self.washAg:IsPlaying() then self.washAg:Play() end
         end)
         bar.wfFx = fx
     end
@@ -1080,19 +1075,8 @@ function ns.barGlow(bar, mode, r, g, b, strength)
         fx.washAg:Stop()
         fx.wash:SetAlpha(mode == "shimmer" and 0.1 or 0.15)
     end
-    -- shimmer: the band sweeping from the left end to past the right
-    if mode == "shimmer" then
-        fx.band:SetSize(h * 2.5, h * 2)
-        fx.band:ClearAllPoints()
-        fx.band:SetPoint("CENTER", fx, "LEFT", -h * 1.5, 0)
-        fx.bandMove:SetOffset(w + h * 3, 0)
-        fx.bandAg:Stop()
-        fx.bandAg:Play()
-        fx.band:Show()
-    else
-        fx.bandAg:Stop()
-        fx.band:Hide()
-    end
+    -- shimmer: the band sweeping across (moved by barGlowSnow too)
+    if mode == "shimmer" then fx.band:Show() else fx.band:Hide() end
     -- snow: the flakes (moved by barGlowSnow, every frame while shown)
     if mode == "snow" then
         for i = 1, 24 do
@@ -1117,9 +1101,20 @@ function ns.barGlow(bar, mode, r, g, b, strength)
     end
 end
 
--- One frame of the snowglobe: the flakes fall slowly, swaying, and wrap round to the top; a shake
--- throws them up and sideways, and they slow back down to the gentle fall.
+-- One frame of the shimmer or the snowglobe.
+-- Shimmer: the spark sweeps left to right across the fill in 1.2s, then a rest. The texture shows
+-- half its width across the fill, so the one spark in it crosses from just off the left end to
+-- just off the right (the copies either side of it stay out of view).
+-- Snowglobe: the flakes fall, swaying, and wrap round to the top; a shake throws them up and
+-- sideways, and they slow back down to the steady fall.
 function ns.barGlowSnow(fx, bar, dt)
+    if fx.mode == "shimmer" then
+        local t = GetTime() % 2.2
+        local p = t < 1.2 and (-0.4 + 1.8 * t / 1.2) or -0.4
+        local a = 0.5 - 0.5 * p
+        fx.band:SetTexCoord(a, a + 0.5, 0, 1)
+        return
+    end
     if not fx.snowing then return end
     dt = math.min(dt or 0.016, 0.05)
     local h, w = fx.h or 10, fx.w or 100
@@ -1133,17 +1128,17 @@ function ns.barGlowSnow(fx, bar, dt)
     end
     local damp = math.max(0, 1 - 2.2 * dt)
     for _, m in ipairs(fx.motes) do
-        -- back towards the gentle fall
-        m.vy = (m.vy + h * 0.28) * damp - h * 0.28
+        -- back towards the steady fall
+        m.vy = (m.vy + h * 1.1) * damp - h * 1.1
         m.vx = m.vx * damp
-        m.x = m.x + (m.vx + math.sin(now * 1.6 + m.phase) * h * 0.35) * dt
+        m.x = m.x + (m.vx + math.sin(now * 2 + m.phase) * h * 0.6) * dt
         m.y = m.y + m.vy * dt
         if m.y < -h * 0.7 then m.y = h * 0.7; m.x = math.random() * w end
         if m.y > h * 0.9 then m.y = h * 0.9; m.vy = -m.vy * 0.4 end
         if m.x < 0 then m.x = m.x + w elseif m.x > w then m.x = m.x - w end
         m.tex:ClearAllPoints()
         m.tex:SetPoint("CENTER", fx, "LEFT", m.x, m.y)
-        m.tex:SetAlpha(0.5 + 0.3 * math.sin(now * 3 + m.phase))
+        m.tex:SetAlpha(0.8)
     end
 end
 

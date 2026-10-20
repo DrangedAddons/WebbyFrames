@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.35
+- Glows look clearly different from each other on a narrow heal or shield. Shimmer: a band of light sweeps end to end across the heal or shield itself, at any width, then rests. Snowglobe: the flakes fall and sway visibly, at a steady brightness. Soft pulse: fades fully in and out, a little faster.
+
 ## 1.16.34
 - Shield and heal glows: no longer turn the heal or shield pure white. The glow is now a brighter shade of the bar's own colour, with paler flakes and shimmer.
 - Turning a glow off and back on now starts its animation again, and it restarts when the heal or shield comes back after emptying.
