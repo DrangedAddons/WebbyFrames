@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.43
+- Shield number on mouseover: with the mouse on the health bar, the shield's amount shows at the bar's right end, in the shield's colour (nothing when there's no shield). Whatever the Numbers setting.
+
 ## 1.16.42
 - Shields simplified: always in the missing health after the health, and when there's more shield than that, the rest grows back over the health from the bar's right end. The Placement and Overshield options are gone.
 - The shield Preview shows a shield that fits in the missing health, without the extra slice over the health.

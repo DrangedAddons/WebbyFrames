@@ -1392,11 +1392,39 @@ function ns.placeShields(f, fill, healTex, w)
     ab:SetWidth(w)
 end
 
--- The shield's amount into both its parts (as placed by placeShields).
+-- The shield's amount into both its parts (as placed by placeShields), and its number: at the
+-- health bar's right end, in the shield's colour, while the mouse is on the health bar (refreshText).
 function ns.setShields(f, absorb)
     if not f.absorbBar then return end
     if not pcall(setBarValue, f, f.absorbBar, absorb) then f.absorbBar:SetValue(0) end
     if not pcall(setBarValue, f, f.absorbBack, absorb) then f.absorbBack:SetValue(0) end
+    local fs = f.shieldText
+    if not fs and f.hpText then
+        fs = f.hpText:GetParent():CreateFontString(nil, "OVERLAY", "TextStatusBarText")
+        fs:SetPoint("RIGHT", f.hp, "RIGHT", -3, 0)
+        fs:SetJustifyH("RIGHT")
+        fs:Hide()
+        f.shieldText = fs
+    end
+    if not fs then return end
+    local font, size, flags = f.hpText:GetFont()
+    if font then pcall(fs.SetFont, fs, font, size, flags) end
+    local c = getSetting(f.baseUnit, "absorbColor")
+    if type(c) ~= "table" then c = { 0.7, 0.9, 1 } end
+    fs:SetTextColor(0.5 + (c[1] or 1) * 0.5, 0.5 + (c[2] or 1) * 0.5, 0.5 + (c[3] or 1) * 0.5)
+    -- (none: no number. A hidden amount can't be checked for none, so the game writes it, blank
+    -- when it's none, where it can; else as it is)
+    local text = ""
+    if isSecret(absorb) then
+        local su = C_StringUtil
+        local ok, s = false, nil
+        if su and su.TruncateWhenZero then ok, s = pcall(su.TruncateWhenZero, absorb) end
+        if not ok then ok, s = pcall(AbbreviateLargeNumbers, absorb) end
+        if ok then text = s end
+    elseif type(absorb) == "number" and absorb > 0 then
+        text = AbbreviateLargeNumbers(absorb)
+    end
+    if not pcall(fs.SetText, fs, text) then fs:SetText("") end
 end
 
 -- Damage trail: when health drops, the part just lost stays on the bar in red for a moment, then slides
@@ -4061,6 +4089,10 @@ function refreshText(f)
     -- Dead / Ghost / Offline always shows, whatever the text mode
     f.hpText:SetShown((always or f.statusText or (over and f.hoverHP)) and true or false)
     f.mpText:SetShown((always or (over and f.hoverMP)) and true or false)
+    -- the shield's number: while the mouse is on the health bar (whatever the numbers setting)
+    if f.shieldText then
+        f.shieldText:SetShown((f.hoverHP and getSetting(f.baseUnit, "absorbs") and not f.statusText) and true or false)
+    end
 end
 
 -- The squared corner (the "Corner accent" setting): player and target frames, left-hand portrait only.
@@ -4390,7 +4422,8 @@ local function addHover(f)
     end)
     f:HookScript("OnEnter", function(self)
         self.hover = true
-        watch:SetShown(self.textMode == "mouseover")
+        -- (the shield's number shows on mouseover too, whatever the numbers setting)
+        watch:SetShown(self.textMode == "mouseover" or self.shieldText ~= nil)
         if self.baseUnit == "party" and Party.tipAllowed and not Party.tipAllowed() then return end
         pcall(function()
             defaultTip(self)
