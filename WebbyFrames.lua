@@ -4639,6 +4639,11 @@ local function createFrame(unit)
     f.name:SetMaxLines(1)
     f.level = ov:CreateFontString(nil, "OVERLAY", "GameNormalNumberFont")
     f.level:SetDrawLayer("OVERLAY", 3)
+    -- One point above GameNormalNumberFont. Player and target only.
+    if unit == "player" or unit == "target" then
+        local p, s, fl = f.level:GetFont()
+        if p and s then f.level:SetFont(p, s + 1, fl) end
+    end
     if hasAtlas("UI-HUD-UnitFrame-SmallCircle") then
         f.badge = ov:CreateTexture(nil, "OVERLAY", nil, -1)
         f.badge:SetAtlas("UI-HUD-UnitFrame-SmallCircle")
