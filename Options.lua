@@ -1447,7 +1447,7 @@ local function buildSettings()
                 row.controls = { b }
             end })
         end
-        -- Three sections of their own: Incoming heals, Shields and Heal absorbs, each with its switch and
+        -- Two sections of their own: Incoming heals and Shields, each with its switch and
         -- looks. read: whose settings to show; setc(key, colour) saves a colour (one frame, or all of
         -- them); targets(): the live frames the Preview tickboxes show an effect on.
         -- opts (the party page): only() is when the switches and looks apply (the portrait frames; the
@@ -1523,7 +1523,7 @@ local function buildSettings()
             if opts.heals then opts.heals() end
             -- Shields
             B.section("Shields", false)
-            local shields = B.check("absorbs", "Show shields and heal absorbs", "Damage shields past the end of the health (and a glow at the end when they're more than the missing health), and healing absorbs eating back into it (their colour is under Heal absorbs).", true)
+            local shields = B.check("absorbs", "Show shields", "Damage shields past the end of the health, and a glow at the end when they're more than the missing health.", true)
             local shieldLooks = {
                 B.dropdown("absorbTexture", "Texture", "How damage shields look: in the health bar's own texture, Blizzard's raid-frame stripes, or any texture (SharedMedia ones too).", "default", textures(true)),
                 B.swatch("Colour", colour("absorbColor", { 0.7, 0.9, 1 }), function(r, g, b) setc("absorbColor", { r, g, b }) end,
@@ -1535,11 +1535,6 @@ local function buildSettings()
             if opts.shields then opts.shields() end
             B.showIf(glowShields, glowDrop("absorbGlow", "Shield"), glowBorder("absorbBorder", "Shield"),
                 glowStrength("absorbGlow", "absorbGlowAlpha", "absorbBorder"))
-            -- Heal absorbs (shown with the shields: one switch for both)
-            local absorbs = B.section("Heal absorbs", false)
-            B.showIf(function() return (not only or only()) and on() end, absorbs)
-            B.swatch("Colour", colour("healAbsorbColor", { 0.9, 0.1, 0.1 }), function(r, g, b) setc("healAbsorbColor", { r, g, b }) end,
-                "The colour of healing absorbs eating back into the health (red to start with). Turned on with the shields. Click to change it.", preview("healAbsorb", "a heal absorb"))
         end
         -- Buff and debuff layout details (in the Buffs and debuffs section).
         function B.auraDetails()
@@ -1862,7 +1857,7 @@ local function buildSettings()
             swatch("rpDeadColor", "Dead colour", "The tile's colour while a member is dead or a ghost.", { 0.3, 0.1, 0.1 }),
             swatch("rpOfflineColor", "Offline colour", "The tile's colour while a member is offline.", { 0.35, 0.35, 0.35 }))
 
-        -- Incoming heals, Shields, Heal absorbs: the portrait frames' looks; the tiles' shields have
+        -- Incoming heals, Shields: the portrait frames' looks; the tiles' shields have
         -- their own; the glows go on both
         B.shields("party", function(k, v) setSetting("party", k, v) end, function()
             local l = {}
@@ -2033,7 +2028,7 @@ local function buildSettings()
         end
         B.fade(unit, setSetting, "As health drops, the health colour (whichever you picked above) shifts towards red, or through your own stops.")
 
-        -- Incoming heals, Shields, Heal absorbs ---------------------------------------------
+        -- Incoming heals, Shields -----------------------------------------------------------
         B.shields(unit, function(k, v) setSetting(unit, k, v) end, function() return { frames[unit] } end)
 
         if isPlayer then

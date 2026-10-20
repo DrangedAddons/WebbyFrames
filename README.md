@@ -29,7 +29,7 @@ number), `/webby threat` (what the game reports for your target's threat), `/web
 - **Bars:** health and power textures, font (SharedMedia ones too), numbers always / on mouseover / never as
   totals, percentages or both
 - **Health bar:** class or reaction colour, enemy NPC colour, fade to red as health drops (automatic or your own
-  stops), incoming heals, shields and heal absorbs, recent damage, spell damage preview (target, focus)
+  stops), incoming heals, shields, recent damage, spell damage preview (target, focus)
 - **Buffs and debuffs:** buffs and debuffs sized separately, only your debuffs, below / above the frame or
   dragged anywhere in Edit Mode, row direction, gap, per row, how many, stack size, and time left as a sweep,
   numbers, both or nothing

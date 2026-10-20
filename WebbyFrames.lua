@@ -112,13 +112,14 @@ local DEFAULT_SETTINGS = {
     auraStyle = "all", dispelGlow = true, dispelWho = "mine", auraMineBig = false,   -- (auraMineBig: your own debuffs first, bigger)
     healPrediction = true, absorbs = true, damageTrail = true, damagePredict = true,
     -- shields: their texture ("default": the health bar's; "striped": Blizzard's stripes) and opacity;
-    -- absorbColor / healAbsorbColor unset until picked (pale blue / red)
+    -- absorbColor unset until picked (pale blue)
     absorbTexture = "default", absorbAlpha = 0.7,
-    -- glows on shields and incoming heals: off / pulse / shimmer / snow, and how strong (ns.barGlow)
+    -- glows on shields and incoming heals: off / pulse / shimmer / snow / blizzard, and how strong, and
+    -- the border glow (ns.barGlow)
     absorbGlow = "off", absorbGlowAlpha = 0.6, healGlow = "off", healGlowAlpha = 0.6,
     absorbBorder = false, healBorder = false,
-    -- incoming heals: their texture ("default": the health bar's); healColor / otherHealColor and
-    -- healAlpha unset until picked (green / darker green, as drawn before)
+    -- incoming heals (everyone's, one bar): their texture ("default": the health bar's); healColor and
+    -- healAlpha unset until picked (green, as drawn before)
     healTexture = "default",
     combatNumbers = false,   -- damage / heal numbers over the portrait: fixed per frame (player, target, focus, pet), one General switch
     -- icons and extras
@@ -933,8 +934,8 @@ end
 
 -- The overlays wear the frame's own bar texture (a chosen SharedMedia one, or the frame's tintable
 -- default fill), tinted, with the health bar's shape mask.
--- Shields and heal absorbs have looks of their own (Shield texture, Shield colour, Shield opacity,
--- Heal absorb colour): the shield in the health bar's texture, Blizzard's stripes, or any texture.
+-- Shields have looks of their own (Shield texture, Shield colour, Shield opacity): in the health
+-- bar's texture, Blizzard's stripes, or any texture.
 local function styleOverlay(f, bar)
     local tex = f.customTex or f.hpStatusAtlas or PLAIN_FILL
     local grey, striped = not f.customTex, false
@@ -949,9 +950,6 @@ local function styleOverlay(f, bar)
         local sc = getSetting(f.baseUnit, "absorbColor")
         local a = tonumber(getSetting(f.baseUnit, "absorbAlpha")) or c[4]
         if type(sc) == "table" then c = { sc[1] or c[1], sc[2] or c[2], sc[3] or c[3], a } else c = { c[1], c[2], c[3], a } end
-    elseif bar == f.healAbsorbBar then
-        local hc = getSetting(f.baseUnit, "healAbsorbColor")
-        if type(hc) == "table" then c = { hc[1] or c[1], hc[2] or c[2], hc[3] or c[3], c[4] } end
     elseif bar == f.healBar or bar == f.otherHealBar then
         -- incoming heals, everyone's, on the one bar (Heal texture, Heal colour, Heal opacity)
         local key = getSetting(f.baseUnit, "healTexture") or "default"
@@ -1342,12 +1340,12 @@ local function updatePrediction(f)
         if ok then mine = m else mine = value(UnitGetIncomingHeals, u) end
     end
     local absorb = (wantAbsorbs and not dead) and value(UnitGetTotalAbsorbs, u) or nil
-    local healAbsorb = (wantAbsorbs and not dead) and value(UnitGetTotalHealAbsorbs, u) or nil
     -- (a missing value counts as none; the heal bars stay at 0 so the shield still starts at the health end)
     if not pcall(setBarValue, f, f.healBar, mine) then f.healBar:SetValue(0) end
     f.otherHealBar:SetValue(0)
     if not pcall(setBarValue, f, f.absorbBar, absorb) then f.absorbBar:SetValue(0) end
-    if not pcall(setBarValue, f, f.healAbsorbBar, healAbsorb) then f.healAbsorbBar:SetValue(0) end
+    -- (heal absorbs: not drawn for now, until they're confirmed in the game; their bar stays empty)
+    f.healAbsorbBar:SetValue(0)
 end
 
 -- Damage trail: when health drops, the part just lost stays on the bar in red for a moment, then slides
@@ -3777,8 +3775,8 @@ local function updateAll(f)
     safely(updateThreat, f); safely(updateAuras, f); safely(Extras.update, f)
 end
 
--- The settings' Preview tickboxes: one effect (heal: your incoming heal, other: everyone else's, absorb:
--- a shield, healAbsorb: a heal absorb) shown on the live frame, so you can see it as it really looks.
+-- The settings' Preview tickboxes: one effect (heal: an incoming heal, absorb: a shield) shown on the
+-- live frame, so you can see it as it really looks.
 -- While any is on, the frame shows made-up values: health at 60% (room for them), and each effect
 -- ticked at a share of the bar. Real health updates wait (f.previewing) until the last one is off.
 function ns.applyFxPreview(f)
@@ -3799,7 +3797,7 @@ function ns.applyFxPreview(f)
     f.healBar:SetValue(fx.heal and 20 or 0)
     f.otherHealBar:SetValue(0)
     f.absorbBar:SetValue(fx.absorb and 12 or 0)
-    f.healAbsorbBar:SetValue(fx.healAbsorb and 10 or 0)
+    f.healAbsorbBar:SetValue(0)
     -- (a snowglobe glow shaken, to show it off)
     ns.barGlowShake(f.absorbBar); ns.barGlowShake(f.healBar); ns.barGlowShake(f.otherHealBar)
 end
@@ -5151,7 +5149,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
-                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healAbsorbColor", "healTexture", "healColor", "otherHealColor", "healAlpha", "absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healTexture", "healColor","healAlpha", "absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }
@@ -5522,7 +5520,7 @@ SlashCmdList.WEBBYFRAMES = function(msg)
             f.healBar:SetValue(getSetting("player", "healPrediction") and 20 or 0)
             f.otherHealBar:SetValue(0)
             f.absorbBar:SetValue(getSetting("player", "absorbs") and 15 or 0)
-            f.healAbsorbBar:SetValue(getSetting("player", "absorbs") and 10 or 0)
+            f.healAbsorbBar:SetValue(0)
         end)
         local ok, err = pcall(showHit, f, "WOUND", "CRITICAL", 1234)      -- and a combat number on the portrait
         if not ok then print("|cff33ccffWebby Frames:|r combat number failed: " .. tostring(err)) end

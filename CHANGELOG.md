@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.40
+- Heal absorbs are off for now, until they're confirmed in the game: no longer drawn on the frames, and their settings (the Heal absorbs section, its colour and preview) are gone. The Shields section's switch is now Show shields.
+
 ## 1.16.39
 - Tidier settings: the long Health and power list is split into small sections of their own, on every frame, the party and All frames. Health and power (textures, font, numbers, opacity, recent damage), Health colour (with Fade to red), Incoming heals, Shields and Heal absorbs, each with its switch and its looks. The player's spell costs, mana tick and druid mana have their own Mana and spell costs section.
 
