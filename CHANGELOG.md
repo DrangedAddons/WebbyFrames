@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.16.41
+- Shields stay inside the health bar, in two parts: in the missing health after the health, and what doesn't fit drawn back over the health, so the whole shield always shows, even at full health.
+- Shield placement (in the Shields section): Overlay (the above), Overlay reverse (all of it back over the health), Overlay reverse (full), Right edge or Left edge (all of it over the whole bar from that end). Overshield, for Overlay: Always, From left (the extra from the bar's start) or Never (missing health only).
+- The border glow no longer spills past the health bar's ends, and keeps its shape on long heals and shields (its ends at their true size, the middle stretched between them).
+- Tidier inside: the unused heal absorb and second heal bars are gone.
+
 ## 1.16.40
 - Heal absorbs are off for now, until they're confirmed in the game: no longer drawn on the frames, and their settings (the Heal absorbs section, its colour and preview) are gone. The Shields section's switch is now Show shields.
 

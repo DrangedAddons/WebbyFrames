@@ -114,6 +114,9 @@ local DEFAULT_SETTINGS = {
     -- shields: their texture ("default": the health bar's; "striped": Blizzard's stripes) and opacity;
     -- absorbColor unset until picked (pale blue)
     absorbTexture = "default", absorbAlpha = 0.7,
+    -- where shields go (overlay / overlayReverse / overlayReverseFull / right / left) and what's past
+    -- the missing health (always / fromleft / never): ns.placeShields
+    absorbPlacement = "overlay", overshield = "always",
     -- glows on shields and incoming heals: off / pulse / shimmer / snow / blizzard, and how strong, and
     -- the border glow (ns.barGlow)
     absorbGlow = "off", absorbGlowAlpha = 0.6, healGlow = "off", healGlowAlpha = 0.6,
@@ -914,19 +917,18 @@ local function setBarValue(f, bar, value)
 end
 
 ---------------------------------------------------------------------------
--- Health bar extras: incoming heals and absorb shields past the end of the health fill, and healing
--- absorbs eating back into it. Secret-safe: each is a bar as long as the health bar, anchored to the
--- health fill's moving end (no maths on the values), with the same min / max; the values only ever go
--- to setters. They're clipped to the health bar, so nothing spills past its end.
+-- Health bar extras: incoming heals past the end of the health fill, and absorb shields there or over
+-- it (Shield placement). Secret-safe: each is a bar as long as the health bar, anchored to the health
+-- fill's moving end (no maths on the values), with the same min / max; the values only ever go to
+-- setters. They're clipped to the health bar, so nothing spills past its end.
 ---------------------------------------------------------------------------
 local PLAIN_FILL = "Interface\\TargetingFrame\\UI-StatusBar"
 
-local function newOverlay(f, r, g, b, a, reverse)
+local function newOverlay(f, r, g, b, a)
     local bar = CreateFrame("StatusBar", nil, f.predClip)
     bar:SetFrameLevel(f.predClip:GetFrameLevel())
     bar:SetStatusBarTexture(PLAIN_FILL)
     bar.color = { r, g, b, a }
-    if reverse then bar:SetReverseFill(true) end
     bar:SetMinMaxValues(0, 1)
     bar:SetValue(0)
     return bar
@@ -940,7 +942,7 @@ local function styleOverlay(f, bar)
     local tex = f.customTex or f.hpStatusAtlas or PLAIN_FILL
     local grey, striped = not f.customTex, false
     local c = bar.color
-    if bar == f.absorbBar then
+    if bar == f.absorbBar or bar == f.absorbBack then
         local key = getSetting(f.baseUnit, "absorbTexture") or "default"
         if key == "striped" then tex, grey, striped = "Interface\\RaidFrame\\Shield-Overlay", false, true
         elseif key ~= "default" then
@@ -950,7 +952,7 @@ local function styleOverlay(f, bar)
         local sc = getSetting(f.baseUnit, "absorbColor")
         local a = tonumber(getSetting(f.baseUnit, "absorbAlpha")) or c[4]
         if type(sc) == "table" then c = { sc[1] or c[1], sc[2] or c[2], sc[3] or c[3], a } else c = { c[1], c[2], c[3], a } end
-    elseif bar == f.healBar or bar == f.otherHealBar then
+    elseif bar == f.healBar then
         -- incoming heals, everyone's, on the one bar (Heal texture, Heal colour, Heal opacity)
         local key = getSetting(f.baseUnit, "healTexture") or "default"
         if key ~= "default" then
@@ -979,8 +981,8 @@ local function styleOverlay(f, bar)
         pcall(function() bar:GetStatusBarTexture():AddMaskTexture(f.hpMask) end)
     end
     -- the glow on it (Shield glow / Heal glow), in its colour
-    if bar == f.absorbBar or bar == f.healBar or bar == f.otherHealBar then
-        local shield = bar == f.absorbBar
+    if bar == f.absorbBar or bar == f.absorbBack or bar == f.healBar then
+        local shield = bar ~= f.healBar
         local mode = getSetting(f.baseUnit, shield and "absorbGlow" or "healGlow") or "off"
         local s = tonumber(getSetting(f.baseUnit, shield and "absorbGlowAlpha" or "healGlowAlpha")) or 0.6
         local edge = getSetting(f.baseUnit, shield and "absorbBorder" or "healBorder") and true or false
@@ -1106,11 +1108,16 @@ function ns.barGlow(bar, mode, r, g, b, strength, border)
     fx.flakes = n
 end
 
--- The border glow: Blizzard's modern spell alert loop: the proc flipbook (6 x 5, 30 frames a second), desaturated and
--- tinted, 1.4 times the size of what it's round, with a faint untinted copy added on top for the
--- sparkle. Here it's round the heal or shield: in a frame outside the health bar's clipping so it
--- can spill above and below, but cut off at the fill's own ends, so it's only ever as long as the
--- heal or shield (and gone when that's empty: its width is hidden from addons). Hidden with the bar.
+-- The border glow: Blizzard's modern spell alert loop: the proc flipbook (6 x 5, 30 frames a second),
+-- desaturated and tinted, 1.4 times the height of what it's round, with a faint untinted copy added
+-- on top for the sparkle. A bar is long and thin, so the square loop is cut in three, like a
+-- button's border: its left half and right half at their true size on the ends, and a sliver of its
+-- middle stretched between them, so the ring's corners and sides stay where they belong at any
+-- length. (Its frames stepped by hand, as the three slices each show part of the same frame.)
+-- Round the heal or shield: in a frame outside the health bar's clipping so it can spill above and
+-- below, but cut off at the fill's own ends, so it's only ever as long as the heal or shield (and
+-- gone when that's empty: its width is hidden from addons), and at the health bar's ends. Hidden
+-- with the bar.
 local EDGE_ATLAS = "UI-HUD-ActionBar-Proc-Loop-Flipbook"
 function ns.barGlowEdge(bar, fill, on, cr, cg, cb, alpha, h)
     local eg = bar.wfEdge
@@ -1119,53 +1126,88 @@ function ns.barGlowEdge(bar, fill, on, cr, cg, cb, alpha, h)
         return
     end
     if not eg then
-        eg = CreateFrame("Frame", nil, bar:GetParent() and bar:GetParent():GetParent() or bar)
+        -- (inside a holder as long as the bar's own clipping, the health bar, but taller: so the glow
+        -- spills above and below, never past the bar's ends, where a shield at full health sits)
+        -- (the holder hangs off the first frame up that doesn't clip, so nothing cuts it short)
+        local clip = bar:GetParent()
+        local top = clip
+        while top and top:GetParent() and top.DoesClipChildren and top:DoesClipChildren() do top = top:GetParent() end
+        local holder = CreateFrame("Frame", nil, top or bar)
+        holder:SetClipsChildren(true)
+        holder.clip = clip or bar
+        eg = CreateFrame("Frame", nil, holder)
+        eg.holder = holder
         eg:SetClipsChildren(true)
         eg:Hide()
-        local function flip(layer, add)
-            local tex = eg:CreateTexture(nil, "OVERLAY", nil, layer)
-            if add then tex:SetBlendMode("ADD") end
-            local ag = tex:CreateAnimationGroup()
-            ag:SetLooping("REPEAT")
-            local a = ag:CreateAnimation("FlipBook")
-            a:SetFlipBookRows(6)
-            a:SetFlipBookColumns(5)
-            a:SetFlipBookFrames(30)
-            a:SetDuration(1.0)
-            a:SetFlipBookFrameWidth(0)
-            a:SetFlipBookFrameHeight(0)
-            return tex, ag
+        -- the atlas's place in its file, for the frames' texture coordinates
+        local info = C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(EDGE_ATLAS)
+        eg.file = info and (info.file or info.filename)
+        eg.L, eg.R = info and info.leftTexCoord or 0, info and info.rightTexCoord or 1
+        eg.T, eg.B = info and info.topTexCoord or 0, info and info.bottomTexCoord or 1
+        -- left, middle, right: the tinted loop, then the sparkle over it
+        eg.parts = {}
+        for i = 1, 6 do
+            local tex = eg:CreateTexture(nil, "OVERLAY", nil, i > 3 and 7 or 6)
+            if eg.file then tex:SetTexture(eg.file) end
+            if i > 3 then tex:SetBlendMode("ADD"); tex:SetAlpha(0.35) else tex:SetDesaturated(true) end
+            eg.parts[i] = tex
         end
-        eg.tex, eg.ag = flip(6)
-        eg.ants, eg.antsAg = flip(7, true)
-        eg:SetScript("OnShow", function(self) self.ag:Play(); self.antsAg:Play() end)
-        eg:SetScript("OnHide", function(self) self.ag:Stop(); self.antsAg:Stop() end)
+        eg.frame, eg.t = -1, 0
+        eg:SetScript("OnUpdate", function(self, dt) ns.barGlowEdgeStep(self, dt) end)
         bar:HookScript("OnShow", function() if eg.on then eg:Show() end end)
         bar:HookScript("OnHide", function() eg:Hide() end)
         bar.wfEdge = eg
     end
     eg.on = true
+    if not eg.file then return end
     local sig = math.floor(cr * 50) .. math.floor(cg * 50) .. math.floor(cb * 50) .. math.floor(alpha * 20) .. math.floor(h) .. tostring(fill)
     if eg.sig ~= sig then
         eg.sig = sig
-        local pad = h * 0.2           -- (1.4 times the height: 0.2 of it above and below)
+        local pad = h * 0.2           -- (1.4 times the height: 0.2 of it all round)
+        local half = h * 0.7          -- (each end: half the square loop)
+        local holder = eg.holder
+        holder:SetFrameLevel(bar:GetFrameLevel() + 2)
+        holder:ClearAllPoints()
+        holder:SetPoint("TOPLEFT", holder.clip, "TOPLEFT", 0, pad)
+        holder:SetPoint("BOTTOMRIGHT", holder.clip, "BOTTOMRIGHT", 0, -pad)
         eg:SetFrameLevel(bar:GetFrameLevel() + 2)
         eg:ClearAllPoints()
         eg:SetPoint("TOPLEFT", fill, "TOPLEFT", 0, pad)
         eg:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, -pad)
-        for _, tex in ipairs({ eg.tex, eg.ants }) do
-            tex:ClearAllPoints()
-            tex:SetPoint("TOPLEFT", fill, "TOPLEFT", -pad, pad)
-            tex:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", pad, -pad)
-            tex:SetAtlas(EDGE_ATLAS)
+        for i = 0, 3, 3 do
+            local l, m, r = eg.parts[i + 1], eg.parts[i + 2], eg.parts[i + 3]
+            l:ClearAllPoints(); m:ClearAllPoints(); r:ClearAllPoints()
+            l:SetPoint("TOPLEFT", fill, "TOPLEFT", -pad, pad)
+            l:SetPoint("BOTTOMLEFT", fill, "BOTTOMLEFT", -pad, -pad)
+            l:SetWidth(half)
+            r:SetPoint("TOPRIGHT", fill, "TOPRIGHT", pad, pad)
+            r:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", pad, -pad)
+            r:SetWidth(half)
+            m:SetPoint("TOPLEFT", l, "TOPRIGHT")
+            m:SetPoint("BOTTOMRIGHT", r, "BOTTOMLEFT")
         end
-        eg.tex:SetDesaturated(true)
-        eg.tex:SetVertexColor(cr, cg, cb)
-        eg.ants:SetAlpha(0.35)
+        for i = 1, 3 do eg.parts[i]:SetVertexColor(cr, cg, cb) end
         eg:SetAlpha(alpha)
-        if eg:IsShown() then eg.ag:Stop(); eg.ag:Play(); eg.antsAg:Stop(); eg.antsAg:Play() end
+        eg.frame = -1
     end
     if bar:IsShown() and not eg:IsShown() then eg:Show() end
+end
+
+-- The border glow's next frame: the same cell of the 5 x 6 loop on each slice (its left half, a
+-- sliver of its middle, its right half).
+function ns.barGlowEdgeStep(eg, dt)
+    eg.t = (eg.t + (dt or 0)) % 1
+    local n = math.floor(eg.t * 30)
+    if n == eg.frame then return end
+    eg.frame = n
+    local cw, ch = (eg.R - eg.L) / 5, (eg.B - eg.T) / 6
+    local u, v = eg.L + (n % 5) * cw, eg.T + math.floor(n / 5) * ch
+    local mid = u + cw * 0.5
+    for i = 0, 3, 3 do
+        eg.parts[i + 1]:SetTexCoord(u, mid, v, v + ch)
+        eg.parts[i + 2]:SetTexCoord(mid - cw * 0.01, mid + cw * 0.01, v, v + ch)
+        eg.parts[i + 3]:SetTexCoord(mid, u + cw, v, v + ch)
+    end
 end
 
 -- One frame of the shimmer or the snow.
@@ -1225,8 +1267,8 @@ local function value(fn, u)
     if ok then return v end
 end
 
--- Blizzard's heal prediction calculator (12.x, as EllesmereUI uses it): splits incoming heals into
--- yours and everyone else's, clamped to the unit's missing health. nil on clients without it.
+-- Blizzard's heal prediction calculator (12.x): incoming heals clamped to the unit's health, and
+-- whether shields are more than the missing health. nil on clients without it.
 local function healCalculator(f)
     if f.healCalc == nil then
         f.healCalc = false
@@ -1236,12 +1278,6 @@ local function healCalculator(f)
                 local E = Enum or {}
                 if calc.SetIncomingHealClampMode and E.UnitIncomingHealClampMode then
                     calc:SetIncomingHealClampMode(E.UnitIncomingHealClampMode.MaximumHealth)
-                end
-                if calc.SetHealAbsorbClampMode and E.UnitHealAbsorbClampMode then
-                    calc:SetHealAbsorbClampMode(E.UnitHealAbsorbClampMode.MaximumHealth)
-                end
-                if calc.SetHealAbsorbMode and E.UnitHealAbsorbMode then
-                    calc:SetHealAbsorbMode(E.UnitHealAbsorbMode.ReducedByIncomingHeals)
                 end
                 -- shields clamped to the missing health: its second answer is then "more shield than
                 -- missing health" (the overshield), which lights the glow at the bar's end
@@ -1266,10 +1302,23 @@ local function updatePrediction(f)
         f.predClip:SetAllPoints(f.hp)
         f.predClip:SetClipsChildren(true)
         f.predClip:SetFrameLevel(f.hp:GetFrameLevel() + 1)
-        f.healBar = newOverlay(f, 0.1, 0.9, 0.3, 0.6)          -- your incoming heals: green
-        f.otherHealBar = newOverlay(f, 0.05, 0.6, 0.2, 0.5)    -- everyone else's: darker green
+        f.healBar = newOverlay(f, 0.1, 0.9, 0.3, 0.6)          -- incoming heals, everyone's: green
+        -- Shields, in two parts, each in a frame that clips it (the shield's amount can be hidden from
+        -- addons, so both parts are given all of it, and the clipping shows the right share of each):
+        --   absorbBar: in the missing health (missClip: the fill's end to the bar's end);
+        --   absorbBack: over the health (curClip: the bar's start to the fill's end, or the whole bar
+        --   for the edge placements), for what doesn't fit, or all of it.
+        -- (Shield placement and Overshield, laid out by placeShields)
+        f.missClip = CreateFrame("Frame", nil, f.predClip)
+        f.missClip:SetClipsChildren(true)
+        f.missClip:SetFrameLevel(f.predClip:GetFrameLevel())
+        f.curClip = CreateFrame("Frame", nil, f.predClip)
+        f.curClip:SetClipsChildren(true)
+        f.curClip:SetFrameLevel(f.predClip:GetFrameLevel())
         f.absorbBar = newOverlay(f, 0.7, 0.9, 1, 0.7)          -- shields: pale blue
-        f.healAbsorbBar = newOverlay(f, 0.9, 0.1, 0.1, 0.6, true)   -- heal absorbs: red, eating back in
+        f.absorbBar:SetParent(f.missClip)
+        f.absorbBack = newOverlay(f, 0.7, 0.9, 1, 0.7)
+        f.absorbBack:SetParent(f.curClip)
         -- the overshield: Blizzard's glow at the bar's end while shields are more than the missing health
         f.overGlow = f.hp:CreateTexture(nil, "OVERLAY", nil, 7)
         f.overGlow:SetTexture("Interface\\RaidFrame\\Shield-Overshield")
@@ -1279,40 +1328,25 @@ local function updatePrediction(f)
         f.overGlow:SetPoint("BOTTOMRIGHT", f.hp, "BOTTOMRIGHT", 6, -2)
         f.overGlow:SetAlpha(0)
     end
-    f.predBars = f.predBars or { f.healBar, f.otherHealBar, f.absorbBar, f.healAbsorbBar }
+    f.predBars = f.predBars or { f.healBar, f.absorbBar, f.absorbBack }
     for _, bar in ipairs(f.predBars) do styleOverlay(f, bar) end
     local u = f.wfUnit
     local fill = f.hp:GetStatusBarTexture()
     local healTex = f.healBar:GetStatusBarTexture()
-    local otherTex = f.otherHealBar:GetStatusBarTexture()
-    local absorbTex = f.absorbBar:GetStatusBarTexture()
-    local healAbsTex = f.healAbsorbBar:GetStatusBarTexture()
     local w = f.hp:GetWidth()
-    -- The anchors sit on the health fill, which already moves. Re-anchor only when that fill, an
-    -- overlay texture, or the bar width changes.
-    if fill and healTex and otherTex and absorbTex and healAbsTex
-        and (f.predFill ~= fill or f.predHealTex ~= healTex or f.predOtherTex ~= otherTex
-            or f.predAbsorbTex ~= absorbTex or f.predHealAbsTex ~= healAbsTex or f.predW ~= w) then
-        f.predFill, f.predHealTex, f.predOtherTex = fill, healTex, otherTex
-        f.predAbsorbTex, f.predHealAbsTex, f.predW = absorbTex, healAbsTex, w
-        -- your heals start at the end of the health fill, then everyone else's, then the shield
+    local place = getSetting(f.baseUnit, "absorbPlacement") or "overlay"
+    local over = getSetting(f.baseUnit, "overshield") or "always"
+    -- The anchors sit on the health fill, which already moves. Re-anchor only when that fill, the
+    -- heal texture, the bar width or the shield's placement changes.
+    if fill and healTex
+        and (f.predFill ~= fill or f.predHealTex ~= healTex or f.predW ~= w or f.predPlace ~= place or f.predOver ~= over) then
+        f.predFill, f.predHealTex, f.predW, f.predPlace, f.predOver = fill, healTex, w, place, over
+        -- the heals start at the end of the health fill
         f.healBar:ClearAllPoints()
         f.healBar:SetPoint("TOPLEFT", fill, "TOPRIGHT")
         f.healBar:SetPoint("BOTTOMLEFT", fill, "BOTTOMRIGHT")
         f.healBar:SetWidth(w)
-        f.otherHealBar:ClearAllPoints()
-        f.otherHealBar:SetPoint("TOPLEFT", healTex, "TOPRIGHT")
-        f.otherHealBar:SetPoint("BOTTOMLEFT", healTex, "BOTTOMRIGHT")
-        f.otherHealBar:SetWidth(w)
-        f.absorbBar:ClearAllPoints()
-        f.absorbBar:SetPoint("TOPLEFT", otherTex, "TOPRIGHT")
-        f.absorbBar:SetPoint("BOTTOMLEFT", otherTex, "BOTTOMRIGHT")
-        f.absorbBar:SetWidth(w)
-        -- healing absorbs run backwards from the end of the health fill
-        f.healAbsorbBar:ClearAllPoints()
-        f.healAbsorbBar:SetPoint("TOPRIGHT", fill, "TOPRIGHT")
-        f.healAbsorbBar:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
-        f.healAbsorbBar:SetWidth(w)
+        ns.placeShields(f, fill, healTex, w, place, over)
     end
 
     local max = value(UnitHealthMax, u)
@@ -1320,32 +1354,85 @@ local function updatePrediction(f)
     for _, bar in ipairs(f.predBars) do
         if max then pcall(bar.SetMinMaxValues, bar, 0, max) end
     end
-    -- incoming heals: everyone's together on the first bar, one look and one glow (through the
-    -- calculator when the client has it, clamped like Blizzard's, else the older total); the second
-    -- bar, once everyone else's, stays empty
-    local mine
+    -- incoming heals, everyone's together (through the calculator when the client has it, clamped
+    -- like Blizzard's, else the older total)
+    local heals
     f.overGlow:SetAlpha(0)          -- (lit again below while there's an overshield)
     if wantHeals and not dead then
         local calc = healCalculator(f)
         local ok = calc and pcall(UnitGetDetailedHealPrediction, u, "player", calc)
-        local m
+        local all
         if ok then
             -- (overshield: the answer may be hidden, so it goes straight to the glow's alpha)
             local okA, _, over = pcall(calc.GetDamageAbsorbs, calc)
             if okA and wantAbsorbs and (isSecret(over) or over ~= nil) and f.overGlow.SetAlphaFromBoolean then
                 pcall(f.overGlow.SetAlphaFromBoolean, f.overGlow, over, 0.9, 0)
             end
-            ok, m = pcall(calc.GetIncomingHeals, calc)          -- (all, yours, others')
+            ok, all = pcall(calc.GetIncomingHeals, calc)          -- (all, yours, others')
         end
-        if ok then mine = m else mine = value(UnitGetIncomingHeals, u) end
+        if ok then heals = all else heals = value(UnitGetIncomingHeals, u) end
     end
     local absorb = (wantAbsorbs and not dead) and value(UnitGetTotalAbsorbs, u) or nil
-    -- (a missing value counts as none; the heal bars stay at 0 so the shield still starts at the health end)
-    if not pcall(setBarValue, f, f.healBar, mine) then f.healBar:SetValue(0) end
-    f.otherHealBar:SetValue(0)
-    if not pcall(setBarValue, f, f.absorbBar, absorb) then f.absorbBar:SetValue(0) end
-    -- (heal absorbs: not drawn for now, until they're confirmed in the game; their bar stays empty)
-    f.healAbsorbBar:SetValue(0)
+    -- (a missing value counts as none; the heal bar stays at 0 so the shield still starts at the health end)
+    if not pcall(setBarValue, f, f.healBar, heals) then f.healBar:SetValue(0) end
+    ns.setShields(f, absorb)
+end
+
+-- Where shields go (Shield placement), and what's past the missing health (Overshield):
+--   overlay: in the missing health after the heals; what doesn't fit, back over the health from
+--     its end (Overshield always), or from the bar's start (from left), or not shown (never);
+--   overlayReverse: all of it back over the health from its end;
+--   overlayReverseFull: the same, and what's more than the health in the missing health, from the
+--     bar's start;
+--   right / left: all of it over the whole bar from that end.
+-- Both parts are bars the width of the health bar given the whole shield; the clipping frames show
+-- the share of each (missClip: the missing health; curClip: the health, or the whole bar).
+function ns.placeShields(f, fill, healTex, w, place, over)
+    local hp, fw, ab = f.hp, f.absorbBar, f.absorbBack
+    local missClip, curClip = f.missClip, f.curClip
+    missClip:ClearAllPoints(); curClip:ClearAllPoints(); fw:ClearAllPoints(); ab:ClearAllPoints()
+    missClip:SetPoint("TOPLEFT", fill, "TOPRIGHT")
+    missClip:SetPoint("BOTTOMRIGHT", hp, "BOTTOMRIGHT")
+    local full = place == "overlayReverseFull"
+    fw:SetReverseFill(false)
+    if full then
+        fw:SetPoint("TOPLEFT", hp, "TOPLEFT")
+        fw:SetPoint("BOTTOMLEFT", hp, "BOTTOMLEFT")
+    else
+        fw:SetPoint("TOPLEFT", healTex, "TOPRIGHT")
+        fw:SetPoint("BOTTOMLEFT", healTex, "BOTTOMRIGHT")
+    end
+    fw:SetWidth(w)
+    if place == "right" or place == "left" then
+        curClip:SetAllPoints(hp)
+        ab:SetReverseFill(place == "right")
+        ab:SetPoint("TOP" .. place:upper(), hp, "TOP" .. place:upper())
+        ab:SetPoint("BOTTOM" .. place:upper(), hp, "BOTTOM" .. place:upper())
+    else
+        curClip:SetPoint("TOPLEFT", hp, "TOPLEFT")
+        curClip:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+        if place == "overlayReverse" or full or over == "fromleft" then
+            -- (from the fill's end back into it; from left: the other way, from one bar's length
+            -- before the fill's end, so only what's more than the missing health shows, from the start)
+            ab:SetReverseFill(place ~= "overlay")
+            ab:SetPoint("TOPRIGHT", fill, "TOPRIGHT")
+            ab:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+        else
+            ab:SetReverseFill(true)
+            ab:SetPoint("TOPRIGHT", hp, "TOPRIGHT")
+            ab:SetPoint("BOTTOMRIGHT", hp, "BOTTOMRIGHT")
+        end
+    end
+    ab:SetWidth(w)
+    f.shieldFw = place == "overlay" or full       -- (the missing-health part used)
+    f.shieldOver = not (place == "overlay" and over == "never")
+end
+
+-- The shield's amount into its parts (as placed by placeShields).
+function ns.setShields(f, absorb)
+    if not f.absorbBar then return end
+    if not (f.shieldFw and pcall(setBarValue, f, f.absorbBar, absorb)) then f.absorbBar:SetValue(0) end
+    if not (f.shieldOver and pcall(setBarValue, f, f.absorbBack, absorb)) then f.absorbBack:SetValue(0) end
 end
 
 -- Damage trail: when health drops, the part just lost stays on the bar in red for a moment, then slides
@@ -3795,11 +3882,10 @@ function ns.applyFxPreview(f)
     if not f.predBars then return end
     for _, b in ipairs(f.predBars) do b:SetMinMaxValues(0, 100) end
     f.healBar:SetValue(fx.heal and 20 or 0)
-    f.otherHealBar:SetValue(0)
-    f.absorbBar:SetValue(fx.absorb and 12 or 0)
-    f.healAbsorbBar:SetValue(0)
+    -- (a shield bigger than the missing health, so its placement and overshield show)
+    ns.setShields(f, fx.absorb and 50 or 0)
     -- (a snowglobe glow shaken, to show it off)
-    ns.barGlowShake(f.absorbBar); ns.barGlowShake(f.healBar); ns.barGlowShake(f.otherHealBar)
+    ns.barGlowShake(f.absorbBar); ns.barGlowShake(f.absorbBack); ns.barGlowShake(f.healBar)
 end
 
 function ns.setFxPreview(f, kind, on)
@@ -4581,8 +4667,8 @@ local function createFrame(unit)
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then
             ns.markPaint(self, "pred")
             -- (a snowglobe glow on the shield or the heals: shaken)
-            if event == "UNIT_ABSORB_AMOUNT_CHANGED" then ns.barGlowShake(self.absorbBar)
-            elseif event == "UNIT_HEAL_PREDICTION" then ns.barGlowShake(self.healBar); ns.barGlowShake(self.otherHealBar) end
+            if event == "UNIT_ABSORB_AMOUNT_CHANGED" then ns.barGlowShake(self.absorbBar); ns.barGlowShake(self.absorbBack)
+            elseif event == "UNIT_HEAL_PREDICTION" then ns.barGlowShake(self.healBar) end
         else ns.markPaint(self, "all") end
     end)
     -- smooth energy / rage / focus ticks on your own frame (every change: the plain power update would
@@ -4725,8 +4811,8 @@ local function createSmallFrame(unit, wf, index)
         elseif event == "UNIT_HEAL_PREDICTION" or event:find("ABSORB_AMOUNT_CHANGED$") then
             ns.markPaint(self, "pred")
             -- (a snowglobe glow on the shield or the heals: shaken)
-            if event == "UNIT_ABSORB_AMOUNT_CHANGED" then ns.barGlowShake(self.absorbBar)
-            elseif event == "UNIT_HEAL_PREDICTION" then ns.barGlowShake(self.healBar); ns.barGlowShake(self.otherHealBar) end
+            if event == "UNIT_ABSORB_AMOUNT_CHANGED" then ns.barGlowShake(self.absorbBar); ns.barGlowShake(self.absorbBack)
+            elseif event == "UNIT_HEAL_PREDICTION" then ns.barGlowShake(self.healBar) end
         else ns.markPaint(self, "all") end
     end)
     -- Party slots that are not in use (party off, or raid style) register nothing. Party.listen
@@ -5149,7 +5235,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
-                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healTexture", "healColor","healAlpha", "absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "absorbPlacement", "overshield","healTexture", "healColor","healAlpha", "absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }
@@ -5514,13 +5600,11 @@ SlashCmdList.WEBBYFRAMES = function(msg)
         f.previewing = true
         f.hp:SetMinMaxValues(0, 100)
         f.hp:SetValue(100)
-        for _, b in ipairs({ f.healBar, f.otherHealBar, f.absorbBar, f.healAbsorbBar }) do b:SetMinMaxValues(0, 100) end
+        for _, b in ipairs(f.predBars) do b:SetMinMaxValues(0, 100) end
         C_Timer.After(0.3, function()
             setBarValue(f, f.hp, 60)
             f.healBar:SetValue(getSetting("player", "healPrediction") and 20 or 0)
-            f.otherHealBar:SetValue(0)
-            f.absorbBar:SetValue(getSetting("player", "absorbs") and 15 or 0)
-            f.healAbsorbBar:SetValue(0)
+            ns.setShields(f, getSetting("player", "absorbs") and 50 or 0)
         end)
         local ok, err = pcall(showHit, f, "WOUND", "CRITICAL", 1234)      -- and a combat number on the portrait
         if not ok then print("|cff33ccffWebby Frames:|r combat number failed: " .. tostring(err)) end

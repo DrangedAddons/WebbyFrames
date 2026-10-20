@@ -568,7 +568,8 @@ Opt.SEARCH_WORDS = {
     colorMode = "hp color class reaction", rpHealthColor = "hp color class", petColor = "hp color",
     npcColor = "hp color mob enemy", healthFade = "hp red low health gradient color",
     healPrediction = "heal prediction hots", healTexture = "heal prediction incoming statusbar", healGlow = "heal glow pulse shimmer snowglobe blizzard snowstorm sparkle", absorbGlow = "shield absorb glow pulse shimmer snowglobe blizzard snowstorm sparkle",
-    healBorder = "heal glow edge outline proc", absorbBorder = "shield absorb glow edge outline proc", healAlpha = "heal incoming transparent", absorbs = "shield absorb", absorbTexture = "shield absorb statusbar stripes", absorbAlpha = "shield absorb transparent", damageTrail = "hit lost red hp",
+    healBorder = "heal glow edge outline proc", absorbBorder = "shield absorb glow edge outline proc", healAlpha = "heal incoming transparent", absorbs = "shield absorb", absorbTexture = "shield absorb statusbar stripes", absorbPlacement = "shield absorb position overlay reverse edge left right",
+    overshield = "shield absorb overflow overlay excess", absorbAlpha = "shield absorb transparent", damageTrail = "hit lost red hp",
     damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", manaTick = "mp5 regen spark five second rule 5sr",
     manaTickSize = "mana tick mp5 spark", manaTickSparkle = "mana tick mp5 star", manaTickStar = "mana tick mp5 star shape", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
     threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
@@ -1524,7 +1525,14 @@ local function buildSettings()
             -- Shields
             B.section("Shields", false)
             local shields = B.check("absorbs", "Show shields", "Damage shields past the end of the health, and a glow at the end when they're more than the missing health.", true)
+            local overshield = B.dropdown("overshield", "Overshield", "When the shield is more than the missing health, what doesn't fit:\n\nAlways: drawn back over the health from its end.\nFrom left: drawn over the health from the bar's start.\nNever: not drawn; the shield only fills the missing health.", "always",
+                { { "always", "Always" }, { "fromleft", "From left" }, { "never", "Never" } })
+            B.showIf(function() return (getSetting(read, "absorbPlacement") or "overlay") == "overlay" end, overshield)
             local shieldLooks = {
+                B.dropdown("absorbPlacement", "Placement", "Where shields go on the health bar. Never past its end.\n\nOverlay: in the missing health after the health; what doesn't fit goes over the health (see Overshield).\nOverlay reverse: all of it over the health, back from its end.\nOverlay reverse (full): the same, and the part that's more than the health in the missing health, from the bar's start.\nRight edge: all of it over the whole bar, from the right end.\nLeft edge: all of it over the whole bar, from the left end.", "overlay",
+                    { { "overlay", "Overlay" }, { "overlayReverse", "Overlay reverse" }, { "overlayReverseFull", "Overlay reverse (full)" },
+                      { "right", "Right edge" }, { "left", "Left edge" } }),
+                overshield,
                 B.dropdown("absorbTexture", "Texture", "How damage shields look: in the health bar's own texture, Blizzard's raid-frame stripes, or any texture (SharedMedia ones too).", "default", textures(true)),
                 B.swatch("Colour", colour("absorbColor", { 0.7, 0.9, 1 }), function(r, g, b) setc("absorbColor", { r, g, b }) end,
                     "The shields' colour (pale blue to start with). Click to change it.", preview("absorb", "a damage shield")),
