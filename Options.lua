@@ -1152,7 +1152,9 @@ local function buildSettings()
         local L, CX, CW = Opt.LABEL_X, Opt.CONTROL_X, Opt.CONTROL_W
         local function add(row)
             -- (what the search looks through: the name, and the setting's own search words)
+            -- (and its section's name: the short "Colour" under Shields is found by "shield colour")
             local find = row.search
+            if find and current then find = find .. " " .. current.title end
             for k in pairs(row.keys or {}) do
                 if Opt.SEARCH_WORDS[k] then find = (find or "") .. " " .. Opt.SEARCH_WORDS[k] end
             end
@@ -1445,15 +1447,20 @@ local function buildSettings()
                 row.controls = { b }
             end })
         end
-        -- The shields' looks, under the "Shields and heal absorbs" switch (its row: parent). read: whose
-        -- settings to show; setc(key, colour) saves a colour (one frame, or all of them).
-        -- Incoming heals' and shields' looks, under the "Incoming heals / Shields and heal absorbs" row
-        -- (parent). read: whose settings to show; setc(key, colour) saves a colour (one frame, or all of
-        -- them); targets(): the live frames the Preview tickboxes show an effect on. Returns every row
-        -- (the party page shows them only for the portrait frames).
-        function B.shields(parent, read, setc, targets)
+        -- Three sections of their own: Incoming heals, Shields and Heal absorbs, each with its switch and
+        -- looks. read: whose settings to show; setc(key, colour) saves a colour (one frame, or all of
+        -- them); targets(): the live frames the Preview tickboxes show an effect on.
+        -- opts (the party page): only() is when the switches and looks apply (the portrait frames; the
+        -- glows apply to the raid tiles too), and opts.heals / opts.shields add rows of the party's own
+        -- to those sections.
+        function B.shields(read, setc, targets, opts)
+            opts = opts or {}
+            local only = opts.only
             local function healsOn() return getSetting(read, "healPrediction") and true or false end
             local function on() return getSetting(read, "absorbs") and true or false end
+            -- (the glows: wherever the switch is on, or where there's no switch: the raid tiles)
+            local function glowHeals() return (only and not only()) or healsOn() end
+            local function glowShields() return (only and not only()) or on() end
             local function textures(striped)
                 return function()
                     local l = { { "default", "Same as health bar" } }
@@ -1500,33 +1507,41 @@ local function buildSettings()
                     end
                 end
             end
-            local healRows = {
-                B.dropdown("healTexture", "Heal texture", "How incoming heals look past the end of the health: in the health bar's own texture, or any texture (SharedMedia ones too).", "default", textures(false)),
-                B.swatch("Heal colour", colour("healColor", { 0.1, 0.9, 0.3 }), function(r, g, b) setc("healColor", { r, g, b }) end,
+            -- Incoming heals
+            B.section("Incoming heals", false)
+            local heals = B.check("healPrediction", "Show incoming heals", "Heals on their way to the unit, yours and everyone else's, past the end of its health.", true)
+            local healLooks = {
+                B.dropdown("healTexture", "Texture", "How incoming heals look: in the health bar's own texture, or any texture (SharedMedia ones too).", "default", textures(false)),
+                B.swatch("Colour", colour("healColor", { 0.1, 0.9, 0.3 }), function(r, g, b) setc("healColor", { r, g, b }) end,
                     "Heals on their way, yours and everyone else's (green to start with). Click to change it.", preview("heal", "an incoming heal")),
-                B.slider("healAlpha", "Heal opacity", "How solid incoming heals are.", 0.6, 0.1, 1, 0.05),
-                glowDrop("healGlow", "Heal"),
-                glowBorder("healBorder", "Heal"),
-                glowStrength("healGlow", "healGlowAlpha", "healBorder"),
+                B.slider("healAlpha", "Opacity", "How solid incoming heals are.", 0.6, 0.1, 1, 0.05),
             }
-            B.under(parent, healsOn, unpack(healRows))
-            local shieldRows = {
-                B.dropdown("absorbTexture", "Shield texture", "How damage shields look past the end of the health: in the health bar's own texture, Blizzard's raid-frame stripes, or any texture (SharedMedia ones too).", "default", textures(true)),
-                B.swatch("Shield colour", colour("absorbColor", { 0.7, 0.9, 1 }), function(r, g, b) setc("absorbColor", { r, g, b }) end,
+            B.under(heals, healsOn, unpack(healLooks))
+            if only then B.showIf(only, heals, unpack(healLooks)) end
+            B.showIf(glowHeals, glowDrop("healGlow", "Heal"), glowBorder("healBorder", "Heal"),
+                glowStrength("healGlow", "healGlowAlpha", "healBorder"))
+            if opts.heals then opts.heals() end
+            -- Shields
+            B.section("Shields", false)
+            local shields = B.check("absorbs", "Show shields and heal absorbs", "Damage shields past the end of the health (and a glow at the end when they're more than the missing health), and healing absorbs eating back into it (their colour is under Heal absorbs).", true)
+            local shieldLooks = {
+                B.dropdown("absorbTexture", "Texture", "How damage shields look: in the health bar's own texture, Blizzard's raid-frame stripes, or any texture (SharedMedia ones too).", "default", textures(true)),
+                B.swatch("Colour", colour("absorbColor", { 0.7, 0.9, 1 }), function(r, g, b) setc("absorbColor", { r, g, b }) end,
                     "The shields' colour (pale blue to start with). Click to change it.", preview("absorb", "a damage shield")),
-                B.slider("absorbAlpha", "Shield opacity", "How solid the shields are.", 0.7, 0.1, 1, 0.05),
-                glowDrop("absorbGlow", "Shield"),
-                glowBorder("absorbBorder", "Shield"),
-                glowStrength("absorbGlow", "absorbGlowAlpha", "absorbBorder"),
-                B.swatch("Heal absorb colour", colour("healAbsorbColor", { 0.9, 0.1, 0.1 }), function(r, g, b) setc("healAbsorbColor", { r, g, b }) end,
-                    "The colour of healing absorbs eating back into the health (red to start with). Click to change it.", preview("healAbsorb", "a heal absorb")),
+                B.slider("absorbAlpha", "Opacity", "How solid the shields are.", 0.7, 0.1, 1, 0.05),
             }
-            B.under(parent, on, unpack(shieldRows))
-            local rows = {}
-            for _, r in ipairs(healRows) do rows[#rows + 1] = r end
-            for _, r in ipairs(shieldRows) do rows[#rows + 1] = r end
-            return rows
-        end        -- Buff and debuff layout details (in the Buffs and debuffs section).
+            B.under(shields, on, unpack(shieldLooks))
+            if only then B.showIf(only, shields, unpack(shieldLooks)) end
+            if opts.shields then opts.shields() end
+            B.showIf(glowShields, glowDrop("absorbGlow", "Shield"), glowBorder("absorbBorder", "Shield"),
+                glowStrength("absorbGlow", "absorbGlowAlpha", "absorbBorder"))
+            -- Heal absorbs (shown with the shields: one switch for both)
+            local absorbs = B.section("Heal absorbs", false)
+            B.showIf(function() return (not only or only()) and on() end, absorbs)
+            B.swatch("Colour", colour("healAbsorbColor", { 0.9, 0.1, 0.1 }), function(r, g, b) setc("healAbsorbColor", { r, g, b }) end,
+                "The colour of healing absorbs eating back into the health (red to start with). Turned on with the shields. Click to change it.", preview("healAbsorb", "a heal absorb"))
+        end
+        -- Buff and debuff layout details (in the Buffs and debuffs section).
         function B.auraDetails()
             return B.dropdown("auraGrowth", "Rows grow", "To the right: the first icon at the left end. To the left: the first icon at the right end, with the row filling leftwards.", "right",
                 { { "right", "To the right" }, { "left", "To the left" } }),
@@ -1679,7 +1694,9 @@ local function buildSettings()
         B.under(numbers, function() return getSetting("player", "textMode") ~= "off" end,
             B.dropdown("textFormat", "Number format", "Totals, percentages, or both.", "value",
                 { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
+        B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true })
 
+        B.section("Health colour", false)
         local colour = B.dropdown("colorMode", "Health colour", "Every frame's health colour at once (the pet and the party's raid-style tiles follow as closely as their own choices allow). Each frame's page can then differ.", "smart", COLOR_MODES)
         local function byReaction() local m = getSetting("player", "colorMode"); return m == "smart" or m == "reaction" end
         local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs on every frame. Green lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
@@ -1691,16 +1708,14 @@ local function buildSettings()
         B.under(colour, byReaction, npc)
         B.under(npc, function() return byReaction() and getSetting("target", "npcColor") == "custom" end, npcCustom)
         B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
-        local shieldRow = B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
-               { "absorbs", "Shields and heal absorbs", "Damage shields and healing absorbs on the health bars.", true })
-        B.shields(shieldRow, "player", function(k, v) setAll(nil, k, v) end, function()
+
+        B.shields("player", function(k, v) setAll(nil, k, v) end, function()
             -- (every frame)
             local l = {}
             for _, u in ipairs(UNITS) do if frames[u] then l[#l + 1] = frames[u] end end
             for i = 2, Party.SLOTS do if Party.members[i] then l[#l + 1] = Party.members[i] end end
             return l
         end)
-        B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true })
 
         B.section("Buffs and debuffs", false)
         local dispel = B.check("dispelGlow", "Dispel glow", "On every frame: when the unit has a debuff you can dispel, the frame takes the debuff type's colour and pulses.", true)
@@ -1809,6 +1824,17 @@ local function buildSettings()
         B.under(numbers, function() return get("textMode") ~= "off" end,
             B.dropdown("textFormat", "Number format", "Totals, percentages, or both.",
                 defaultFor("party", "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
+        B.showIf(portrait,
+            B.slider("hpAlpha", "Health bar opacity", "How solid the health fill is.", defaultFor("party", "hpAlpha"), 0.2, 1, 0.05),
+            B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor("party", "mpAlpha"), 0.2, 1, 0.05),
+            B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true }))
+        B.showIf(raid,
+            B.pair({ "rpPowerTank", "Tank power bars", "A slim power bar along the bottom of tanks' tiles.", true },
+                   { "rpPowerHealer", "Healer power bars", "A slim mana bar along the bottom of healers' tiles.", true }),
+            B.pair({ "rpPowerDPS", "Damage power bars", "A slim power bar along the bottom of damage dealers' tiles (and anyone with no role).", false }))
+
+        -- Health colour -------------------------------------------------------------------
+        B.section("Health colour", false)
         -- (colours: each style has its own)
         -- (party members are players: no reaction or NPC choices. An older "class for players, reaction
         -- for NPCs" or "by reaction" shows, and works, as Class colour.)
@@ -1832,36 +1858,27 @@ local function buildSettings()
         B.fade("party", setSetting, "As health drops, the health colour shifts towards red, or through your own stops.")
         -- (By health already is a fade: Fade to red only for the other colours)
         B.showIf(both(portrait, function() return get("colorMode") ~= "gradient" end), unpack(B.page.rows, fadeFrom + 1))
-        B.showIf(portrait,
-            B.slider("hpAlpha", "Health bar opacity", "How solid the health fill is.", defaultFor("party", "hpAlpha"), 0.2, 1, 0.05),
-            B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor("party", "mpAlpha"), 0.2, 1, 0.05),
-            B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays in red for a moment, then slides away.", true }))
-        -- (the portrait frames' shields and their looks)
-        local shieldRow = B.pair({ "healPrediction", "Incoming heals", "Heals on their way, in green past the end of the health.", true },
-                   { "absorbs", "Shields and heal absorbs", "Damage shields past the end of the health, and healing absorbs eating back into it. Their looks are below.", true })
-        B.showIf(portrait, shieldRow, unpack(B.shields(shieldRow, "party", function(k, v) setSetting("party", k, v) end, function()
+        B.showIf(raid,
+            swatch("rpDeadColor", "Dead colour", "The tile's colour while a member is dead or a ghost.", { 0.3, 0.1, 0.1 }),
+            swatch("rpOfflineColor", "Offline colour", "The tile's colour while a member is offline.", { 0.35, 0.35, 0.35 }))
+
+        -- Incoming heals, Shields, Heal absorbs: the portrait frames' looks; the tiles' shields have
+        -- their own; the glows go on both
+        B.shields("party", function(k, v) setSetting("party", k, v) end, function()
             local l = {}
             for i = 1, Party.SLOTS do if Party.members[i] then l[#l + 1] = Party.members[i] end end
             return l
-        end)))
-        B.showIf(raid,
-            B.pair({ "rpPowerTank", "Tank power bars", "A slim power bar along the bottom of tanks' tiles.", true },
-                   { "rpPowerHealer", "Healer power bars", "A slim mana bar along the bottom of healers' tiles.", true }),
-            B.pair({ "rpPowerDPS", "Damage power bars", "A slim power bar along the bottom of damage dealers' tiles (and anyone with no role).", false }),
-            B.dropdown("rpShieldStyle", "Shield look", "Shields (absorbs) as Blizzard's stripes, a plain overlay, or any texture (SharedMedia ones too).", "striped", function()
-                local l = { { "striped", "Striped" }, { "plain", "Plain" } }
-                for _, c in ipairs(textureChoices()) do if c[1] ~= "default" then l[#l + 1] = c end end
-                return l
-            end),
-            swatch("rpShieldColor", "Shield colour", "The shields' colour (white to start with). Click to change it.", { 1, 1, 1 }),
-            B.slider("rpShieldAlpha", "Shield opacity", "How solid the shields are.", 0.75, 0.1, 1, 0.05),
-            B.dropdown("absorbGlow", "Shield glow", "A glow on shields, in their colour.\n\n" .. Opt.GLOW_TIP, "off", Opt.GLOW_CHOICES),
-            B.dropdown("healGlow", "Heal glow", "The same glows on incoming heals, in their colour; a heal coming in shakes the snow.", "off", Opt.GLOW_CHOICES),
-            B.pair({ "absorbBorder", "Shield border glow", Opt.BORDER_TIP, false },
-                   { "healBorder", "Heal border glow", Opt.BORDER_TIP, false }),
-            B.pair({ "rpShieldEdge", "Shields from the right", "Shields drawn from the right edge over the health, so a member at full health still shows theirs. Off: straight after the health.", false }),
-            swatch("rpDeadColor", "Dead colour", "The tile's colour while a member is dead or a ghost.", { 0.3, 0.1, 0.1 }),
-            swatch("rpOfflineColor", "Offline colour", "The tile's colour while a member is offline.", { 0.35, 0.35, 0.35 }))
+        end, { only = portrait, shields = function()
+            B.showIf(raid,
+                B.dropdown("rpShieldStyle", "Texture", "Shields (absorbs) as Blizzard's stripes, a plain overlay, or any texture (SharedMedia ones too).", "striped", function()
+                    local l = { { "striped", "Striped" }, { "plain", "Plain" } }
+                    for _, c in ipairs(textureChoices()) do if c[1] ~= "default" then l[#l + 1] = c end end
+                    return l
+                end),
+                swatch("rpShieldColor", "Colour", "The shields' colour (white to start with). Click to change it.", { 1, 1, 1 }),
+                B.slider("rpShieldAlpha", "Opacity", "How solid the shields are.", 0.75, 0.1, 1, 0.05),
+                B.pair({ "rpShieldEdge", "Shields from the right", "Shields drawn from the right edge over the health, so a member at full health still shows theirs. Off: straight after the health.", false }))
+        end })
 
         -- Buffs and debuffs ---------------------------------------------------------------
         B.section("Buffs and debuffs", false)
@@ -1990,6 +2007,13 @@ local function buildSettings()
         B.under(numbers, function() return get("textMode") ~= "off" end,
             B.dropdown("textFormat", "Number format", "Totals, percentages, or both.",
                 defaultFor(unit, "textFormat"), { { "value", "12.3K" }, { "percent", "85%" }, { "both", "12.3K (85%)" } }))
+        B.slider("hpAlpha", "Health bar opacity", "How solid the health fill is: lower lets the frame art and the background show through.", defaultFor(unit, "hpAlpha"), 0.2, 1, 0.05)
+        B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor(unit, "mpAlpha"), 0.2, 1, 0.05)
+        B.pair({ "damageTrail", "Recent damage", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true },
+               (unit == "target" or unit == "focus") and { "damagePredict", "Preview spell damage", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true } or nil)
+
+        -- Health colour -------------------------------------------------------------------
+        B.section("Health colour", false)
         if isPet then   -- (the pet's own reaction colour flips around, so these two)
             B.dropdown("petColor", "Health colour", "Default: the bar as the game draws it (green). Or the same as your player frame's (your class colour, if that's what the player frame uses).", "player",
                 { { "plain", "Default" }, { "player", "Match the player frame" } })
@@ -2008,14 +2032,13 @@ local function buildSettings()
             end
         end
         B.fade(unit, setSetting, "As health drops, the health colour (whichever you picked above) shifts towards red, or through your own stops.")
-        B.slider("hpAlpha", "Health bar opacity", "How solid the health fill is: lower lets the frame art and the background show through.", defaultFor(unit, "hpAlpha"), 0.2, 1, 0.05)
-        B.slider("mpAlpha", "Power bar opacity", "How solid the mana, rage or energy fill is.", defaultFor(unit, "mpAlpha"), 0.2, 1, 0.05)
-        local shieldRow = B.pair({ "healPrediction", "Incoming heals", "Heals on their way to the unit, in green past the end of its health.", true },
-               { "absorbs", "Shields and heal absorbs", "Damage shields past the end of its health (and a glow at the end when they're more than the missing health), and healing absorbs eating back into it. Their looks are below.", true })
-        B.shields(shieldRow, unit, function(k, v) setSetting(unit, k, v) end, function() return { frames[unit] } end)
-        B.pair({ "damageTrail", "Recent damage", "When its health drops, the part just lost stays in red for a moment, then slides away, so you can see how big each hit was.", true },
-               (unit == "target" or unit == "focus") and { "damagePredict", "Preview spell damage", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true } or nil)
+
+        -- Incoming heals, Shields, Heal absorbs ---------------------------------------------
+        B.shields(unit, function(k, v) setSetting(unit, k, v) end, function() return { frames[unit] } end)
+
         if isPlayer then
+            -- Mana and spell costs (spell costs, the mana tick, druid mana) ----------------------
+            B.section("Mana and spell costs", false)
             local cost = B.check("costPredict", "Spell costs", "On your mana (or other power) bar: while you cast, the part the spell will use is shaded; when your power drops (any spell or ability, instants too), the part just spent stays lit where it was for a moment, then slides away.", true)
             B.under(cost, isOn("costPredict"),
                 B.slider("costShade", "Shading", "How the cost shows on the bar while you cast: lighter (right) or darker (left), and by how much. The trail of what was just spent always stays light.", 55, -100, 100, 5,
