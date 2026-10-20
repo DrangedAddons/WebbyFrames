@@ -3546,6 +3546,10 @@ function ns.applyFxPreview(f)
     f.previewing = nil
     f.hp:SetMinMaxValues(0, 100)
     f.hp:SetValue(60)
+    -- (the recent damage trail would read the drop to 60% as damage and paint it red: hidden for now,
+    -- back with the real values when the preview ends)
+    local t = f.hpTrail
+    if t then t.pending = false; t:SetScript("OnUpdate", nil); t:Hide() end
     pcall(updatePrediction, f)
     f.previewing = true
     if not f.predBars then return end

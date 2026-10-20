@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.32
+- Heal and shield previews: the recent damage trail no longer paints the drop to the preview's 60% health red. It's hidden while a preview is on.
+
 ## 1.16.31
 - Heal and shield previews on the live frame: Your heal, Others' heal, Shield and Heal absorb each have a Preview tickbox beside their colour. Tick any one, or any mix, and it shows on the frame itself (at 60% health), in the look you're setting, changing as you change it. Untick it, or close the settings, to go back. Replaces the all-in-one preview bar.
 
