@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.46
+- Channelled spells preview one hit at a time (a missile, a wave, a tick) instead of the whole cast: it moves down the health as each one lands, with the recent damage trail showing the hit that just did. Channelled heals the same.
+
 ## 1.16.45
 - The shield number follows each frame's Numbers setting, as the health number does: always shown, on mouseover, or never.
 

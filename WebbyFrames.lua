@@ -1513,10 +1513,10 @@ local function spellDamage(spell)
     return foundAmount, foundLine
 end
 
--- A channelled spell's whole damage or healing (kind: "damage" or "heal"), from its tooltip: one hit's
--- worth (as spellDamage reads it) times the hits the line describes: "3 waves", "every 1 sec for
--- 2 sec" (one more with "instantly"), "each second for 5 sec". "over 3 sec" is already the whole.
--- nil when the tooltip says none.
+-- One hit of a channelled spell's damage or healing (kind: "damage" or "heal"), from its tooltip: a
+-- missile, a wave, a tick (as spellDamage reads it; a total "over 3 sec" split into its ticks). Shown
+-- for the whole channel at the end of the health, so it moves down as each hit lands, the damage
+-- trail showing the one that just did. nil when the tooltip says none.
 function ns.channelAmount(spell, kind)
     local cache = ns.channelCache
     if not cache then cache = {}; ns.channelCache = cache end
@@ -1540,15 +1540,13 @@ function ns.channelAmount(spell, kind)
                 each = last and num(last)
             end
             if not each then return nil end
-            local hits = 1
-            local waves = lower:match("(%d+) waves")
-            local every, dur = lower:match("every ([%d%.]+) sec%a* for ([%d%.]+) sec")
-            local eachSec = lower:match("each second for ([%d%.]+) sec")
-            if waves then hits = tonumber(waves)
-            elseif every and tonumber(every) and tonumber(every) > 0 then
-                hits = math.floor(tonumber(dur) / tonumber(every) + 0.5) + (lower:find("instantly", 1, true) and 1 or 0)
-            elseif eachSec then hits = math.floor(tonumber(eachSec) + 0.5) end
-            return each * math.max(hits or 1, 1)
+            -- (a total "over 3 sec" is split into its ticks, one a second)
+            local over = lower:match("over ([%d%.]+) sec")
+            if over and not lower:find("each", 1, true) and not lower:find("every", 1, true) and not lower:find("wave", 1, true) then
+                local secs = tonumber(over)
+                if secs and secs >= 1 then each = each / math.floor(secs + 0.5) end
+            end
+            return each
         end)
         if ok and amount and amount > 0 then found = math.floor(amount + 0.5); break end
     end
@@ -1564,7 +1562,7 @@ local function updateDamagePrediction(f, spell, channel)
         pcall(function() hostile = UnitCanAttack("player", f.wfUnit) and true or false end)
         if hostile then
             local line
-            if channel then amount = ns.channelAmount(spell, "damage"); line = "the whole channel"
+            if channel then amount = ns.channelAmount(spell, "damage"); line = "one hit of the channel"
             else amount, line = spellDamage(spell) end
             f.dmgInfo = "spell " .. tostring(spell) .. ": " .. (amount and (amount .. " from \"" .. tostring(line) .. "\"") or "no damage found in its tooltip")
         end
@@ -1632,7 +1630,7 @@ local function flyDamage(spell)
 end
 
 -- Your own channelled heal (Penance): the game's incoming heals leave channels out, so while you
--- channel one, its whole healing (ns.channelAmount) is shaded after the incoming heals, on whoever
+-- channel one, its next hit's healing (ns.channelAmount) is shaded after the incoming heals, on whoever
 -- it's going to: your target when it's friendly, else you. Gone when the channel ends. Only where
 -- Incoming heals is on. spell nil: none.
 function ns.channelHeal(spell)
