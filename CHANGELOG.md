@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.44
+- Channelled spells get previews too: while you channel at an enemy (Arcane Missiles, Mind Flay, Penance), its whole damage is shaded off the end of the target's health (and focus, when that's the same mob). While you channel a heal (Penance), its whole healing shows after the incoming heals, on your target when it's friendly, else on you. The whole amount is read from the tooltip (each hit times the hits: waves, every second for so long). Gone when the channel ends.
+
 ## 1.16.43
 - Shield number on mouseover: with the mouse on the health bar, the shield's amount shows at the bar's right end, in the shield's colour (nothing when there's no shield). Whatever the Numbers setting.
 

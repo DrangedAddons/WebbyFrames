@@ -1511,7 +1511,50 @@ local function spellDamage(spell)
     return foundAmount, foundLine
 end
 
-local function updateDamagePrediction(f, spell)
+-- A channelled spell's whole damage or healing (kind: "damage" or "heal"), from its tooltip: one hit's
+-- worth (as spellDamage reads it) times the hits the line describes: "3 waves", "every 1 sec for
+-- 2 sec" (one more with "instantly"), "each second for 5 sec". "over 3 sec" is already the whole.
+-- nil when the tooltip says none.
+function ns.channelAmount(spell, kind)
+    local cache = ns.channelCache
+    if not cache then cache = {}; ns.channelCache = cache end
+    local key = tostring(spell) .. kind
+    if cache[key] ~= nil then return cache[key] or nil end
+    local found = false
+    local function num(s) return tonumber((s:gsub(",", ""))) end
+    for _, text in ipairs(tooltipLines(spell)) do
+        local ok, amount = pcall(function()
+            local lower = text:lower()
+            local at = lower:find(kind == "heal" and "heal" or "damage", 1, true)
+            if not at then return nil end
+            local before = lower:sub(1, at)
+            local each
+            local lo, hi
+            for a, b in before:gmatch("(%d[%d,]*) to (%d[%d,]*)") do lo, hi = a, b end
+            if lo then each = (num(lo) + num(hi)) / 2
+            else
+                local last
+                for a in before:gmatch("(%d[%d,]*)") do last = a end
+                each = last and num(last)
+            end
+            if not each then return nil end
+            local hits = 1
+            local waves = lower:match("(%d+) waves")
+            local every, dur = lower:match("every ([%d%.]+) sec%a* for ([%d%.]+) sec")
+            local eachSec = lower:match("each second for ([%d%.]+) sec")
+            if waves then hits = tonumber(waves)
+            elseif every and tonumber(every) and tonumber(every) > 0 then
+                hits = math.floor(tonumber(dur) / tonumber(every) + 0.5) + (lower:find("instantly", 1, true) and 1 or 0)
+            elseif eachSec then hits = math.floor(tonumber(eachSec) + 0.5) end
+            return each * math.max(hits or 1, 1)
+        end)
+        if ok and amount and amount > 0 then found = math.floor(amount + 0.5); break end
+    end
+    cache[key] = found
+    return found or nil
+end
+
+local function updateDamagePrediction(f, spell, channel)
     if not (f and f.hp) then return end
     local amount
     if spell and getSetting(f.baseUnit, "damagePredict") then
@@ -1519,7 +1562,8 @@ local function updateDamagePrediction(f, spell)
         pcall(function() hostile = UnitCanAttack("player", f.wfUnit) and true or false end)
         if hostile then
             local line
-            amount, line = spellDamage(spell)
+            if channel then amount = ns.channelAmount(spell, "damage"); line = "the whole channel"
+            else amount, line = spellDamage(spell) end
             f.dmgInfo = "spell " .. tostring(spell) .. ": " .. (amount and (amount .. " from \"" .. tostring(line) .. "\"") or "no damage found in its tooltip")
         end
     end
@@ -1583,6 +1627,45 @@ local function flyDamage(spell)
             if f and f.dmgFlying == token then landDamage(f) end
         end
     end)
+end
+
+-- Your own channelled heal (Penance): the game's incoming heals leave channels out, so while you
+-- channel one, its whole healing (ns.channelAmount) is shaded after the incoming heals, on whoever
+-- it's going to: your target when it's friendly, else you. Gone when the channel ends. Only where
+-- Incoming heals is on. spell nil: none.
+function ns.channelHeal(spell)
+    local who
+    if spell then
+        local friend = false
+        pcall(function() friend = UnitExists("target") and UnitCanAssist("player", "target") and true or false end)
+        who = friend and frames.target or frames.player
+    end
+    local amount = spell and ns.channelAmount(spell, "heal") or nil
+    for _, f in ipairs({ frames.player, frames.target }) do
+        local bar = f and f.chanHeal
+        if f == who and amount and f.healBar and getSetting(f.baseUnit, "healPrediction") then
+            if not bar then
+                bar = CreateFrame("StatusBar", nil, f.predClip)
+                bar:SetFrameLevel(f.predClip:GetFrameLevel() + 1)
+                bar:SetStatusBarTexture(PLAIN_FILL)
+                f.chanHeal = bar
+            end
+            local c = getSetting(f.baseUnit, "healColor")
+            if type(c) ~= "table" then c = { 0.1, 0.9, 0.3 } end
+            bar:SetStatusBarColor(0.4 + (c[1] or 0) * 0.6, 0.4 + (c[2] or 1) * 0.6, 0.4 + (c[3] or 0) * 0.6, 0.55)
+            local healTex = f.healBar:GetStatusBarTexture()
+            bar:ClearAllPoints()
+            bar:SetPoint("TOPLEFT", healTex, "TOPRIGHT")
+            bar:SetPoint("BOTTOMLEFT", healTex, "BOTTOMRIGHT")
+            bar:SetWidth(f.hp:GetWidth())
+            local max = value(UnitHealthMax, f.wfUnit)
+            if max then pcall(bar.SetMinMaxValues, bar, 0, max) end
+            pcall(bar.SetValue, bar, amount)
+            bar:Show()
+        elseif bar then
+            bar:Hide()
+        end
+    end
 end
 
 -- Runs only while a trail is waiting to catch up. A shown bar with no script costs nothing per frame.
@@ -4517,7 +4600,8 @@ local function createFrame(unit)
         f.mp:SetFrameLevel(mt:GetFrameLevel() + 1)       -- (the power fill draws over it)
         f.mpTrail = mt
         for _, e in ipairs({ "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP", "UNIT_SPELLCAST_FAILED",
-                             "UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_SUCCEEDED" }) do
+                             "UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_SUCCEEDED",
+                             "UNIT_SPELLCAST_CHANNEL_START", "UNIT_SPELLCAST_CHANNEL_STOP" }) do
             pcall(f.RegisterUnitEvent, f, e, "player")
         end
     end
@@ -4608,6 +4692,19 @@ local function createFrame(unit)
             local same = false
             pcall(function() same = UnitIsUnit("focus", "target") and true or false end)
             pcall(updateDamagePrediction, frames.focus, same and spellID or nil)
+        elseif event == "UNIT_SPELLCAST_CHANNEL_START" then
+            -- a channel (Arcane Missiles, Mind Flay, Penance): its whole damage on your target (and
+            -- focus when that's the same mob), or its whole healing on who it's going to, while it lasts
+            local _, _, spellID = ...
+            pcall(updateDamagePrediction, frames.target, spellID, true)
+            local same = false
+            pcall(function() same = UnitIsUnit("focus", "target") and true or false end)
+            pcall(updateDamagePrediction, frames.focus, same and spellID or nil, true)
+            pcall(ns.channelHeal, spellID)
+        elseif event == "UNIT_SPELLCAST_CHANNEL_STOP" then
+            pcall(updateDamagePrediction, frames.target, nil)
+            pcall(updateDamagePrediction, frames.focus, nil)
+            pcall(ns.channelHeal, nil)
         elseif event:find("^UNIT_SPELLCAST_") then
             -- (what a spell spent shows as the mana trail, when your power drops: updateManaTrail)
             -- any spell that went off (instants too): the five second rule, if it cost mana (Mana tick)
