@@ -2419,50 +2419,134 @@ local function newCastBar(f)
     return cb
 end
 
--- The cast bar fading out as a cast ends (Cast bar fade), instead of vanishing:
---   Fade: it fades away over the fade time.
---   Flash and fade: a finished cast fills the bar, a bright flash washes over it and dies down as the
---   bar fades; an interrupted one flashes red. (Blizzard's own bar fades with an animation we can't
---   read, so ours runs its own.)
+-- The cast bar going away as a cast ends (When a cast ends), instead of vanishing. It starts the moment
+-- the cast is over (ns.castEnded), holds a beat, then eases out over the fade time; a finished cast
+-- fills the bar first. The endings:
+--   Fade: just that.
+--   Flash: a bright wash over the bar, dying down.
+--   Blizzard glow: Blizzard's own cast-finished glow round the bar.
+--   Shine: a bright band sweeping across the bar.
+--   Sparkle burst: little stars bursting off the bar, spinning away.
+-- In the Flash colour (white to start with); an interrupted cast in the interrupted colour.
+-- (Blizzard's own bar fades with an animation we can't read, so ours runs its own.)
+
+-- Whether Blizzard's bar has finished its cast (it's still shown while it fades itself). Only after
+-- it's been seen casting: a client without these flags just fades from when the bar hides.
+function ns.castEnded(f, bar)
+    local live = bar.casting or bar.channeling or bar.reverseChanneling
+    if live then f.castLive, f.castFaded = true, nil; return false end
+    return f.castLive and true or false
+end
+
 function ns.castFadeStart(f)
     local cb = f.cb
     local box = cb and cb.box
     if not (box and box:IsShown()) or box.fading then return end
+    -- (this cast's ending has started: it plays once, and the bar stays gone until the next cast,
+    -- even while Blizzard's hidden bar is still fading itself)
+    f.castFaded = true
     local style = getSetting(f.baseUnit, "castFade") or "fade"
     if style == "off" then box:Hide(); return end
     local interrupted = f.castColor == CAST_COLORS.interrupted
-    box.fading = {
-        start = GetTime(),
-        len = math.max(0.1, tonumber(getSetting(f.baseUnit, "castFadeTime")) or 0.5),
-        flash = style == "flash",
-    }
+    local len = math.max(0.2, tonumber(getSetting(f.baseUnit, "castFadeTime")) or 0.5)
+    local fd = { start = GetTime(), len = len, hold = math.min(0.15, len * 0.3), style = style }
+    box.fading = fd
     box:SetAlpha(1)
     cb.spark:Hide()
-    if box.fading.flash then
-        if not interrupted then
-            -- (finished: the bar full)
-            local okM, _, max = pcall(cb.GetMinMaxValues, cb)
-            if okM then pcall(cb.SetValue, cb, max) end
-            cb.flash:SetVertexColor(1, 1, 1)
-        else
-            -- (interrupted: a flash in the interrupted colour, brightened)
-            local r, g, b = ns.castRGB(f.baseUnit, CAST_COLORS.interrupted)
-            cb.flash:SetVertexColor(math.min(1, r + 0.2), math.min(1, g + 0.15), math.min(1, b + 0.15))
-        end
+    -- (a finished cast: the bar full; a channel ends drained, and stays so)
+    if not interrupted and f.castColor ~= CAST_COLORS.channel then
+        local okM, _, max = pcall(cb.GetMinMaxValues, cb)
+        if okM then pcall(cb.SetValue, cb, max) end
+    end
+    -- the effect's colour
+    local r, g, b
+    if interrupted then
+        r, g, b = ns.castRGB(f.baseUnit, CAST_COLORS.interrupted)
+        r, g, b = math.min(1, r + 0.2), math.min(1, g + 0.15), math.min(1, b + 0.15)
+    else
+        local c = getSetting(f.baseUnit, "castFlashColor")
+        if type(c) == "table" then r, g, b = c[1] or 1, c[2] or 1, c[3] or 1 else r, g, b = 1, 1, 1 end
+    end
+    local h, w = cb:GetHeight() or 10, cb:GetWidth() or 150
+    if style == "flash" then
+        cb.flash:SetVertexColor(r, g, b)
         cb.flash:SetAlpha(0.85)
         cb.flash:Show()
+    elseif style == "glow" then
+        if not cb.glow then
+            cb.glow = cb.flash:GetParent():CreateTexture(nil, "OVERLAY", nil, 2)
+            if cb.glow:SetTexture("Interface\\CastingBar\\UI-CastingBar-Flash") == false then cb.glow:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark") end
+            cb.glow:SetBlendMode("ADD")
+        end
+        cb.glow:ClearAllPoints()
+        cb.glow:SetPoint("TOPLEFT", cb, "TOPLEFT", -h * 1.6, h * 1.4)
+        cb.glow:SetPoint("BOTTOMRIGHT", cb, "BOTTOMRIGHT", h * 1.6, -h * 1.4)
+        cb.glow:SetVertexColor(r, g, b)
+        cb.glow:SetAlpha(1)
+        cb.glow:Show()
+    elseif style == "shine" then
+        if not cb.shine then
+            cb.shine = cb.flash:GetParent():CreateTexture(nil, "OVERLAY", nil, 2)
+            cb.shine:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+            cb.shine:SetBlendMode("ADD")
+            cb.shine:AddMaskTexture(cb.boxMask)
+        end
+        cb.shine:SetSize(h * 3, h * 2.2)
+        cb.shine:SetVertexColor(r, g, b)
+        cb.shine:Show()
+    elseif style == "burst" then
+        cb.motes = cb.motes or {}
+        local parent = cb.flash:GetParent()
+        for i = 1, 12 do
+            local m = cb.motes[i]
+            if not m then
+                m = { tex = parent:CreateTexture(nil, "OVERLAY", nil, 3) }
+                m.tex:SetTexture("Interface\\Cooldown\\star4")
+                m.tex:SetBlendMode("ADD")
+                cb.motes[i] = m
+            end
+            -- along the bar, flying up or down and outwards, spinning
+            m.x = w * (0.1 + 0.8 * math.random())
+            local ang = math.random() * math.pi * 2
+            local speed = h * (2 + 3 * math.random())
+            m.vx, m.vy = math.cos(ang) * speed, math.sin(ang) * speed
+            m.size = h * (0.8 + 0.8 * math.random())
+            m.spin = (math.random() - 0.5) * 8
+            m.tex:SetVertexColor(r, g, b)
+            m.tex:Show()
+        end
     end
     box:SetScript("OnUpdate", function(self)
-        local fd = self.fading
-        if not fd then self:SetScript("OnUpdate", nil); return end
-        local t = (GetTime() - fd.start) / fd.len
+        local d = self.fading
+        if not d then self:SetScript("OnUpdate", nil); return end
+        local since = GetTime() - d.start
+        local t = since / d.len
         if t >= 1 then ns.castFadeStop(f); self:Hide(); return end
-        -- (the flash dies down in the first third; the bar itself eases out over the whole time)
-        if fd.flash then cb.flash:SetAlpha(0.85 * math.max(0, 1 - t * 3)) end
-        self:SetAlpha(1 - t * t)
+        -- the bar: holds a beat, then eases out smoothly
+        local u = math.max(0, (since - d.hold) / (d.len - d.hold))
+        self:SetAlpha(0.5 + 0.5 * math.cos(math.pi * u))
+        if d.style == "flash" then
+            cb.flash:SetAlpha(0.85 * math.max(0, 1 - t * 2.5) ^ 2)
+        elseif d.style == "glow" then
+            -- (a quick swell, then dying down)
+            cb.glow:SetAlpha(t < 0.15 and (0.6 + t / 0.15 * 0.4) or math.max(0, 1 - (t - 0.15) / 0.65))
+        elseif d.style == "shine" then
+            local s = math.min(1, t / 0.7)
+            cb.shine:ClearAllPoints()
+            cb.shine:SetPoint("CENTER", cb, "LEFT", s * cb:GetWidth(), 0)
+            cb.shine:SetAlpha(math.sin(math.pi * s) * 0.95)
+        elseif d.style == "burst" then
+            for _, m in ipairs(cb.motes) do
+                m.tex:ClearAllPoints()
+                m.tex:SetPoint("CENTER", cb, "LEFT", m.x + m.vx * since, m.vy * since)
+                local s = m.size * (1 - 0.6 * t)
+                m.tex:SetSize(s, s)
+                m.tex:SetAlpha((t < 0.1 and t / 0.1 or 1) * (1 - t))
+                pcall(m.tex.SetRotation, m.tex, m.spin * since)
+            end
+        end
     end)
 end
-
 -- (a fade cut short: a new cast, the option turned off, the frame shows someone else)
 function ns.castFadeStop(f)
     local cb = f.cb
@@ -2471,6 +2555,9 @@ function ns.castFadeStop(f)
     box.fading = nil
     box:SetScript("OnUpdate", nil)
     cb.flash:Hide()
+    if cb.glow then cb.glow:Hide() end
+    if cb.shine then cb.shine:Hide() end
+    for _, m in ipairs(cb.motes or {}) do m.tex:Hide() end
 end
 
 local function placeCastbar(f)
@@ -2572,8 +2659,18 @@ local function mirrorCastbar(f)
         f.castColor, f.castText, f.castIconTex = nil, nil, nil
         return
     end
-    -- (a new cast while the last one was still fading: back to the live bar)
-    if box.fading then ns.castFadeStop(f) end
+    -- the cast is over (Blizzard's bar still shown while it fades itself): ours runs its own ending
+    local okE, ended = pcall(ns.castEnded, f, bar)
+    ended = okE and ended
+    -- (its ending already played: stay gone until a new cast starts)
+    if ended and f.castFaded and not box.fading then
+        if box:IsShown() then box:Hide() end
+        return
+    end
+    if box.fading then
+        if ended then return end
+        ns.castFadeStop(f)        -- (a new cast while the last one was still fading: back to the live bar)
+    end
     pcall(cb.SetMinMaxValues, cb, bar:GetMinMaxValues())
     pcall(cb.SetValue, cb, bar:GetValue())
     box:SetAlpha(bar:GetAlpha())
@@ -2614,6 +2711,8 @@ local function mirrorCastbar(f)
         elseif okI and icon ~= f.castIconTex then f.castIconTex = icon; pcall(cb.icon.SetTexture, cb.icon, icon) end
     end
     if not box:IsShown() then box:Show() end
+    -- (after the colour above, so an interrupted cast is known as one)
+    if ended then pcall(ns.castFadeStart, f) end
 end
 
 local function adoptCastbar(f, barName)
@@ -4667,7 +4766,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
-                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "healPrediction", "absorbs", "damageTrail", "damagePredict",
+                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "healPrediction", "absorbs", "damageTrail", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }

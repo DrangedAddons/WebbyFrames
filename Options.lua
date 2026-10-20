@@ -1959,12 +1959,16 @@ local function buildSettings()
                        { "castIcon", "Spell icon", "At the bar's left end.", true }),
                 B.dropdown("castTexture", "Cast bar texture", "The cast bar's fill. Default: the same as the frame's health bar. SharedMedia textures are listed too.", "default", textureChoices),
                 B.check("castSpark", "Spark", "A bright spark on the edge of the fill as the cast runs.", true))
-            local fade = B.dropdown("castFade", "When a cast ends", "Fade: the bar fades away.\nFlash and fade: a finished cast fills the bar and flashes bright as it fades; an interrupted one flashes red.\nOff: it goes straight away.", "fade",
-                { { "fade", "Fade" }, { "flash", "Flash and fade" }, { "off", "Off" } })
+            local fade = B.dropdown("castFade", "When a cast ends", "How the bar goes when a cast ends. Every one but Off holds a beat and fades smoothly; a finished cast fills the bar first.\n\nFade: just that.\nFlash: a bright wash over the bar.\nBlizzard glow: Blizzard's own cast-finished glow round the bar.\nShine: a bright band sweeping across it.\nSparkle burst: little stars bursting off it.\nOff: it goes straight away.\n\nAn interrupted cast shows in the interrupted colour.", "fade",
+                { { "fade", "Fade" }, { "flash", "Flash" }, { "glow", "Blizzard glow" }, { "shine", "Shine" }, { "burst", "Sparkle burst" }, { "off", "Off" } })
             B.under(cast, castOn, fade)
             B.under(fade, function() return castOn() and get("castFade") ~= "off" end,
                 B.slider("castFadeTime", "Fade time", "How long it takes to fade away.", 0.5, 0.2, 1.5, 0.1,
                     function(v) return string.format("%.1f s", v) end))
+            B.under(fade, function() local s = get("castFade"); return castOn() and s ~= "off" and s ~= "fade" end,
+                B.swatch("Flash colour", function() local c = get("castFlashColor"); return type(c) == "table" and c or { 1, 1, 1 } end,
+                    function(r, g, b) setSetting(unit, "castFlashColor", { r, g, b }) end,
+                    "The colour of the flash, glow, shine or sparkles as a cast finishes (an interrupted one uses the interrupted colour). Click to change it."))
             -- each cast type's colour (unpicked: the usual yellow, green, grey and red)
             local function castSwatch(key, text, tip, d)
                 return B.swatch(text, function() local c = get(key); return type(c) == "table" and c or d end,
