@@ -4186,7 +4186,10 @@ local function createFrame(unit)
             end
         elseif event == "PLAYER_REGEN_DISABLED" then self.combatFlag = true; updateIndicators(self)
         elseif event == "PLAYER_REGEN_ENABLED" then self.combatFlag = false; updateIndicators(self)
-        elseif event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FLAGS" then updateIndicators(self)
+        elseif event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FLAGS" then
+            updateIndicators(self)
+            -- (a mob someone else tagged turns grey: its held health colour is read again)
+            if event == "UNIT_FLAGS" then self.colorHold = nil; ns.markPaint(self, "health") end
         elseif event:find("^UNIT_THREAT") then updateThreat(self)
         elseif event == "GROUP_ROSTER_UPDATE" or event == "PARTY_LEADER_CHANGED" then
             updateLeader(self)

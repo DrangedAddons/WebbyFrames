@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.16.27
+- Health colour: a mob someone else tags turns grey again on your target and focus frames (the held colour is read again when its flags change).
+
 ## 1.16.26
 - Cast bars: the ending starts the moment a cast is over, holds a beat and eases out smoothly, and plays once (Fade used to flicker). More endings: Flash, Blizzard glow, Shine and Sparkle burst, in a Flash colour of your own; an interrupted cast in the interrupted colour. A finished channel fades from where it ended.
 
