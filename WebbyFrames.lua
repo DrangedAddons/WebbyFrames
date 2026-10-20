@@ -1079,7 +1079,7 @@ function ns.barGlow(bar, mode, r, g, b, strength)
     if mode == "shimmer" then fx.band:Show() else fx.band:Hide() end
     -- snow: the flakes (moved by barGlowSnow, every frame while shown)
     if mode == "snow" then
-        for i = 1, 24 do
+        for i = 1, 48 do
             local m = fx.motes[i]
             if not m then
                 m = { tex = fx:CreateTexture(nil, "OVERLAY", nil, 2) }
@@ -1102,15 +1102,15 @@ function ns.barGlow(bar, mode, r, g, b, strength)
 end
 
 -- One frame of the shimmer or the snowglobe.
--- Shimmer: the spark sweeps left to right across the fill in 1.2s, then a rest. The texture shows
+-- Shimmer: the spark sweeps left to right across the fill in 0.6s, then a half-second rest. The texture shows
 -- half its width across the fill, so the one spark in it crosses from just off the left end to
 -- just off the right (the copies either side of it stay out of view).
--- Snowglobe: the flakes fall, swaying, and wrap round to the top; a shake throws them up and
--- sideways, and they slow back down to the steady fall.
+-- Snowglobe: the flakes float, sinking slowly as they bob and drift, and wrap round to the top; a
+-- shake throws them up and sideways, and they slow back down to floating.
 function ns.barGlowSnow(fx, bar, dt)
     if fx.mode == "shimmer" then
-        local t = GetTime() % 2.2
-        local p = t < 1.2 and (-0.4 + 1.8 * t / 1.2) or -0.4
+        local t = GetTime() % 1.1
+        local p = t < 0.6 and (-0.4 + 1.8 * t / 0.6) or -0.4
         local a = 0.5 - 0.5 * p
         fx.band:SetTexCoord(a, a + 0.5, 0, 1)
         return
@@ -1128,11 +1128,11 @@ function ns.barGlowSnow(fx, bar, dt)
     end
     local damp = math.max(0, 1 - 2.2 * dt)
     for _, m in ipairs(fx.motes) do
-        -- back towards the steady fall
-        m.vy = (m.vy + h * 1.1) * damp - h * 1.1
+        -- back towards floating: a slow sink, bobbing up and down and drifting side to side
+        m.vy = (m.vy + h * 0.12) * damp - h * 0.12
         m.vx = m.vx * damp
-        m.x = m.x + (m.vx + math.sin(now * 2 + m.phase) * h * 0.6) * dt
-        m.y = m.y + m.vy * dt
+        m.x = m.x + (m.vx + math.sin(now * 0.9 + m.phase) * h * 0.7) * dt
+        m.y = m.y + (m.vy + math.cos(now * 1.3 + m.phase * 1.7) * h * 0.5) * dt
         if m.y < -h * 0.7 then m.y = h * 0.7; m.x = math.random() * w end
         if m.y > h * 0.9 then m.y = h * 0.9; m.vy = -m.vy * 0.4 end
         if m.x < 0 then m.x = m.x + w elseif m.x > w then m.x = m.x - w end

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.36
+- Shimmer: twice as fast, a sweep about every second.
+- Snowglobe: twice the flakes, and they float now (bobbing and drifting, sinking slowly) instead of falling.
+
 ## 1.16.35
 - Glows look clearly different from each other on a narrow heal or shield. Shimmer: a band of light sweeps end to end across the heal or shield itself, at any width, then rests. Snowglobe: the flakes fall and sway visibly, at a steady brightness. Soft pulse: fades fully in and out, a little faster.
 
