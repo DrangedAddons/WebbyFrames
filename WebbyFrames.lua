@@ -3865,6 +3865,9 @@ local function updateAll(f)
     f.colorHold = nil
     safely(updateInfo, f); safely(updateHealth, f); safely(updatePower, f); safely(updateIndicators, f)
     safely(updateThreat, f); safely(updateAuras, f); safely(Extras.update, f)
+    -- a teleport repaints the frame from here (PLAYER_ENTERING_WORLD). The resting glow is in
+    -- updateIndicators; the Zzz is not, so it stayed off until a reload.
+    if f.updateRest then safely(f.updateRest) end
 end
 
 -- The settings' Preview tickboxes: one effect (heal: an incoming heal, absorb: a shield) shown on the
@@ -4594,9 +4597,27 @@ local function createFrame(unit)
             anim = ag
         end)
         f.updateRest = function()
-            local resting = IsResting()
-            rest:SetShown(resting and true or false)
-            if anim then if resting then anim:Play() else anim:Stop() end end
+            local resting = false
+            pcall(function() resting = IsResting() and true or false end)
+            rest:SetShown(resting)
+            if not anim then return end
+            if not resting then
+                rest:SetScript("OnUpdate", nil)
+                anim:Stop()
+                return
+            end
+            -- Play() while a teleport's loading screen has the UI hidden does nothing, and the
+            -- flipbook then sits on the whole sheet, which does not read as a Zzz. Start it once
+            -- the frame is on screen. Leave a running one alone (updateAll calls this often).
+            if rest:IsVisible() then
+                if not anim:IsPlaying() then anim:Play() end
+            else
+                rest:SetScript("OnUpdate", function(self)
+                    if not self:IsVisible() then return end
+                    self:SetScript("OnUpdate", nil)
+                    if anim and self:IsShown() then anim:Stop(); anim:Play() end
+                end)
+            end
         end
         f:RegisterEvent("PLAYER_UPDATE_RESTING")
     end
@@ -4697,6 +4718,10 @@ local function createFrame(unit)
             -- (a snowglobe glow on the shield or the heals: shaken)
             if event == "UNIT_ABSORB_AMOUNT_CHANGED" then ns.barGlowShake(self.absorbBar); ns.barGlowShake(self.absorbBack)
             elseif event == "UNIT_HEAL_PREDICTION" then ns.barGlowShake(self.healBar) end
+        elseif event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
+            -- the rest flag can land after the event that brought you into the city
+            if self.updateRest then C_Timer.After(0.5, function() if self.updateRest then self.updateRest() end end) end
+            ns.markPaint(self, "all")
         else ns.markPaint(self, "all") end
     end)
     -- smooth energy / rage / focus ticks on your own frame (every change: the plain power update would
