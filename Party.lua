@@ -475,22 +475,11 @@ function Party.paintSample(f)
     end)
     pcall(function() if f.hpText:IsShown() then f.hpText:SetFormattedText("%d%%", s.hp * 100) end end)
     pcall(function() if f.mpText:IsShown() then f.mpText:SetFormattedText("%d%%", s.mp * 100) end end)
-    -- their health colour, as the Health colour says (the frame underneath is you, so its own colour
-    -- would be your class's): class colour, dark, your own, or by health; Default stays as drawn
-    local mode = getSetting("party", "colorMode")
+    -- Other players stay their class colour. The frame underneath is you, so paint the sample's class
+    -- over your own. Health colour and the fade to red do not apply.
+    local c = (RAID_CLASS_COLORS or {})[s.class]
     local r, g, b
-    if mode == "class" or mode == "smart" or mode == "reaction" then
-        local c = (RAID_CLASS_COLORS or {})[s.class]
-        if c then r, g, b = c.r, c.g, c.b end
-    elseif mode == "dark" then r, g, b = 0.2, 0.2, 0.22
-    elseif mode == "custom" then
-        local c = getSetting("party", "healthColorRGB")
-        if type(c) == "table" then r, g, b = c[1], c[2], c[3] else r, g, b = 0.15, 0.75, 0.25 end
-    elseif mode == "gradient" then
-        local h = math.max(0, math.min(1, s.hp))
-        if h > 0.5 then local k = (h - 0.5) * 2; r, g, b = 0.95 - 0.8 * k, 0.82 + 0.03 * k, 0.1 + 0.15 * k
-        else local k = h * 2; r, g, b = 0.9 + 0.05 * k, 0.12 + 0.7 * k, 0.1 end
-    end
+    if c then r, g, b = c.r, c.g, c.b end
     if r then
         local tex = f.hp:GetStatusBarTexture()
         f.hp:SetStatusBarColor(r, g, b, 1)

@@ -574,6 +574,7 @@ Opt.SEARCH_WORDS = {
     damageTrailDelay = "recent damage trail wait linger", damageTrailAlpha = "recent damage trail transparent opacity alpha",
     damagePredict = "spell damage preview", costPredict = "mana cost", costShade = "mana cost", manaTick = "mp5 regen spark five second rule 5sr",
     manaTickSize = "mana tick mp5 spark", manaTickSparkle = "mana tick mp5 star", manaTickStar = "mana tick mp5 star shape", costTexture = "mana cost statusbar", costTrailTexture = "mana cost spent statusbar",
+    costGlow = "mana cost glow pulse shimmer snowglobe blizzard", costGlowAlpha = "mana cost glow strength",
     threatOn = "aggro tank", threatShow = "aggro tank", threatStyle = "aggro tank percent", threatColors = "aggro tank color",
     dispelGlow = "cleanse decurse magic curse poison disease debuff", dispelWho = "cleanse decurse debuff",
     rpDispelStyle = "cleanse decurse debuff", rpDispelIcon = "cleanse decurse magic curse poison disease debuff",
@@ -1569,38 +1570,9 @@ local function buildSettings()
             B.slider("auraStack", "Stack count size", "How big the stack count is, as a share of the icon.", 50, 30, 90, 5,
                 function(v) return string.format("%d%%", math.floor(v + 0.5)) end)
         end
-        -- Fade to red with its style and custom stops. read: whose settings to show; set(unit, key, value).
-        -- Fade to red, with its colours and (only while those are your own) the three stops; each part
-        -- shows only while what it depends on is on. read: whose settings to show; set(unit, key, value).
-        function B.fade(read, set, tip)
-            local fade = B.check("healthFade", "Fade to red as health drops", tip, false)
-            local function fadeOn() return getSetting(read, "healthFade") and true or false end
-            local style = B.dropdown("fadeStyle", "Fade colours", "Automatic: the colour turns to red round the colour wheel (shamans, mages and warlocks each have their own route), fully red from 25% health.\n\nCustom: up to three colour stops, each at a health % you choose.", "auto",
-                { { "auto", "Automatic" }, { "custom", "Custom" } })
-            B.under(fade, fadeOn, style)
-            B.showIf(fadeOn, style)
-            local function custom() return fadeOn() and getSetting(read, "fadeStyle") == "custom" end
-            Opt.predNotes[custom] = "Needs Fade to red on, with Fade colours set to Custom."
-            local pctText = function(v) v = math.floor(v + 0.5); return v <= 0 and "Off" or string.format("%d%%", v) end
-            local inits = { B.check("fadeBlend", "Blend between stops", "On: the colour blends from one stop to the next. Off: the bar changes colour right at each stop.", true) }
-            local names = { "First", "Second", "Third" }
-            for i = 1, 3 do
-                inits[#inits + 1] = B.slider("fade" .. i .. "Pct", names[i] .. " stop at", "The health % at which the bar reaches this stop's colour. 0 turns the stop off.",
-                    DEFAULT_SETTINGS["fade" .. i .. "Pct"], 0, 100, 5, pctText)
-            end
-            B.under(style, custom, unpack(inits))
-            B.showIf(custom, unpack(inits))
-            -- (Blizzard's button rows error when made to depend on another setting, so the colour buttons
-            -- are only shown / hidden, not indented)
-            for i = 1, 3 do
-                local key = "fade" .. i .. "Color"
-                local sw = B.swatch(names[i] .. " stop colour", function()
-                    local c = getSetting(read, key)
-                    return type(c) == "table" and c or { 1, 1, 1 }
-                end, function(r, g, b) set(read, key, { r, g, b }) end,
-                    "The bar's colour at the " .. names[i]:lower() .. " stop. Click to change it.")
-                B.showIf(custom, sw)
-            end
+        -- Fade to red: one switch. The curve is fixed (yellow, orange, red).
+        function B.fade(_, _, tip)
+            B.check("healthFade", "Fade to red as health drops", tip, false)
         end
         return B
     end
@@ -1729,7 +1701,7 @@ local function buildSettings()
         end, function(r, g, b) setAll(nil, "npcColorRGB", { r, g, b }) end, "The health colour for hostile NPCs on every frame. Click to change it.")
         B.under(colour, byReaction, npc)
         B.under(npc, function() return byReaction() and getSetting("target", "npcColor") == "custom" end, npcCustom)
-        B.fade("player", setAll, "As health drops, each frame's health colour shifts towards red (or through your own stops).")
+        B.fade("player", setAll, "As health drops, the bar keeps its colour until 66%, then blends through yellow, orange at 33% and red at 1%. Other players stay their class colour.")
 
         B.shields("player", function(k, v) setAll(nil, k, v) end, function()
             -- (every frame)
@@ -1880,7 +1852,7 @@ local function buildSettings()
         B.showIf(both(raid, function() local m = get("rpHealthColor"); return m ~= "dark" and m ~= "gradient" end),
             B.slider("rpMissingDark", "Missing health shade", "How much darker the missing part of the bar is than the health.", defaultFor("party", "rpMissingDark"), 0, 100, 5, pct))
         local fadeFrom = #B.page.rows
-        B.fade("party", setSetting, "As health drops, the health colour shifts towards red, or through your own stops.")
+        B.fade("party", setSetting, "As health drops, the bar keeps its colour until 66%, then blends through yellow, orange at 33% and red at 1%. Other players stay their class colour.")
         -- (By health already is a fade: Fade to red only for the other colours)
         B.showIf(both(portrait, function() return get("colorMode") ~= "gradient" end), unpack(B.page.rows, fadeFrom + 1))
         B.showIf(raid,
@@ -2058,7 +2030,7 @@ local function buildSettings()
                 B.under(npc, both(byReaction, function() return get("npcColor") == "custom" end), npcCustom)
             end
         end
-        B.fade(unit, setSetting, "As health drops, the health colour (whichever you picked above) shifts towards red, or through your own stops.")
+        B.fade(unit, setSetting, "As health drops, the bar keeps its colour until 66%, then blends through yellow, orange at 33% and red at 1%. Other players stay their class colour.")
 
         -- Incoming heals, Shields -----------------------------------------------------------
         B.shields(unit, function(k, v) setSetting(unit, k, v) end, function() return { frames[unit] } end)
@@ -2083,7 +2055,11 @@ local function buildSettings()
                 B.dropdown("costTexture", "Cost texture", "The fill the cost shows in while you cast. Default: your power bar's own. SharedMedia textures are listed too.", "default", textureChoices))
             B.under(cost, function() return get("costPredict") and shade() > 0 end,
                 B.swatch("Cost colour", colourOf("costColor"), function(r, g, b) setSetting(unit, "costColor", { r, g, b }) end,
-                    "The colour the cost lights up in while you cast (with Shading set lighter). Click to change it."))
+                    "The colour of the cost while you cast (with Shading set lighter). A chosen texture is tinted by it. Click to change it."))
+            B.under(cost, shown,
+                B.dropdown("costGlow", "Glow", "A glow on the cost while you cast, in its colour.\n\n" .. Opt.GLOW_TIP, "off", Opt.GLOW_CHOICES))
+            local costGlowStrength = B.slider("costGlowAlpha", "Glow strength", "How bright the cost's glow is.", 0.6, 0.1, 1, 0.05)
+            B.showIf(function() return get("costPredict") and shade() ~= 0 and (get("costGlow") or "off") ~= "off" end, costGlowStrength)
             B.under(cost, shown,
                 B.dropdown("costTrailTexture", "Trail texture", "The fill of the trail left by what a spell just used. Default: your power bar's own. SharedMedia textures are listed too.", "default", textureChoices))
             B.under(cost, shown,

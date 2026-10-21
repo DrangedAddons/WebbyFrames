@@ -81,11 +81,6 @@ local DEFAULT_SETTINGS = {
     threatColors = "gradient",  -- "gradient" (green to red) or "blizzard"
     -- health bar colour: "smart" (class colour for players, reaction colour for NPCs), "class", "reaction" or "plain"
     colorMode = "smart",
-    -- fade to red: "auto" (class-aware) or "custom" (up to three stops: health % and colour, 0% = off)
-    fadeStyle = "auto", fadeBlend = true,
-    fade1Pct = 60, fade1Color = { 0.93, 0.93, 0.20 },
-    fade2Pct = 35, fade2Color = { 0.96, 0.55, 0.10 },
-    fade3Pct = 20, fade3Color = { 0.89, 0.19, 0.19 },
     npcColor = "reaction",   -- hostile NPCs: "reaction" (red), "green" or "custom" (npcColorRGB = { r, g, b })
     -- buffs and debuffs (off unless a frame's defaults turn them on)
     auraBuffs = false, auraDebuffs = false, auraMine = false,
@@ -137,6 +132,7 @@ local DEFAULT_SETTINGS = {
     manaTick = true,         -- player: a light crossing the mana bar for the five second rule
     manaTickSparkle = true, manaTickTrail = true, manaTickSize = 100,
     costShade = 55,          -- player: how much lighter (above 0) or darker (below 0) the cost shows
+    costGlow = "off", costGlowAlpha = 0.6,   -- player: glow on the cost while you cast (pulse / shimmer / snow / blizzard)
     cornerStyle = "retail",  -- player: the corner accent's art, Retail's or Forever's own
     petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (Default: as drawn)
     petHappy = "corner",     -- hunter pet happiness: "corner" (over the corner accent), "badge" (in the level circle) or "off"
@@ -480,6 +476,13 @@ end
 
 local PLAYER_AS_FRAME = { wfUnit = "player", baseUnit = "player" }
 
+-- Another player, friendly or hostile. Not you. Their bar stays their class colour.
+local function otherPlayer(u)
+    if plain(UnitIsPlayer, u) ~= true then return false end
+    if plain(UnitIsUnit, u, "player") then return false end
+    return true
+end
+
 local function healthColor(f)
     local u, base = f.wfUnit, f.baseUnit
     local r, g, b
@@ -493,6 +496,9 @@ local function healthColor(f)
         if getSetting("pet", "petColor") == "player" then return healthColor(PLAYER_AS_FRAME) end
         return nil
     end
+
+    -- Other players, friendly or hostile: class colour only. Health colour and the fade would paint over it.
+    if otherPlayer(u) then return classColorOf(u) end
 
     local mode = getSetting(base, "colorMode")
     if mode == "dark" then return 0.2, 0.2, 0.22 end      -- Dark: a flat dark bar (EllesmereUI's dark mode)
@@ -681,59 +687,17 @@ local function applyFont(f)
     end
 end
 
--- Health colour fade (like EllesmereUI): the colour is chosen by a curve the GAME evaluates from the
--- unit's health percent, so it works with protected values; the result is only ever passed to a setter.
--- The colour turns round the colour wheel to red the short way, staying saturated (no grey middle):
--- green passes yellow and orange like Blizzard's bars, blue goes by purple and pink, and white (priests)
--- just warms up to red. Full colour at full health, red from FADE_RED_AT down.
+-- Health colour fade: the colour is chosen by a curve the GAME evaluates from the unit's health
+-- percent, so it works with protected values; the result is only ever passed to a setter. Above 66%
+-- the bar keeps its own colour, then a smooth blend: yellow at 66%, orange at 33%, red at 1% and
+-- below. Other players do not fade: their bar stays their class colour (see otherPlayer).
+local FADE_YELLOW = { 0.95, 0.90, 0.15 }
+local FADE_ORANGE = { 0.96, 0.55, 0.10 }
 local FADE_RED    = { 0.89, 0.19, 0.19 }
-local FADE_RED_AT = 0.25
 local fadeCurves = {}
-local fadeMemo = {}          -- unit -> last custom-fade inputs and the curve they built
 
--- The blue and purple classes sit close together on the colour wheel, so going round it a mage would pass
--- through shaman blue. They get their own routes to red instead, kept apart by lightness as well as hue:
--- shaman stays dark, mage stays light and pastel, warlock stays a bright violet. (Stops between the
--- class colour at full health and red at FADE_RED_AT, evenly spaced.)
-local FADE_ROUTES = {
-    SHAMAN  = { { 0.08, 0.30, 0.74 }, { 0.32, 0.16, 0.58 }, { 0.58, 0.10, 0.36 }, { 0.76, 0.12, 0.22 } },
-    MAGE    = { { 0.52, 0.80, 0.96 }, { 0.78, 0.72, 0.94 }, { 0.98, 0.64, 0.54 }, { 0.96, 0.42, 0.36 } },   -- (coral, not paladin pink)
-    WARLOCK = { { 0.66, 0.46, 0.94 }, { 0.80, 0.36, 0.86 }, { 0.90, 0.28, 0.58 }, { 0.92, 0.22, 0.34 } },
-}
-
--- The class whose colour this is (the bar's colour is a class colour when it's coloured by class)
-local function fadeClassOf(r, g, b)
-    local found
-    pcall(function()
-        for class, c in pairs(RAID_CLASS_COLORS or {}) do
-            if math.abs(c.r - r) < 0.01 and math.abs(c.g - g) < 0.01 and math.abs(c.b - b) < 0.01 then found = class; return end
-        end
-    end)
-    return found
-end
-
-local function toHSV(r, g, b)
-    local mx, mn = math.max(r, g, b), math.min(r, g, b)
-    local d = mx - mn
-    local h = 0
-    if d > 0 then
-        if mx == r then h = ((g - b) / d) % 6 elseif mx == g then h = (b - r) / d + 2 else h = (r - g) / d + 4 end
-        h = h * 60
-    end
-    return h, (mx > 0) and d / mx or 0, mx
-end
-
-local function fromHSV(h, s, v)
-    local c = v * s
-    local x = c * (1 - math.abs((h / 60) % 2 - 1))
-    local m = v - c
-    local r, g, b
-    if h < 60 then r, g, b = c, x, 0 elseif h < 120 then r, g, b = x, c, 0 elseif h < 180 then r, g, b = 0, c, x
-    elseif h < 240 then r, g, b = 0, x, c elseif h < 300 then r, g, b = x, 0, c else r, g, b = c, 0, x end
-    return r + m, g + m, b + m
-end
-
-local function getFadeCurve(r, g, b)
+local function getHealthFadeCurve(r, g, b)
+    r, g, b = r or 0.1, g or 0.8, b or 0.1
     local key = string.format("%.2f:%.2f:%.2f", r, g, b)
     local c = fadeCurves[key]
     if c ~= nil then return c or nil end
@@ -742,98 +706,20 @@ local function getFadeCurve(r, g, b)
         if not (C_CurveUtil and C_CurveUtil.CreateColorCurve and CreateColor) then return end
         local curve = C_CurveUtil.CreateColorCurve()
         pcall(function() curve:SetType(Enum.LuaCurveType.Linear) end)
-        local route = FADE_ROUTES[fadeClassOf(r, g, b) or ""]
-        if route then
-            curve:AddPoint(0, CreateColor(FADE_RED[1], FADE_RED[2], FADE_RED[3], 1))
-            curve:AddPoint(FADE_RED_AT, CreateColor(FADE_RED[1], FADE_RED[2], FADE_RED[3], 1))
-            local n = #route + 1
-            for i, s in ipairs(route) do
-                curve:AddPoint(1 - (i / n) * (1 - FADE_RED_AT), CreateColor(s[1], s[2], s[3], 1))
-            end
-            curve:AddPoint(1, CreateColor(r, g, b, 1))
-            fadeCurves[key] = curve
-            return
-        end
-        local h1, s1, v1 = toHSV(r, g, b)
-        local h2, s2, v2 = toHSV(FADE_RED[1], FADE_RED[2], FADE_RED[3])
-        if s1 < 0.05 then h1 = h2 end               -- a grey or white has no hue of its own: just add red
-        local dh = (h2 - h1 + 540) % 360 - 180       -- the short way round
         curve:AddPoint(0, CreateColor(FADE_RED[1], FADE_RED[2], FADE_RED[3], 1))
-        local steps = 6
-        for i = 0, steps do
-            local p = i / steps                       -- 0 = your colour (full health), 1 = red
-            local hp = 1 - p * (1 - FADE_RED_AT)
-            local cr, cg, cb = fromHSV((h1 + dh * p) % 360, s1 + (s2 - s1) * p, v1 + (v2 - v1) * p)
-            curve:AddPoint(hp, CreateColor(cr, cg, cb, 1))
-        end
+        curve:AddPoint(0.01, CreateColor(FADE_RED[1], FADE_RED[2], FADE_RED[3], 1))
+        curve:AddPoint(0.33, CreateColor(FADE_ORANGE[1], FADE_ORANGE[2], FADE_ORANGE[3], 1))
+        curve:AddPoint(0.66, CreateColor(FADE_YELLOW[1], FADE_YELLOW[2], FADE_YELLOW[3], 1))
+        curve:AddPoint(1, CreateColor(r, g, b, 1))
         fadeCurves[key] = curve
     end)
     return fadeCurves[key] or nil
 end
 
--- Custom fade: up to three stops (fade1..3Pct, 0 = off, and fade1..3Color). Above the first stop the bar
--- keeps its colour; with fadeBlend the colours blend from one stop to the next, without it the bar
--- switches colour right at each stop. Below the last stop it stays that stop's colour.
-local function getCustomFadeCurve(unit, r, g, b)
-    local p1, c1 = getSetting(unit, "fade1Pct"), getSetting(unit, "fade1Color")
-    local p2, c2 = getSetting(unit, "fade2Pct"), getSetting(unit, "fade2Color")
-    local p3, c3 = getSetting(unit, "fade3Pct"), getSetting(unit, "fade3Color")
-    local blend = getSetting(unit, "fadeBlend") and true or false
-    local prev = fadeMemo[unit]
-    if prev and prev[1] == blend and prev[2] == r and prev[3] == g and prev[4] == b
-        and prev[5] == p1 and prev[6] == c1 and prev[7] == p2 and prev[8] == c2
-        and prev[9] == p3 and prev[10] == c3 then
-        return prev[11]
-    end
-    local stops = {}
-    local function add(pct, col)
-        if type(pct) == "number" and pct > 0 and type(col) == "table" then
-            stops[#stops + 1] = { math.min(pct, 100) / 100, col[1] or 1, col[2] or 1, col[3] or 1 }
-        end
-    end
-    add(p1, c1); add(p2, c2); add(p3, c3)
-    local curve
-    if #stops > 0 then
-        table.sort(stops, function(a, z) return a[1] > z[1] end)
-        local parts = { blend and "b" or "s", string.format("%.2f:%.2f:%.2f", r, g, b) }
-        for _, s in ipairs(stops) do parts[#parts + 1] = string.format("%.2f:%.2f:%.2f:%.2f", s[1], s[2], s[3], s[4]) end
-        local key = "custom|" .. table.concat(parts, "|")
-        local c = fadeCurves[key]
-        if c == nil then
-            fadeCurves[key] = false
-            pcall(function()
-                if not (C_CurveUtil and C_CurveUtil.CreateColorCurve and CreateColor) then return end
-                -- the points, from full health down: { health fraction, r, g, b }
-                local pts = { { 1, r, g, b } }
-                for i, s in ipairs(stops) do
-                    if not blend then
-                        -- hold the colour above until just over the stop, then switch
-                        local held = (i == 1) and { 0, r, g, b } or stops[i - 1]
-                        pts[#pts + 1] = { s[1] + 0.001, held[2], held[3], held[4] }
-                    end
-                    pts[#pts + 1] = s
-                end
-                local last = stops[#stops]
-                pts[#pts + 1] = { 0, last[2], last[3], last[4] }
-                table.sort(pts, function(a, z) return a[1] < z[1] end)
-                local made = C_CurveUtil.CreateColorCurve()
-                pcall(function() made:SetType(Enum.LuaCurveType.Linear) end)
-                local lastX
-                for _, p in ipairs(pts) do
-                    local x = math.max(0, math.min(1, p[1]))
-                    if x ~= lastX then made:AddPoint(x, CreateColor(p[2], p[3], p[4], 1)); lastX = x end
-                end
-                fadeCurves[key] = made
-            end)
-        end
-        curve = fadeCurves[key] or nil
-    end
-    fadeMemo[unit] = { blend, r, g, b, p1, c1, p2, c2, p3, c3, curve }
-    return curve
-end
-
 -- Returns true when the fade painted the bar.
 local function applyHealthFade(f, r, g, b)
+    -- Other players stay their class colour. No fade, and no green-yellow-red.
+    if otherPlayer(f.wfUnit) then return false end
     -- on: the health colour chosen above (class, reaction or plain green) fades to red as health drops
     -- (Health colour "By health" is this fade too, along a fixed green - yellow - red)
     local byHealth = getSetting(f.baseUnit, "colorMode") == "gradient"
@@ -855,10 +741,8 @@ local function applyHealthFade(f, r, g, b)
             end)
         end
         curve = fadeCurves.byHealth or nil
-    elseif getSetting(f.baseUnit, "fadeStyle") == "custom" then
-        curve = getCustomFadeCurve(f.baseUnit, r or 0.1, g or 0.8, b or 0.1)
     else
-        curve = getFadeCurve(r or 0.1, g or 0.8, b or 0.1)
+        curve = getHealthFadeCurve(r, g, b)
     end
     if not curve then return false end
     local ok, color = pcall(UnitHealthPercent, f.wfUnit, true, curve)
@@ -873,7 +757,7 @@ local function updateHealthColor(f)
     local tex = f.hp:GetStatusBarTexture()
     -- the tintable fill for a colour or a fade (tinting the green fill meant greying it first, which
     -- dulled every colour); the plain green fill otherwise
-    local fading = getSetting(f.baseUnit, "healthFade") and true or false
+    local fading = getSetting(f.baseUnit, "healthFade") and not otherPlayer(f.wfUnit) and true or false
     local want = ((r or fading) and f.hpStatusAtlas) or f.hpAtlas
     if f.customTex then
         if f.hpCurrent ~= f.customTex then
@@ -1751,7 +1635,7 @@ local function updateHealth(f, lite)
     -- colorHold is cleared when the unit, faction or settings change (updateAll, setSetting).
     if status ~= f.statusText then f.colorHold = nil end
     local base = f.baseUnit
-    local liveColor = getSetting(base, "healthFade") or getSetting(base, "colorMode") == "gradient"
+    local liveColor = not otherPlayer(u) and (getSetting(base, "healthFade") or getSetting(base, "colorMode") == "gradient")
     if liveColor or not f.colorHold then
         updateHealthColor(f)
         if not liveColor then f.colorHold = true end
@@ -1839,12 +1723,23 @@ end
 
 -- Fits one of the cost bars to the power bar: its fill, mask and length, its end on the fill's end.
 local function fitCostBar(f, bar, side)
-    -- (Cost texture, or the power bar's own fill)
-    local tex = resolveTexture(getSetting("player", "costTexture")) or f.mpCurrent or PLAIN_FILL
+    -- Cost texture, or the power bar's own fill, tinted the way heals and shields are. The power
+    -- bar's own art is desaturated only once a cost colour is picked, so that colour tints a neutral
+    -- fill. A chosen texture keeps its own art.
+    local key = getSetting("player", "costTexture") or "default"
+    local own = key ~= "default" and resolveTexture(key) or nil
+    local tex = own or f.mpCurrent or PLAIN_FILL
+    local grey = not own and type(getSetting("player", "costColor")) == "table"
     if bar.tex ~= tex then
         bar.tex = tex
+        bar.grey = nil
         if not pcall(bar.SetStatusBarTexture, bar, tex) or not bar:GetStatusBarTexture() then bar:SetStatusBarTexture(PLAIN_FILL) end
         if f.mpMaskOn then pcall(function() bar:GetStatusBarTexture():AddMaskTexture(f.mpMask) end) end
+    end
+    local tx = bar:GetStatusBarTexture()
+    if tx then
+        pcall(tx.SetBlendMode, tx, "BLEND")
+        if bar.grey ~= grey then pcall(tx.SetDesaturated, tx, grey); bar.grey = grey end
     end
     bar:ClearAllPoints()
     bar:SetPoint("TOP", f.mp, "TOP")
@@ -1855,27 +1750,36 @@ local function fitCostBar(f, bar, side)
     pcall(bar.SetMinMaxValues, bar, 0, f.mpMaxNow or UnitPowerMax("player"))
 end
 
--- Shades a cost bar by the "Spell cost shade" slider (-100 to 100): above 0 it lightens the fill
--- (added white), below 0 it darkens it (black laid over), by that much. The trail of what was spent
--- (`flash`) always lightens, by the same amount and a little more: only the cast preview darkens.
+-- Shades a cost bar by the "Spell cost shade" slider (-100 to 100). The cast preview is tinted like
+-- a heal or shield: the colour multiplies the fill, so a texture and a colour both show. Below 0 it
+-- darkens (black laid over). The trail of what was spent (`flash`) still lightens by adding its colour.
 -- False at 0 (nothing to show).
 local function shadeCostBar(bar, flash)
     local v = tonumber(getSetting("player", "costShade")) or 55
-    if v == 0 then return false end
+    if v == 0 and not flash then return false end
     local a = math.min(1, math.abs(v) / 100 + (flash and 0.25 or 0))
     local tex = bar:GetStatusBarTexture()
-    if v > 0 or flash then
-        -- (lightened with a colour of your own: Cost colour for the preview, Trail colour for the
-        -- trail; white unless you pick one)
-        local c = getSetting("player", flash and "costTrailColor" or "costColor")
-        if type(c) ~= "table" then c = { 1, 1, 1 } end
-        pcall(tex.SetBlendMode, tex, "ADD")
+    if not tex then return false end
+    local c = getSetting("player", flash and "costTrailColor" or "costColor")
+    if type(c) ~= "table" then c = { 1, 1, 1 } end
+    if flash or v > 0 then
+        if flash then pcall(tex.SetBlendMode, tex, "ADD") end
         bar:SetStatusBarColor(c[1] or 1, c[2] or 1, c[3] or 1, a)
     else
         pcall(tex.SetBlendMode, tex, "BLEND")
         bar:SetStatusBarColor(0, 0, 0, a)
     end
     return true
+end
+
+-- The glow on the cost while you cast (Cost glow), in its colour. Off when the preview hides.
+local function glowCostBar(bar, on)
+    if not ns.barGlow then return end
+    local c = getSetting("player", "costColor")
+    if type(c) ~= "table" then c = { 1, 1, 1 } end
+    local mode = on and (getSetting("player", "costGlow") or "off") or "off"
+    local s = tonumber(getSetting("player", "costGlowAlpha")) or 0.6
+    pcall(ns.barGlow, bar, mode, c[1] or 1, c[2] or 1, c[3] or 1, s, false)
 end
 
 local function updateCostPrediction(f)
@@ -1889,11 +1793,12 @@ local function updateCostPrediction(f)
         cost = spellCost(spell)
         f.costSpell = spell
     end
-    if not cost then cp:Hide(); return end
+    if not cost then glowCostBar(cp, false); cp:Hide(); return end
     fitCostBar(f, cp, "RIGHT")
-    if not shadeCostBar(cp) then cp:Hide(); return end
+    if not shadeCostBar(cp) then glowCostBar(cp, false); cp:Hide(); return end
     pcall(cp.SetValue, cp, cost)
     cp:Show()
+    glowCostBar(cp, true)
 end
 
 -- The mana trail: when your power drops, the part just spent stays lit (in the cost shading) where it
@@ -5360,7 +5265,6 @@ local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
                     "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healTexture", "healColor", "healAlpha","absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damageTrailTexture", "damageTrailColor", "damageTrailAlpha", "damageTrailDelay", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
-                    "fadeStyle", "fadeBlend", "fade1Pct", "fade1Color", "fade2Pct", "fade2Color", "fade3Pct", "fade3Color",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }
 
 function resetFrame(unit)

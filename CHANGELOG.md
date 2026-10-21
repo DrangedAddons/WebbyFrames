@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.16.49
+- Other players, friendly or hostile, keep their class colour. Health colour and Fade to red do not paint over it.
+- Fade to red is one switch. The custom stops, colours and blend are gone. Above 66% the bar keeps its colour, then it blends through yellow, orange at 33% and red at 1%.
+- The spell cost on the power bar tints its texture and colour the way heals and shields do, instead of washing out white. Glow: Soft pulse, Shimmer, Snowglobe or Blizzard, with a strength.
+
 ## 1.16.48
 - The threat number is the game's own: the raw percent until you are tanking (about 110% pulls in melee, 130% at range), then the game's lead over the next person, which keeps climbing past 255%.
 - Solo, threat hides while you are the only one on the mob. A pet with threat shows it again. In a group it shows as usual.
