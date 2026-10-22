@@ -822,10 +822,14 @@ end
 -- default fill), tinted, with the health bar's shape mask.
 -- Shields have looks of their own (Shield texture, Shield colour, Shield opacity): in the health
 -- bar's texture, Blizzard's stripes, or any texture.
+-- Looks for a heal / shield / trail overlay (texture, colour, glow). Value changes do not call this
+-- again: updatePrediction and the trail only restyle when this returns false (cached on the bar).
 local function styleOverlay(f, bar)
     local tex = f.customTex or f.hpStatusAtlas or PLAIN_FILL
     local grey, striped = not f.customTex, false
     local c = bar.color
+    local r, g, b, a = c[1], c[2], c[3], c[4]
+    local glowMode, glowStr, glowEdge
     if bar == f.absorbBar or bar == f.absorbBack then
         local key = getSetting(f.baseUnit, "absorbTexture") or "default"
         if key == "striped" then tex, grey, striped = "Interface\\RaidFrame\\Shield-Overlay", false, true
@@ -834,8 +838,11 @@ local function styleOverlay(f, bar)
             if own then tex, grey = own, false end
         end
         local sc = getSetting(f.baseUnit, "absorbColor")
-        local a = tonumber(getSetting(f.baseUnit, "absorbAlpha")) or c[4]
-        if type(sc) == "table" then c = { sc[1] or c[1], sc[2] or c[2], sc[3] or c[3], a } else c = { c[1], c[2], c[3], a } end
+        a = tonumber(getSetting(f.baseUnit, "absorbAlpha")) or a
+        if type(sc) == "table" then r, g, b = sc[1] or r, sc[2] or g, sc[3] or b end
+        glowMode = getSetting(f.baseUnit, "absorbGlow") or "off"
+        glowStr = tonumber(getSetting(f.baseUnit, "absorbGlowAlpha")) or 0.6
+        glowEdge = getSetting(f.baseUnit, "absorbBorder") and true or false
     elseif bar == f.healBar then
         -- incoming heals, everyone's, on the one bar (Heal texture, Heal colour, Heal opacity)
         local key = getSetting(f.baseUnit, "healTexture") or "default"
@@ -844,8 +851,11 @@ local function styleOverlay(f, bar)
             if own then tex, grey = own, false end
         end
         local hc = getSetting(f.baseUnit, "healColor")
-        local a = tonumber(getSetting(f.baseUnit, "healAlpha")) or c[4]
-        if type(hc) == "table" then c = { hc[1] or c[1], hc[2] or c[2], hc[3] or c[3], a } else c = { c[1], c[2], c[3], a } end
+        a = tonumber(getSetting(f.baseUnit, "healAlpha")) or a
+        if type(hc) == "table" then r, g, b = hc[1] or r, hc[2] or g, hc[3] or b end
+        glowMode = getSetting(f.baseUnit, "healGlow") or "off"
+        glowStr = tonumber(getSetting(f.baseUnit, "healGlowAlpha")) or 0.6
+        glowEdge = getSetting(f.baseUnit, "healBorder") and true or false
     elseif bar == f.hpTrail then
         -- recent damage (Trail texture, Trail colour, Opacity). Default: the health bar's own fill, red.
         local key = getSetting(f.baseUnit, "damageTrailTexture") or "default"
@@ -854,9 +864,20 @@ local function styleOverlay(f, bar)
             if own then tex, grey = own, false end
         end
         local dc = getSetting(f.baseUnit, "damageTrailColor")
-        local a = tonumber(getSetting(f.baseUnit, "damageTrailAlpha")) or c[4]
-        if type(dc) == "table" then c = { dc[1] or c[1], dc[2] or c[2], dc[3] or c[3], a } else c = { c[1], c[2], c[3], a } end
+        a = tonumber(getSetting(f.baseUnit, "damageTrailAlpha")) or a
+        if type(dc) == "table" then r, g, b = dc[1] or r, dc[2] or g, dc[3] or b end
     end
+    -- Same look as last time: leave the bar alone (health ticks only change the fill amount).
+    local wantMask = f.hpMaskOn and true or false
+    if bar.styleTex == tex and bar.styleGrey == grey and bar.styleStripe == striped
+        and bar.styleR == r and bar.styleG == g and bar.styleB == b and bar.styleA == a
+        and bar.styleGlow == glowMode and bar.styleGlowA == glowStr and bar.styleEdge == glowEdge
+        and (not wantMask or bar.masked) then
+        return
+    end
+    bar.styleTex, bar.styleGrey, bar.styleStripe = tex, grey, striped
+    bar.styleR, bar.styleG, bar.styleB, bar.styleA = r, g, b, a
+    bar.styleGlow, bar.styleGlowA, bar.styleEdge = glowMode, glowStr, glowEdge
     if bar.tex ~= tex then
         bar.tex = tex
         if not pcall(bar.SetStatusBarTexture, bar, tex) or not bar:GetStatusBarTexture() then bar:SetStatusBarTexture(PLAIN_FILL) end
@@ -865,22 +886,18 @@ local function styleOverlay(f, bar)
         local tx = bar:GetStatusBarTexture()
         if tx then pcall(tx.SetHorizTile, tx, striped); pcall(tx.SetVertTile, tx, striped) end
     end
-    bar:SetStatusBarColor(c[1], c[2], c[3], c[4])
+    bar:SetStatusBarColor(r, g, b, a)
     if bar.grey ~= grey then
         local tx = bar:GetStatusBarTexture()
         if tx then tx:SetDesaturated(grey); bar.grey = grey end
     end
-    if f.hpMaskOn and not bar.masked then
+    if wantMask and not bar.masked then
         bar.masked = true
         pcall(function() bar:GetStatusBarTexture():AddMaskTexture(f.hpMask) end)
     end
     -- the glow on it (Shield glow / Heal glow), in its colour
-    if bar == f.absorbBar or bar == f.absorbBack or bar == f.healBar then
-        local shield = bar ~= f.healBar
-        local mode = getSetting(f.baseUnit, shield and "absorbGlow" or "healGlow") or "off"
-        local s = tonumber(getSetting(f.baseUnit, shield and "absorbGlowAlpha" or "healGlowAlpha")) or 0.6
-        local edge = getSetting(f.baseUnit, shield and "absorbBorder" or "healBorder") and true or false
-        local ok, err = pcall(ns.barGlow, bar, mode, c[1], c[2], c[3], s, edge)
+    if glowMode ~= nil then
+        local ok, err = pcall(ns.barGlow, bar, glowMode, r, g, b, glowStr, glowEdge)
         if not ok and not ns.glowErr then          -- (said once, so a broken glow isn't silent)
             ns.glowErr = true
             print("|cffffd100Webby Frames|r glow: " .. tostring(err))
@@ -985,6 +1002,7 @@ function ns.barGlow(bar, mode, r, g, b, strength, border)
                 m = { tex = fx:CreateTexture(nil, "OVERLAY", nil, 2) }
                 m.tex:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask")
                 m.tex:SetBlendMode("ADD")
+                m.tex:SetAlpha(0.8)
                 fx.motes[i] = m
                 m.x, m.y = math.random() * w, (math.random() - 0.5) * h
                 m.vx, m.vy, m.phase, m.k = 0, 0, math.random() * 6.28, math.random()
@@ -993,6 +1011,8 @@ function ns.barGlow(bar, mode, r, g, b, strength, border)
                 or math.min(math.max(h * (0.3 + 0.25 * m.k), 3), 7)
             m.tex:SetVertexColor(cr, cg, cb)
             m.tex:SetSize(size, size)
+            m.tex:SetAlpha(0.8)
+            m.lx, m.ly = nil, nil          -- (place again on the next snow step)
             m.tex:Show()
         elseif m then
             m.tex:Hide()
@@ -1144,9 +1164,12 @@ function ns.barGlowSnow(fx, bar, dt)
         if m.y < -h * 0.7 then m.y = h * 0.7; m.x = math.random() * w end
         if m.y > h * 0.9 then m.y = h * 0.9; m.vy = -m.vy * 0.4 end
         if m.x < 0 then m.x = m.x + w elseif m.x > w then m.x = m.x - w end
-        m.tex:ClearAllPoints()
-        m.tex:SetPoint("CENTER", fx, "LEFT", m.x, m.y)
-        m.tex:SetAlpha(0.8)
+        -- Layout only when the flake has moved about a pixel (motion math still runs every frame).
+        if not m.lx or math.abs(m.x - m.lx) >= 0.5 or math.abs(m.y - m.ly) >= 0.5 then
+            m.lx, m.ly = m.x, m.y
+            m.tex:ClearAllPoints()
+            m.tex:SetPoint("CENTER", fx, "LEFT", m.x, m.y)
+        end
     end
 end
 
@@ -3936,12 +3959,13 @@ ns.paintHost:SetScript("OnUpdate", function(self)
         local f = q[i]
         q[i] = nil
         if f then
-            local all, hp, mp, pred = f.paintAll, f.paintHP, f.paintMP, f.paintPred
-            f.paintQueued, f.paintAll, f.paintHP, f.paintMP, f.paintPred = nil, nil, nil, nil, nil
+            local all, info, hp, mp, pred = f.paintAll, f.paintInfo, f.paintHP, f.paintMP, f.paintPred
+            f.paintQueued, f.paintAll, f.paintInfo, f.paintHP, f.paintMP, f.paintPred = nil, nil, nil, nil, nil, nil
             if not f.wfOff then
                 pcall(function()
                     if all then updateAll(f)
                     else
+                        if info then updateInfo(f) end
                         if hp then updateHealth(f) end
                         if mp then updatePower(f) end
                         if pred and not hp then updatePrediction(f) end
@@ -3960,6 +3984,7 @@ function ns.markPaint(f, kind)
         ns.paintHost:Show()
     end
     if kind == "all" then f.paintAll = true
+    elseif kind == "info" then f.paintInfo = true
     elseif kind == "health" then f.paintHP = true
     elseif kind == "power" then f.paintMP = true
     elseif kind == "pred" then f.paintPred = true end
@@ -4718,6 +4743,15 @@ local function createFrame(unit)
             -- (a snowglobe glow on the shield or the heals: shaken)
             if event == "UNIT_ABSORB_AMOUNT_CHANGED" then ns.barGlowShake(self.absorbBar); ns.barGlowShake(self.absorbBack)
             elseif event == "UNIT_HEAL_PREDICTION" then ns.barGlowShake(self.healBar) end
+        elseif event == "UNIT_PORTRAIT_UPDATE" or event == "UNIT_MODEL_CHANGED"
+            or event == "UNIT_NAME_UPDATE" or event == "UNIT_LEVEL" then
+            -- name / level / portrait only: not a full bar and aura repaint
+            ns.markPaint(self, "info")
+        elseif event == "UNIT_FACTION" or event == "UNIT_CONNECTION" then
+            -- plate colour, offline bolt, and health colour (tapped / reaction / grey)
+            self.colorHold = nil
+            ns.markPaint(self, "info")
+            ns.markPaint(self, "health")
         elseif event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
             -- the rest flag can land after the event that brought you into the city
             if self.updateRest then C_Timer.After(0.5, function() if self.updateRest then self.updateRest() end end) end
@@ -4866,6 +4900,13 @@ local function createSmallFrame(unit, wf, index)
             -- (a snowglobe glow on the shield or the heals: shaken)
             if event == "UNIT_ABSORB_AMOUNT_CHANGED" then ns.barGlowShake(self.absorbBar); ns.barGlowShake(self.absorbBack)
             elseif event == "UNIT_HEAL_PREDICTION" then ns.barGlowShake(self.healBar) end
+        elseif event == "UNIT_PORTRAIT_UPDATE" or event == "UNIT_MODEL_CHANGED"
+            or event == "UNIT_NAME_UPDATE" then
+            ns.markPaint(self, "info")
+        elseif event == "UNIT_FACTION" or event == "UNIT_CONNECTION" then
+            self.colorHold = nil
+            ns.markPaint(self, "info")
+            ns.markPaint(self, "health")
         else ns.markPaint(self, "all") end
     end)
     -- Party slots that are not in use (party off, or raid style) register nothing. Party.listen

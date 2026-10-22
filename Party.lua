@@ -634,15 +634,63 @@ function Party.onEvent(_, event, unit)
         C_Timer.After(6, function() Party.readyLinger = nil; Party.updateAllIcons() end)
     end
     Party.updateAllIcons()
+    -- range / pet-portrait tickers follow who is shown; healer mana follows the group
+    Party.syncTicker()
+    if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ENTERING_WORLD" then
+        Party.watchMana()
+    end
 end
 
--- Range, five times a second, only while the portrait frames are in use. Pet bars come from unit
--- events; a shown pet's portrait is refreshed about every two seconds.
-function Party.onTick()
+-- Range fade is on and at least one non-player party slot (or the sample party) is up.
+function Party.needsRangeTick()
+    if not Party.portraitsLive() then return false end
+    if not getSetting("party", "rangeFade") then return false end
+    if Party.testing then return true end
+    for i = 1, Party.SLOTS do
+        local f = Party.members[i]
+        if f and f:IsShown() and f.wfUnit and f.wfUnit ~= "player" then return true end
+    end
+    return false
+end
+
+-- A shown pet whose portrait still needs the slow refresh.
+function Party.needsPetPortraitTick()
+    if not Party.portraitsLive() then return false end
+    for i = 1, Party.SLOTS do
+        local f = Party.members[i]
+        local m = f and f.miniPet
+        if m and m:IsShown() then return true end
+    end
+end
+
+function Party.clearRangeFade()
+    for i = 1, Party.SLOTS do
+        local f = Party.members[i]
+        if f then f:SetAlpha(1) end
+    end
+end
+
+-- Pet portraits about every two seconds (when range is not already ticking).
+function Party.onPetPortraitTick()
     if not Party.portraitsLive() then return end
     for i = 1, Party.SLOTS do
         local f = Party.members[i]
-        if f and f:IsShown() then pcall(Party.updateRange, f) end
+        local m = f and f.miniPet
+        if m and m:IsShown() then
+            local u = m:GetAttribute("unit")
+            if u then pcall(SetPortraitTexture, m.portrait, u) end
+        end
+    end
+end
+
+-- Range, five times a second, only while fade is on and someone else is shown. Pet bars come from
+-- unit events; a shown pet's portrait is refreshed about every two seconds (here, or on the pet ticker).
+function Party.onTick()
+    if not Party.portraitsLive() then return end
+    local fade = getSetting("party", "rangeFade")
+    for i = 1, Party.SLOTS do
+        local f = Party.members[i]
+        if fade and f and f:IsShown() then pcall(Party.updateRange, f) end
         local m = f and f.miniPet
         if m and m:IsShown() then
             m.portraitTick = ((m.portraitTick or 0) + 1) % 10
@@ -679,11 +727,23 @@ function Party.syncEvents()
 end
 
 function Party.syncTicker()
-    if Party.portraitsLive() then
+    local wantRange = Party.needsRangeTick()
+    local wantPet = Party.needsPetPortraitTick()
+    if wantRange then
+        if Party.petTicker then Party.petTicker:Cancel(); Party.petTicker = nil end
         if not Party.rangeTicker then Party.rangeTicker = C_Timer.NewTicker(0.2, Party.onTick) end
-    elseif Party.rangeTicker then
-        Party.rangeTicker:Cancel()
-        Party.rangeTicker = nil
+    else
+        if Party.rangeTicker then
+            Party.rangeTicker:Cancel()
+            Party.rangeTicker = nil
+            Party.clearRangeFade()
+        end
+        if wantPet then
+            if not Party.petTicker then Party.petTicker = C_Timer.NewTicker(2, Party.onPetPortraitTick) end
+        elseif Party.petTicker then
+            Party.petTicker:Cancel()
+            Party.petTicker = nil
+        end
     end
 end
 
@@ -978,19 +1038,42 @@ function Party.placeManaBox()
     else m:SetPoint(d.point, UIParent, d.point, d.x, d.y) end
 end
 
--- The healers' lines (twice a second while shown).
+-- Scratch list for the live healer scan (reused; samples keep their own table).
+Party.manaUnits = {}
+Party.CLASS_HEX = {}
+
+local function classHex(class)
+    local hit = Party.CLASS_HEX[class or ""]
+    if hit then return hit end
+    local c = (RAID_CLASS_COLORS or {})[class or ""]
+    hit = c and string.format("ff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255) or "ffffffff"
+    Party.CLASS_HEX[class or ""] = hit
+    return hit
+end
+
+-- True while the healer mana list should tick (option on, portrait party, in a party — or sample/edit).
+function Party.manaShouldTick()
+    if not (getSetting("party", "healerMana") and frameOn("party")) then return false end
+    local sample = Party.manaEditing or Party.testing or (ns.RaidParty and ns.RaidParty.testing)
+    if sample then return true end
+    if getSetting("party", "partyStyle") == "raid" then return false end
+    if not IsInGroup() or IsInRaid() then return false end
+    return true
+end
+
+-- The healers' lines (twice a second while the list can show).
 function Party.updateMana()
     local m = Party.manaBox
     if not m then return end
-    local on = getSetting("party", "healerMana") and frameOn("party")
+    if not Party.manaShouldTick() then m:Hide(); return end
     local sample = Party.manaEditing or Party.testing or (ns.RaidParty and ns.RaidParty.testing)
-    if not on or (not sample and not IsInGroup()) or IsInRaid() then m:Hide(); return end
     local units
     if sample then
         units = Party.MANA_SAMPLES
     else
-        -- (twice a second: plain() reads, no throwaway functions)
-        units = {}
+        -- (twice a second: plain() reads, one reused list, no throwaway functions)
+        units = Party.manaUnits
+        wipe(units)
         local roles = false
         for _, u in ipairs(Party.GROUP) do
             if UnitExists(u) and (plain(UnitGroupRolesAssigned, u) or "NONE") ~= "NONE" then roles = true; break end
@@ -1004,37 +1087,49 @@ function Party.updateMana()
                     healer = ok and not isSecret(cls) and Party.HEALER_CLASS[cls or ""] and plain(UnitPowerType, u) == 0 or false
                 end
             end
-            if healer then units[#units + 1] = { unit = u } end
+            if healer then units[#units + 1] = u end
         end
     end
     local scale = CurveConstants and CurveConstants.ScaleTo100
+    local n = 0
     for i, fs in ipairs(m.lines) do
         local e = units[i]
         if e then
-            local class = e.class
-            if e.unit then pcall(function() class = select(2, UnitClass(e.unit)) end) end
-            local c = (RAID_CLASS_COLORS or {})[class or ""]
-            local hex = c and string.format("ff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255) or "ffffffff"
-            local ok = pcall(function()
-                if e.unit then
-                    fs:SetFormattedText("|c" .. hex .. "%s|r  %d%%", UnitName(e.unit), UnitPowerPercent(e.unit, 0, false, scale))
+            n = i
+            local ok
+            if sample then
+                local hex = classHex(e.class)
+                local text = string.format("|c%s%s|r  %d%%", hex, e.name, e.pct)
+                if fs.manaText ~= text then fs.manaText = text; ok = pcall(fs.SetText, fs, text) else ok = true end
+            else
+                local class
+                pcall(function() class = select(2, UnitClass(e)) end)
+                local hex = classHex(class)
+                local name, pct
+                pcall(function() name = UnitName(e) end)
+                pcall(function() pct = UnitPowerPercent(e, 0, false, scale) end)
+                if name ~= nil and pct ~= nil and not isSecret(name) and not isSecret(pct) then
+                    local text = string.format("|c%s%s|r  %d%%", hex, name, pct)
+                    if fs.manaText ~= text then fs.manaText = text; ok = pcall(fs.SetText, fs, text) else ok = true end
                 else
-                    fs:SetFormattedText("|c" .. hex .. "%s|r  %d%%", e.name, e.pct)
+                    -- secret values: still ask the font string (no cache)
+                    ok = pcall(fs.SetFormattedText, fs, "|c" .. hex .. "%s|r  %d%%", UnitName(e), UnitPowerPercent(e, 0, false, scale))
+                    fs.manaText = nil
                 end
-            end)
+            end
             fs:SetShown(ok)
         else
+            fs.manaText = nil
             fs:Hide()
         end
     end
-    m:SetHeight(math.max(14, #units * 13))
-    m:SetShown(#units > 0)
+    m:SetHeight(math.max(14, n * 13))
+    m:SetShown(n > 0)
 end
 
--- Twice a second, and only while the list is turned on (it is off by default).
+-- Twice a second only while the list can show (off by default; cancelled solo / in a raid / raid style).
 function Party.watchMana()
-    local on = getSetting("party", "healerMana") and frameOn("party")
-    if on then
+    if Party.manaShouldTick() then
         if not Party.manaTicker then
             Party.manaTicker = C_Timer.NewTicker(0.5, function() pcall(Party.updateMana) end)
         end
@@ -2059,7 +2154,8 @@ function RP.apply()
     RP.applyVisibility()
     for _, t in ipairs(RP.tiles) do if t.wfUnit then RP.paintAll(t) end end
     Party.updateMissing()
-    Party.updateMana()
+    Party.watchMana()
+    RP.syncTicker()
 end
 
 ---------------------------------------------------------------------------
@@ -2338,6 +2434,8 @@ function RP.onGroup(_, event)
         RP.arrange()
         for _, t in ipairs(RP.tiles) do if t.wfUnit then RP.paintAll(t) end end
         for _, p in ipairs(RP.petTiles) do if p.wfUnit then RP.paintPet(p) end end
+        RP.syncTicker()
+        Party.watchMana()
     else
         -- (the ready check's icon lingers a few seconds after it ends, as the portrait frames' does)
         for _, t in ipairs(RP.tiles) do if t.wfUnit then RP.paintIcons(t) end end
@@ -2351,10 +2449,26 @@ function RP.onGroup(_, event)
 end
 
 -- Range, five times a second, while the box is shown.
+-- Range fade on, raid-style party up, and a non-player tile (or the sample) to fade.
+function RP.needsRangeTick()
+    if not RP.live() then return false end
+    if not getSetting("party", "rangeFade") then return false end
+    if RP.testing then return true end
+    for _, t in ipairs(RP.tiles) do
+        if t:IsVisible() and t.wfUnit and t.wfUnit ~= "player" and not t.sample then return true end
+    end
+    return false
+end
+
+function RP.clearRangeFade()
+    for _, t in ipairs(RP.tiles) do if t then t:SetAlpha(1) end end
+end
+
 function RP.onTick()
     if not RP.box or not RP.box:IsVisible() then return end
+    if not getSetting("party", "rangeFade") then return end
     for _, t in ipairs(RP.tiles) do
-        if t:IsVisible() and t.wfUnit and not t.sample then
+        if t:IsVisible() and t.wfUnit and t.wfUnit ~= "player" and not t.sample then
             pcall(Party.updateRange, t)
         end
     end
@@ -2383,11 +2497,12 @@ function RP.syncEvents()
 end
 
 function RP.syncTicker()
-    if RP.live() then
+    if RP.needsRangeTick() then
         if not RP.rangeTicker then RP.rangeTicker = C_Timer.NewTicker(0.2, RP.onTick) end
     elseif RP.rangeTicker then
         RP.rangeTicker:Cancel()
         RP.rangeTicker = nil
+        RP.clearRangeFade()
     end
 end
 

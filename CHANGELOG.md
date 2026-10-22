@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.16.50
+- Faster in combat without changing how the frames look: heal and shield overlays keep their style
+  between health ticks, snow and blizzard glows only move a flake when it has shifted about a pixel,
+  name / portrait / level / faction events no longer repaint the whole frame, and the party range and
+  healer mana tickers stay off until they are needed.
+
 ## 1.16.49
 - Other players, friendly or hostile, keep their class colour. Health colour and Fade to red do not paint over it.
 - Fade to red is one switch. The custom stops, colours and blend are gone. Above 66% the bar keeps its colour, then it blends through yellow, orange at 33% and red at 1%.
