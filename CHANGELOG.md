@@ -5,6 +5,9 @@
   between health ticks, snow and blizzard glows only move a flake when it has shifted about a pixel,
   name / portrait / level / faction events no longer repaint the whole frame, and the party range and
   healer mana tickers stay off until they are needed.
+- Heal and shield glows (pulse, shimmer, snowglobe, blizzard) start again after a reload without
+  toggling them in the options. The style cache still skips texture work; it no longer skips ensuring
+  the glow is alive.
 
 ## 1.16.49
 - Other players, friendly or hostile, keep their class colour. Health colour and Fade to red do not paint over it.

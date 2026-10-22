@@ -822,8 +822,11 @@ end
 -- default fill), tinted, with the health bar's shape mask.
 -- Shields have looks of their own (Shield texture, Shield colour, Shield opacity): in the health
 -- bar's texture, Blizzard's stripes, or any texture.
--- Looks for a heal / shield / trail overlay (texture, colour, glow). Value changes do not call this
--- again: updatePrediction and the trail only restyle when this returns false (cached on the bar).
+-- Looks for a heal / shield / trail overlay (texture, colour, glow). Texture and colour are cached
+-- so health ticks skip that work; the glow is still ensured every time (barGlow early-outs when it
+-- is already running). A first pass can run before the fill exists, or while the UI is still hidden
+-- after /reload (Play() then no-ops): skipping barGlow left pulse / shimmer / snow stuck until the
+-- options were toggled.
 local function styleOverlay(f, bar)
     local tex = f.customTex or f.hpStatusAtlas or PLAIN_FILL
     local grey, striped = not f.customTex, false
@@ -867,35 +870,35 @@ local function styleOverlay(f, bar)
         a = tonumber(getSetting(f.baseUnit, "damageTrailAlpha")) or a
         if type(dc) == "table" then r, g, b = dc[1] or r, dc[2] or g, dc[3] or b end
     end
-    -- Same look as last time: leave the bar alone (health ticks only change the fill amount).
     local wantMask = f.hpMaskOn and true or false
-    if bar.styleTex == tex and bar.styleGrey == grey and bar.styleStripe == striped
+    local styleSame = bar.styleTex == tex and bar.styleGrey == grey and bar.styleStripe == striped
         and bar.styleR == r and bar.styleG == g and bar.styleB == b and bar.styleA == a
         and bar.styleGlow == glowMode and bar.styleGlowA == glowStr and bar.styleEdge == glowEdge
-        and (not wantMask or bar.masked) then
-        return
+        and (not wantMask or bar.masked)
+    if not styleSame then
+        bar.styleTex, bar.styleGrey, bar.styleStripe = tex, grey, striped
+        bar.styleR, bar.styleG, bar.styleB, bar.styleA = r, g, b, a
+        bar.styleGlow, bar.styleGlowA, bar.styleEdge = glowMode, glowStr, glowEdge
+        if bar.tex ~= tex then
+            bar.tex = tex
+            if not pcall(bar.SetStatusBarTexture, bar, tex) or not bar:GetStatusBarTexture() then bar:SetStatusBarTexture(PLAIN_FILL) end
+            bar.masked, bar.grey = nil, nil
+            -- (the stripes repeat along the bar; anything else stretches)
+            local tx = bar:GetStatusBarTexture()
+            if tx then pcall(tx.SetHorizTile, tx, striped); pcall(tx.SetVertTile, tx, striped) end
+        end
+        bar:SetStatusBarColor(r, g, b, a)
+        if bar.grey ~= grey then
+            local tx = bar:GetStatusBarTexture()
+            if tx then tx:SetDesaturated(grey); bar.grey = grey end
+        end
+        if wantMask and not bar.masked then
+            bar.masked = true
+            pcall(function() bar:GetStatusBarTexture():AddMaskTexture(f.hpMask) end)
+        end
     end
-    bar.styleTex, bar.styleGrey, bar.styleStripe = tex, grey, striped
-    bar.styleR, bar.styleG, bar.styleB, bar.styleA = r, g, b, a
-    bar.styleGlow, bar.styleGlowA, bar.styleEdge = glowMode, glowStr, glowEdge
-    if bar.tex ~= tex then
-        bar.tex = tex
-        if not pcall(bar.SetStatusBarTexture, bar, tex) or not bar:GetStatusBarTexture() then bar:SetStatusBarTexture(PLAIN_FILL) end
-        bar.masked, bar.grey = nil, nil
-        -- (the stripes repeat along the bar; anything else stretches)
-        local tx = bar:GetStatusBarTexture()
-        if tx then pcall(tx.SetHorizTile, tx, striped); pcall(tx.SetVertTile, tx, striped) end
-    end
-    bar:SetStatusBarColor(r, g, b, a)
-    if bar.grey ~= grey then
-        local tx = bar:GetStatusBarTexture()
-        if tx then tx:SetDesaturated(grey); bar.grey = grey end
-    end
-    if wantMask and not bar.masked then
-        bar.masked = true
-        pcall(function() bar:GetStatusBarTexture():AddMaskTexture(f.hpMask) end)
-    end
-    -- the glow on it (Shield glow / Heal glow), in its colour
+    -- Heal / shield glow: always ensure (cheap when already live). Texture cache alone used to skip
+    -- this after a no-fill or hidden-UI first pass, so animations never started until options changed.
     if glowMode ~= nil then
         local ok, err = pcall(ns.barGlow, bar, glowMode, r, g, b, glowStr, glowEdge)
         if not ok and not ns.glowErr then          -- (said once, so a broken glow isn't silent)
@@ -931,11 +934,28 @@ function ns.barGlow(bar, mode, r, g, b, strength, border)
     -- flakes and the border are small, so they can be a little paler, to read as light. Glow
     -- strength 0 is a faint glow, 100 full.
     local cr, cg, cb = 0.3 + r * 0.7, 0.3 + g * 0.7, 0.3 + b * 0.7
-    ns.barGlowEdge(bar, fill, border and fill and true or false, cr, cg, cb, 0.3 + 0.7 * strength, h)
     if mode == "off" or not fill then
+        ns.barGlowEdge(bar, fill, false, cr, cg, cb, 0.3 + 0.7 * strength, h)
         if fx then fx:Hide(); fx.sig = nil end
         return
     end
+    -- Same look and already shown: keep the edge in sync, revive animations that Play() missed while
+    -- the UI was hidden (/reload), and leave flakes alone (OnUpdate keeps them moving).
+    local sig = mode .. math.floor(r * 50) .. math.floor(g * 50) .. math.floor(b * 50) .. math.floor(strength * 20) .. math.floor(w) .. math.floor(h)
+    if fx and fx.sig == sig and fx:IsShown() and fx.fill == fill then
+        ns.barGlowEdge(bar, fill, border and true or false, cr, cg, cb, 0.3 + 0.7 * strength, h)
+        if mode == "pulse" and fx.washAg and not fx.washAg:IsPlaying() then fx.washAg:Play() end
+        if mode == "shimmer" and fx.band then fx.band:Show() end
+        if GLOW_FLAKES[mode] then
+            fx.snowing = true
+            fx.flakes = GLOW_FLAKES[mode]
+            if not fx:GetScript("OnUpdate") then
+                fx:SetScript("OnUpdate", function(self, dt) ns.barGlowSnow(self, bar, dt) end)
+            end
+        end
+        return
+    end
+    ns.barGlowEdge(bar, fill, border and true or false, cr, cg, cb, 0.3 + 0.7 * strength, h)
     if not fx then
         fx = CreateFrame("Frame", nil, bar)
         fx:Hide()          -- (shown once it's coloured: never a bare white wash)
@@ -972,9 +992,6 @@ function ns.barGlow(bar, mode, r, g, b, strength, border)
         fx:ClearAllPoints()
         fx:SetAllPoints(fill)
     end
-    -- (only when the look changed: the colour, the strength, the mode, the bar's size)
-    local sig = mode .. math.floor(r * 50) .. math.floor(g * 50) .. math.floor(b * 50) .. math.floor(strength * 20) .. math.floor(w) .. math.floor(h)
-    if fx.sig == sig and fx:IsShown() then return end
     fx.sig = sig
     fx.cr, fx.cg, fx.cb, fx.h, fx.w = cr, cg, cb, h, w
     fx:SetAlpha(0.3 + 0.7 * strength)
