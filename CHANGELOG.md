@@ -4,6 +4,7 @@
 - The PvP flag on the player (and target / focus) shows again when you become flagged by walking
   into contested territory. `UNIT_FACTION` had stopped refreshing the icon after the 1.16.50 event
   split.
+- Becoming PvP flagged plays the game's PvP update sound. A reload while already flagged stays quiet.
 
 ## 1.16.50
 - Faster in combat without changing how the frames look: heal and shield overlays keep their style

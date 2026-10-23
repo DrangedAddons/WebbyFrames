@@ -2610,9 +2610,10 @@ local function updateIndicators(f)
         pcall(function() resting = IsResting() and true or false end)
         f.restIcon:SetShown(resting)
     end
-    local kind
+    local kind, seen = nil, false
     pcall(function()
         if not UnitExists(u) then return end
+        seen = true
         if UnitIsPVPFreeForAll(u) then kind = "FFA"
         elseif UnitIsPVP(u) then
             local fac = UnitFactionGroup(u)
@@ -2636,6 +2637,17 @@ local function updateIndicators(f)
     else
         f.pvpIcon:Hide()
         if f.pvpHit then f.pvpHit:Hide() end
+    end
+    -- You becoming flagged: the game's own PvP update sound. A login while already flagged
+    -- does not play (there was no unflagged reading yet). Target and focus stay silent.
+    if base == "player" and seen then
+        local flagged = kind ~= nil
+        if f.pvpWas == false and flagged then
+            pcall(function()
+                if SOUNDKIT and SOUNDKIT.IG_PVP_UPDATE then PlaySound(SOUNDKIT.IG_PVP_UPDATE) end
+            end)
+        end
+        f.pvpWas = flagged
     end
 end
 
