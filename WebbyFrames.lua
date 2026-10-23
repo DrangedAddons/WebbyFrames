@@ -2389,40 +2389,18 @@ local function createIndicators(f)
     f.pvpIcon = ov:CreateTexture(nil, "OVERLAY", nil, 5)
     f.pvpIcon:SetSize(34, 34)
     f.pvpIcon:Hide()
-    -- hover the badge for the PvP flag timer (player: time until the flag drops)
-    local hit = CreateFrame("Frame", nil, f)
-    hit:SetFrameLevel(f:GetFrameLevel() + 8)
-    hit:SetAllPoints(f.pvpIcon)
-    hit:EnableMouse(true)
-    hit:Hide()
-    local function tip(self)
-        defaultTip(self)
-        GameTooltip:SetText("PvP flagged", 1, 1, 1)
-        if f.baseUnit == "player" then
-            local ms
-            pcall(function() ms = GetPVPTimer() end)
-            if type(ms) == "number" and ms > 0 and ms < 300000 then
-                local sec = math.floor(ms / 1000)
-                GameTooltip:AddLine(string.format("Flag drops in %d:%02d", math.floor(sec / 60), sec % 60), 1, 0.82, 0)
-            else
-                GameTooltip:AddLine("No timer running", 0.7, 0.7, 0.7)
-            end
-        end
-        GameTooltip:Show()
+    -- the player's flag countdown, just left of the shield (no tooltip). Half the level number.
+    if f.baseUnit == "player" then
+        local fs = ov:CreateFontString(nil, "OVERLAY")
+        fs:SetDrawLayer("OVERLAY", 7)
+        local p, s = f.level and f.level:GetFont()
+        fs:SetFont(p or STANDARD_TEXT_FONT, math.max(6, math.floor(((s or 12) / 2) + 0.5)), "OUTLINE")
+        fs:SetTextColor(1, 1, 1)
+        fs:SetJustifyH("RIGHT")
+        fs:SetPoint("RIGHT", f.pvpIcon, "LEFT", -2, 0)
+        fs:Hide()
+        f.pvpTimer = fs
     end
-    hit:SetScript("OnEnter", function(self)
-        tip(self)
-        local acc = 0
-        self:SetScript("OnUpdate", function(s2, dt)
-            acc = acc + dt
-            if acc >= 0.5 then acc = 0; tip(s2) end
-        end)
-    end)
-    hit:SetScript("OnLeave", function(self)
-        self:SetScript("OnUpdate", nil)
-        GameTooltip:Hide()
-    end)
-    f.pvpHit = hit
     -- threat (target and focus), the Retail way: the frame's in-combat glow tinted by your threat
     -- status (yellow, orange, red), and your threat % in small coloured text at the end of the name row
     if hasCastAndThreat(f.baseUnit) then
@@ -2559,6 +2537,47 @@ local function glowColor(c)
     return rr + m, gg + m, bb + m
 end
 
+-- "5m" down to "1m", then "59" ... "0". At or above 5:00 is the zone cap, not a countdown.
+local function pvpCountdownLabel(ms)
+    if type(ms) ~= "number" or ms <= 0 or ms >= 300000 then return nil end
+    local sec = ms / 1000
+    if sec >= 60 then return math.floor(sec / 60 + 0.5) .. "m" end
+    return tostring(math.floor(sec))
+end
+
+-- GetPVPTimer sits on 5:00 and jumps back there while you are in a PvP area. The number shows
+-- only once that value is actually falling (the five minutes after you leave).
+local function syncPvpTimer(f)
+    local fs = f.pvpTimer
+    if not fs then return end
+    if f.baseUnit ~= "player" or not (f.pvpIcon and f.pvpIcon:IsShown()) then
+        if f.pvpTicker then f.pvpTicker:Cancel(); f.pvpTicker = nil end
+        f.pvpTimerMs, f.pvpTimerAt = nil, nil
+        fs.shownLabel = nil
+        fs:Hide()
+        return
+    end
+    if not f.pvpTicker then
+        f.pvpTicker = C_Timer.NewTicker(0.25, function() syncPvpTimer(f) end)
+    end
+    local ms
+    pcall(function() ms = GetPVPTimer() end)
+    local now = GetTime()
+    local prev, at = f.pvpTimerMs, f.pvpTimerAt
+    f.pvpTimerMs, f.pvpTimerAt = ms, now
+    local elapsed = at and (now - at) or 0
+    local falling = type(ms) == "number" and type(prev) == "number" and elapsed >= 0.2
+        and ms < prev - elapsed * 400
+    local label = falling and pvpCountdownLabel(ms) or nil
+    if label then
+        if fs.shownLabel ~= label then fs.shownLabel = label; fs:SetText(label) end
+        fs:Show()
+    else
+        fs.shownLabel = nil
+        fs:Hide()
+    end
+end
+
 local function updateIndicators(f)
     if f.small or not f.pvpIcon then return end
     local u, base = f.wfUnit, f.baseUnit
@@ -2633,11 +2652,10 @@ local function updateIndicators(f)
         end
         placeIndicators(f)
         f.pvpIcon:Show()
-        if f.pvpHit then f.pvpHit:Show() end
     else
         f.pvpIcon:Hide()
-        if f.pvpHit then f.pvpHit:Hide() end
     end
+    syncPvpTimer(f)
     -- You becoming flagged: the game's own PvP update sound. A login while already flagged
     -- does not play (there was no unflagged reading yet). Target and focus stay silent.
     if base == "player" and seen then

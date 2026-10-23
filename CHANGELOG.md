@@ -5,6 +5,7 @@
   into contested territory. `UNIT_FACTION` had stopped refreshing the icon after the 1.16.50 event
   split.
 - Becoming PvP flagged plays the game's PvP update sound. A reload while already flagged stays quiet.
+- The player's PvP flag timer is a small white number just left of the shield (5m, 4m, 3m, 2m, 1m, then 59 down). It shows only while the five-minute countdown is actually running, not while a PvP zone holds the timer at 5:00. The mouseover tooltip is gone.
 
 ## 1.16.50
 - Faster in combat without changing how the frames look: heal and shield overlays keep their style
