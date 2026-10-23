@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.16.51
+- The PvP flag on the player (and target / focus) shows again when you become flagged by walking
+  into contested territory. `UNIT_FACTION` had stopped refreshing the icon after the 1.16.50 event
+  split.
+
 ## 1.16.50
 - Faster in combat without changing how the frames look: heal and shield overlays keep their style
   between health ticks, snow and blizzard glows only move a flake when it has shifted about a pixel,

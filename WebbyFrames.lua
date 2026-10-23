@@ -4765,10 +4765,14 @@ local function createFrame(unit)
             -- name / level / portrait only: not a full bar and aura repaint
             ns.markPaint(self, "info")
         elseif event == "UNIT_FACTION" or event == "UNIT_CONNECTION" then
-            -- plate colour, offline bolt, and health colour (tapped / reaction / grey)
+            -- plate colour, offline bolt, and health colour (tapped / reaction / grey).
+            -- Faction also carries PvP flag changes (e.g. walking into contested territory): the icon
+            -- lives in updateIndicators, not updateInfo, so it must run here. Before 1.16.50 this
+            -- went through updateAll; skipping it left the shield stuck until another indicator event.
             self.colorHold = nil
             ns.markPaint(self, "info")
             ns.markPaint(self, "health")
+            if event == "UNIT_FACTION" then updateIndicators(self) end
         elseif event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
             -- the rest flag can land after the event that brought you into the city
             if self.updateRest then C_Timer.After(0.5, function() if self.updateRest then self.updateRest() end end) end
@@ -4924,6 +4928,8 @@ local function createSmallFrame(unit, wf, index)
             self.colorHold = nil
             ns.markPaint(self, "info")
             ns.markPaint(self, "health")
+            -- (PvP shield on player/target/focus: small frames have none, updateIndicators returns)
+            if event == "UNIT_FACTION" then updateIndicators(self) end
         else ns.markPaint(self, "all") end
     end)
     -- Party slots that are not in use (party off, or raid style) register nothing. Party.listen
