@@ -4,7 +4,7 @@ Retail-style player, target, target of target, focus, focus target and pet frame
 Blizzard's own unit frame art (gold ring with the pointed corner, pointed bars). Nothing else is needed.
 
 ## Install
-Unzip the `WebbyFrames` folder into `World of Warcraft/_classic_beta_/Interface/AddOns`
+Unzip the `WebbyFrames` folder into `World of Warcraft/_forever_/Interface/AddOns`
 (delete any older `DFFramesForever` or `WebbyFrames` folder first; settings carry over).
 
 ## Use

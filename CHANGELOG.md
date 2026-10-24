@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+- First release for the live WoW Forever client. The beta client is no longer targeted; install under `_forever_`.
+- The PvP flag shows again when you walk into contested territory, and becoming flagged plays the game's PvP update sound.
+- The player's PvP flag timer is a small white number just left of the shield (5m, 4m, 3m, 2m, 1m, then 59 down). It shows only while the five-minute countdown is actually running. The mouseover tooltip is gone.
+- Faster in combat without changing how the frames look: heal and shield overlays keep their style between health ticks, snow and blizzard flakes only move when they have shifted, and the party range and healer mana tickers stay off until they are needed.
+- Heal and shield glows (pulse, shimmer, snowglobe, blizzard) start again after a reload without toggling them in the options.
+
 ## 1.16.51
 - The PvP flag on the player (and target / focus) shows again when you become flagged by walking
   into contested territory. `UNIT_FACTION` had stopped refreshing the icon after the 1.16.50 event
