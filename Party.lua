@@ -1108,7 +1108,8 @@ function Party.updateMana()
                 local name, pct
                 pcall(function() name = UnitName(e) end)
                 pcall(function() pct = UnitPowerPercent(e, 0, false, scale) end)
-                if name ~= nil and pct ~= nil and not isSecret(name) and not isSecret(pct) then
+                -- (hidden values first: comparing one, even with nil, throws)
+                if not isSecret(name) and not isSecret(pct) and name ~= nil and pct ~= nil then
                     local text = string.format("|c%s%s|r  %d%%", hex, name, pct)
                     if fs.manaText ~= text then fs.manaText = text; ok = pcall(fs.SetText, fs, text) else ok = true end
                 else
@@ -1167,7 +1168,7 @@ end
 -- Raid style (Party page, Style: Raid style)
 ---------------------------------------------------------------------------
 -- The party as flat, crisp tiles instead of the portrait frames, the way Blizzard's "Use Raid-Style
--- Party Frames" and EllesmereUI's party frames show it: health in a choice of colours with incoming
+-- Party Frames" shows it: health in a choice of colours with incoming
 -- heals and shields, power bars by role, the name, role / leader / raid marker, the ready check,
 -- summons and resurrections in the middle, a white edge on whoever you're targeting (and under the
 -- mouse), the threat colour on whoever has aggro, a debuff you can dispel (or any dispellable one) as a
@@ -1245,7 +1246,7 @@ local function edge(parent, layer, sub, th, rel)
 end
 
 -- One screen pixel, in `region`'s own units (so 1px lines stay crisp at any UI or frame scale), and
--- `v` rounded to whole screen pixels. (EllesmereUI snaps everything this way.)
+-- `v` rounded to whole screen pixels.
 function RP.onePixel(region)
     local _, ph = GetPhysicalScreenSize()
     local es = region:GetEffectiveScale()

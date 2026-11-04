@@ -501,7 +501,7 @@ local function healthColor(f)
     if otherPlayer(u) then return classColorOf(u) end
 
     local mode = getSetting(base, "colorMode")
-    if mode == "dark" then return 0.2, 0.2, 0.22 end      -- Dark: a flat dark bar (EllesmereUI's dark mode)
+    if mode == "dark" then return 0.2, 0.2, 0.22 end      -- Dark: a flat dark bar
     if mode == "custom" then                                -- Custom: one colour of your own
         local c = getSetting(base, "healthColorRGB")
         if type(c) == "table" then return c[1] or 0.15, c[2] or 0.75, c[3] or 0.25 end
@@ -935,7 +935,8 @@ function ns.barGlow(bar, mode, r, g, b, strength, border)
     -- strength 0 is a faint glow, 100 full.
     local cr, cg, cb = 0.3 + r * 0.7, 0.3 + g * 0.7, 0.3 + b * 0.7
     if mode == "off" or not fill then
-        ns.barGlowEdge(bar, fill, false, cr, cg, cb, 0.3 + 0.7 * strength, h)
+        -- (the border glow goes with any glow, or on its own)
+        ns.barGlowEdge(bar, fill, border and fill and true or false, cr, cg, cb, 0.3 + 0.7 * strength, h)
         if fx then fx:Hide(); fx.sig = nil end
         return
     end
@@ -3236,8 +3237,8 @@ end
 ---------------------------------------------------------------------------
 -- Combat numbers: damage and healing the unit takes pop up over its portrait and fade, like Blizzard's
 -- old portrait hit indicator. From UNIT_COMBAT; the amount may be protected, so it only goes to setters.
--- Static sits in the middle. Straight rises. Fountain arcs, alternating sides, on the same quarter
--- circle Ellesmere's combat text uses. Straight and Fountain are clipped to the portrait.
+-- Static sits in the middle. Straight rises. Fountain arcs, alternating sides, on a quarter
+-- circle. Straight and Fountain are clipped to the portrait.
 ---------------------------------------------------------------------------
 local HIT_WORDS = {   -- actions shown as a word instead of a number
     DODGE = DODGE, PARRY = PARRY, BLOCK = BLOCK, MISS = MISS, IMMUNE = IMMUNE, ABSORB = ABSORB,
@@ -3245,7 +3246,7 @@ local HIT_WORDS = {   -- actions shown as a word instead of a number
 }
 
 local Hit = {
-    -- quarter circle of radius 1: x toward the side, y along the rise (Ellesmere's fountain)
+    -- quarter circle of radius 1: x toward the side, y along the rise
     ARC = { { 0.134, 0.5 }, { 0.5, 0.866 }, { 1, 1 } },
     POOL = 6,
     RISE = 0.5,       -- how far a number travels, as a fraction of the portrait's height
@@ -3572,7 +3573,7 @@ local Extras = {
     COMBO_RADIUS = 38,                 -- pips sit just outside the portrait ring (gold edge ~29.5px out)
     -- UI-PetHappiness: unhappy, content, happy
     HAPPY_COORDS = { { 0.375, 0.5625, 0, 0.359375 }, { 0.1875, 0.375, 0, 0.359375 }, { 0, 0.1875, 0, 0.359375 } },
-    -- Forever's mood icons (as EllesmereUI uses): unhappy, content, happy
+    -- Forever's mood icons: unhappy, content, happy
     HAPPY_ATLAS = { "UI-PetMad", "UI-PetNeutral", "UI-PetHappiness" },
 }
 

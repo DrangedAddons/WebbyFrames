@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.0
+- Launch build for WoW Forever. The version number goes above every earlier release, so everyone on 1.16.x is offered the update (1.2.0 counted as older than them).
+- Heal border glow and Shield border glow work on their own again, with Heal glow or Shield glow off.
+- The healer mana list keeps updating in combat, when the game hides the mana values.
+
 ## 1.2.0
 - First release for the live WoW Forever client. The beta client is no longer targeted; install under `_forever_`.
 - The PvP flag shows again when you walk into contested territory, and becoming flagged plays the game's PvP update sound.
@@ -228,7 +233,7 @@ Also
 
 ## 1.15.0
 Raid-style pets, reworked
-- Pets on the raid-style party frames are now their own group, as Blizzard's raid frames and EllesmereUI do it: tiles as wide as the members', in their owners' order, packed with no gaps for members without a pet.
+- Pets on the raid-style party frames are now their own group, as Blizzard's raid frames do it: tiles as wide as the members', in their owners' order, packed with no gaps for members without a pet.
 - Pet group: after the party (on down the stack, or on along the row when side by side) or beside it (a column to the right, or a row underneath).
 - Pet height: how tall each pet tile is.
 - The sample party shows its pet in the pet group too.

@@ -1,7 +1,7 @@
 # Webby Frames
 
-Retail-style player, target, target of target, focus, focus target and pet frames for WoW Forever, built from
-Blizzard's own unit frame art (gold ring with the pointed corner, pointed bars). Nothing else is needed.
+Retail-style player, target, target of target, focus, focus target, pet and party frames for WoW Forever, built
+from Blizzard's own unit frame art (gold ring with the pointed corner, pointed bars). Nothing else is needed.
 
 ## Install
 Unzip the `WebbyFrames` folder into `World of Warcraft/_forever_/Interface/AddOns`
@@ -28,8 +28,11 @@ number), `/webby export` / `import`,
   and cat form, movable in Edit Mode (player; druids), pet happiness (pet)
 - **Bars:** health and power textures, font (SharedMedia ones too), numbers always / on mouseover / never as
   totals, percentages or both
-- **Health bar:** class or reaction colour, enemy NPC colour, fade to red as health drops (automatic or your own
-  stops), incoming heals, shields, recent damage, spell damage preview (target, focus)
+- **Health bar:** class or reaction colour (other players keep their class colour), enemy NPC colour, fade to red
+  as health drops, recent damage with its own look, spell damage preview (target, focus; channelled spells too)
+- **Incoming heals and shields:** texture, colour, opacity and a live preview on the frame, with glows (soft pulse,
+  shimmer, snowglobe or blizzard) and a border glow. A shield bigger than the missing health grows back over the
+  health from the bar's right end, and its amount shows as a number with the Numbers setting
 - **Buffs and debuffs:** buffs and debuffs sized separately, only your debuffs, below / above the frame or
   dragged anywhere in Edit Mode, row direction, gap, per row, how many, stack size, and time left as a sweep,
   numbers, both or nothing
@@ -38,7 +41,13 @@ number), `/webby export` / `import`,
 
 Always on: the player's corner accent, raid markers, combat swords and resting Zzz, the PvP shield, enemy level
 colours (and the skull for unknown levels). Combat numbers on you, your pet and the focus have one switch on
-the General page, and can sit still, rise, or arc like a fountain. The target's numbers have their own switch, since every hit on the target shows. Mobs tagged by someone else stay grey. Party frames are left to Blizzard or your party addon.
+the General page, and can sit still, rise, or arc like a fountain. The target's numbers have their own switch, since every hit on the target shows. Mobs tagged by someone else stay grey.
+
+## Party and more
+- **Party frames:** portrait frames like your own, or flat raid-style tiles, with pets, range fade, missing buffs
+  and a dispel glow. Blizzard's party frames come back if you turn them off.
+- **Healer mana** (party): a small list of your group's healers and their mana, placed in Edit Mode.
+- **Click casting:** bind spells to mouse clicks on the frames, on its own page in the options.
 
 ## Credits
 Made by **Webby**, **Lexible** and **Dranged**.
@@ -47,4 +56,4 @@ Includes LibEditMode by p3lim (unmodified, see Libs/LibEditMode/LICENSE.txt), th
 CallbackHandler-1.0, LibDataBroker-1.1 and LibDBIcon-1.0 for the minimap button.
 The frame art, bar fills, masks, elite dragons and resting animation in `Media/` come from
 [DragonflightUI](https://github.com/Karl-HeinzSchneider/WoW-DragonflightUI) by Karl-Heinz Schneider
-(MIT, see Media/LICENSE-DragonflightUI.txt), as are the art positions. Threat maths follow Foofi's ThreatDisplay.
+(MIT, see Media/LICENSE-DragonflightUI.txt), as are the art positions.
