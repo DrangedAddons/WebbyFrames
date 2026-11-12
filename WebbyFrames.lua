@@ -452,13 +452,70 @@ end)
 -- Colours
 ---------------------------------------------------------------------------
 
--- (both run on every health change: no throwaway functions)
+-- (both run when a bar's colour is first settled, not on later health ticks: colorHold)
+-- Group members: the class read off partyN / raidN when the roster changes, then kept.
+-- guid -> class file ("WARRIOR"). Never rebuilt from targettarget.
+ns.groupClass = {}
+function ns.groupClassToken(u)
+    local guid = plain(UnitGUID, u)
+    if not guid then return end
+    return ns.groupClass[guid], guid == ns.playerGUID
+end
+function ns.rebuildGroupClass()
+    -- one pass per burst of roster events, then a second if another landed while that pass ran
+    if ns.groupRebuildQueued then ns.groupRebuildAgain = true; return end
+    ns.groupRebuildQueued = true
+    local prev, map = ns.groupClass, {}
+    local function take(unit)
+        if not UnitExists(unit) then return end
+        local guid = plain(UnitGUID, unit)
+        if not guid or map[guid] then return end
+        local ok, _, class = pcall(UnitClass, unit)
+        if ok and not isSecret(class) and type(class) == "string" and class ~= "" then map[guid] = class end
+    end
+    take("player")
+    ns.playerGUID = plain(UnitGUID, "player")
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() or 0 do take("raid" .. i) end
+    elseif IsInGroup() then
+        for i = 1, (GetNumGroupMembers() or 1) - 1 do take("party" .. i) end
+    end
+    ns.groupClass = map
+    -- a bar painted before this person was on the roster: one repaint, then it holds again
+    local function release(f)
+        if not (f and f.colorHold and not f.colorFromGroup and ns.markPaint) then return end
+        local guid = plain(UnitGUID, f.wfUnit)
+        if guid and guid ~= ns.playerGUID and map[guid] and not prev[guid] then
+            f.colorHold = nil
+            ns.markPaint(f, "health")
+        end
+    end
+    for _, unit in ipairs(UNITS) do release(frames[unit]) end
+    for i = 2, Party.SLOTS do release(Party.members[i]) end
+    C_Timer.After(0, function()
+        ns.groupRebuildQueued = nil
+        if ns.groupRebuildAgain then ns.groupRebuildAgain = nil; ns.rebuildGroupClass() end
+    end)
+end
 local function classColorOf(u)
-    if not plain(UnitIsPlayer, u) then return end
-    local ok, _, token = pcall(UnitClass, u)
-    if not ok or isSecret(token) then return end
-    local c = token and RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
-    if c then return c.r, c.g, c.b end
+    local token = ns.groupClassToken(u)
+    if not token then
+        local ok, _, class = pcall(UnitClass, u)
+        if ok then token = class end
+    end
+    if not isSecret(token) then
+        local c = token and token ~= "" and RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
+        if c then return c.r, c.g, c.b end
+        return
+    end
+    -- secret class file: one C++ lookup. The numbers are kept (colorHold), not read again.
+    local color
+    if C_ClassColor and C_ClassColor.GetClassColor then
+        pcall(function() color = C_ClassColor.GetClassColor(token) end)
+    end
+    if not color then return end
+    local ok, r, g, b = pcall(color.GetRGB, color)
+    if ok and (isSecret(r) or r ~= nil) then return r, g, b end
 end
 
 local function reactionColorOf(u)
@@ -486,6 +543,10 @@ end
 local function healthColor(f)
     local u, base = f.wfUnit, f.baseUnit
     local r, g, b
+    -- settled colours stay put (colorHold). Fade and "by health" are the ones read again each tick.
+    f.colorLive = (getSetting(base, "healthFade") or getSetting(base, "colorMode") == "gradient") and true or false
+    f.colorFromGroup = nil
+    f.colorClass = nil
 
     if not plain(UnitPlayerControlled, u) and plain(UnitIsTapDenied, u) then return 0.5, 0.5, 0.5 end
 
@@ -497,8 +558,15 @@ local function healthColor(f)
         return nil
     end
 
+    -- Someone in the group, and not you: the roster's class. Held. Not read off targettarget again.
+    local token, mine = ns.groupClassToken(u)
+    if token and not mine then
+        local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
+        if c then f.colorFromGroup, f.colorLive = true, false; return c.r, c.g, c.b end
+    end
+
     -- Other players, friendly or hostile: class colour only. Health colour and the fade would paint over it.
-    if otherPlayer(u) then return classColorOf(u) end
+    if otherPlayer(u) then f.colorClass, f.colorLive = true, false; return classColorOf(u) end
 
     local mode = getSetting(base, "colorMode")
     if mode == "dark" then return 0.2, 0.2, 0.22 end      -- Dark: a flat dark bar
@@ -525,9 +593,15 @@ local function healthColor(f)
             end
         end
     end
-    if mode == "smart" or mode == "class" then r, g, b = classColorOf(u) end
-    -- smart: NPCs (no class) fall back to their reaction colour
-    if not r and (mode == "smart" or mode == "reaction") then r, g, b = reactionColorOf(u) end
+    local got = false
+    if mode == "smart" or mode == "class" then
+        r, g, b = classColorOf(u)
+        if isSecret(r) or r ~= nil then got = true end
+    end
+    -- smart: NPCs (no class) fall back to their reaction colour. A class colour is kept.
+    if not got and (mode == "smart" or mode == "reaction") then r, g, b = reactionColorOf(u) end
+    -- another player's class (plain or secret): no fade, and no second look next health tick
+    if got and u ~= "player" and not mine then f.colorClass, f.colorLive = true, false end
     return r, g, b
 end
 
@@ -719,7 +793,7 @@ end
 -- Returns true when the fade painted the bar.
 local function applyHealthFade(f, r, g, b)
     -- Other players stay their class colour. No fade, and no green-yellow-red.
-    if otherPlayer(f.wfUnit) then return false end
+    if f.colorFromGroup or f.colorClass or otherPlayer(f.wfUnit) or isSecret(r) then return false end
     -- on: the health colour chosen above (class, reaction or plain green) fades to red as health drops
     -- (Health colour "By health" is this fade too, along a fixed green - yellow - red)
     local byHealth = getSetting(f.baseUnit, "colorMode") == "gradient"
@@ -757,8 +831,11 @@ local function updateHealthColor(f)
     local tex = f.hp:GetStatusBarTexture()
     -- the tintable fill for a colour or a fade (tinting the green fill meant greying it first, which
     -- dulled every colour); the plain green fill otherwise
-    local fading = getSetting(f.baseUnit, "healthFade") and not otherPlayer(f.wfUnit) and true or false
-    local want = ((r or fading) and f.hpStatusAtlas) or f.hpAtlas
+    local secret = isSecret(r)
+    local has = secret or r ~= nil
+    local fading = (not secret) and (not f.colorClass) and (not f.colorFromGroup)
+        and getSetting(f.baseUnit, "healthFade") and not otherPlayer(f.wfUnit) and true or false
+    local want = ((has or fading) and f.hpStatusAtlas) or f.hpAtlas
     if f.customTex then
         if f.hpCurrent ~= f.customTex then
             f.hpCurrent = f.customTex
@@ -767,8 +844,8 @@ local function updateHealthColor(f)
             useClip(f.hp, true)
         end
         if tex then tex:SetDesaturated(false) end
-        if r then f.hp:SetStatusBarColor(r, g, b, 1) else f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) end
-        applyHealthFade(f, r, g, b)
+        if has then f.hp:SetStatusBarColor(r, g, b, 1) else f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) end
+        if not secret then applyHealthFade(f, r, g, b) end
         return
     end
     if f.hpCurrent ~= want and (f.hpFiles or hasAtlas(want)) then
@@ -779,15 +856,15 @@ local function updateHealthColor(f)
         useClip(f.hp, false)
         tex = f.hp:GetStatusBarTexture()
     end
-    if r then
-        if tex then tex:SetDesaturated(want == f.hpAtlas) end   -- plain art needs desaturating to tint cleanly
+    if has then
+        if tex and not secret then tex:SetDesaturated(want == f.hpAtlas) end   -- plain art needs desaturating to tint cleanly
         f.hp:SetStatusBarColor(r, g, b, 1)
     else
         if tex then tex:SetDesaturated(false) end
         -- the tintable fill (fading) starts out green; the plain green fill as drawn
         if want == f.hpStatusAtlas then f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) else f.hp:SetStatusBarColor(1, 1, 1, 1) end
     end
-    applyHealthFade(f, r, g, b)
+    if not secret then applyHealthFade(f, r, g, b) end
 end
 
 local refreshText   -- defined with the settings code below
@@ -1673,13 +1750,12 @@ local function updateHealth(f, lite)
     if not UnitExists(u) then return end
     local status = unitStatus(u)
     -- Class and reaction colour do not follow the health number. Fade and "by health" do.
-    -- colorHold is cleared when the unit, faction or settings change (updateAll, setSetting).
+    -- colorHold is cleared when the unit or the settings change. A group member's class is not.
     if status ~= f.statusText then f.colorHold = nil end
-    local base = f.baseUnit
-    local liveColor = not otherPlayer(u) and (getSetting(base, "healthFade") or getSetting(base, "colorMode") == "gradient")
-    if liveColor or not f.colorHold then
+    -- colour is settled once (the roster, for a group member). Fade and "by health" stay live.
+    if not f.colorHold or f.colorLive then
         updateHealthColor(f)
-        if not liveColor then f.colorHold = true end
+        if not f.colorLive then f.colorHold = true end
     end
     local hpTex = f.hp:GetStatusBarTexture()
     if hpTex then hpTex:SetAlpha(tonumber(getSetting(f.baseUnit, "hpAlpha")) or 1) end
@@ -4090,8 +4166,14 @@ function Extras.tintColor(unit, who)
     if mode == "class" or mode == "theirclass" then
         local class
         pcall(function()
-            if OWN_CLASS[unit] then class = select(2, UnitClass("player"))
-            elseif who and UnitIsPlayer(who) then class = select(2, UnitClass(who)) end
+            if OWN_CLASS[unit] then class = ns.playerClass()
+            elseif who then
+                class = ns.groupClassToken(who)
+                if not class and UnitIsPlayer(who) then
+                    local _, token = UnitClass(who)
+                    if not isSecret(token) then class = token end
+                end
+            end
         end)
         local c = class and (RAID_CLASS_COLORS or {})[class]
         if c then return { c.r, c.g, c.b } end
@@ -4211,7 +4293,7 @@ local function safely(fn, f)
     if not ok and err and not updateErrors[err] then updateErrors[err] = true; updateErrors[#updateErrors + 1] = err end
 end
 local function updateAll(f)
-    f.colorHold = nil
+    f.colorHold, f.colorLive, f.colorFromGroup, f.colorClass = nil, nil, nil, nil
     safely(updateInfo, f); safely(updateHealth, f); safely(updatePower, f); safely(updateIndicators, f)
     safely(updateThreat, f); safely(updateAuras, f); safely(Extras.update, f)
     -- a teleport repaints the frame from here (PLAYER_ENTERING_WORLD). The resting glow is in
@@ -5047,12 +5129,12 @@ local function createFrame(unit)
         elseif event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FLAGS" then
             updateIndicators(self)
             -- (a mob someone else tagged turns grey: its held health colour is read again)
-            if event == "UNIT_FLAGS" then self.colorHold = nil; ns.markPaint(self, "health") end
+            if event == "UNIT_FLAGS" and not self.colorFromGroup then self.colorHold = nil; ns.markPaint(self, "health") end
         elseif event:find("^UNIT_THREAT") then updateThreat(self)
         elseif event == "GROUP_ROSTER_UPDATE" or event == "PARTY_LEADER_CHANGED" then
             updateLeader(self)
             pcall(Extras.raid, self)
-            if event == "GROUP_ROSTER_UPDATE" then rebuildThreatRoster() end
+            if event == "GROUP_ROSTER_UPDATE" then rebuildThreatRoster(); pcall(ns.rebuildGroupClass) end
         elseif event == "UNIT_AURA" then
             local _, info = ...
             pcall(AuraKit.auraChanged, self, info)   -- (the aura containers redraw on their own)
@@ -5078,7 +5160,7 @@ local function createFrame(unit)
             -- Faction also carries PvP flag changes (e.g. walking into contested territory): the icon
             -- lives in updateIndicators, not updateInfo, so it must run here. Before 1.16.50 this
             -- went through updateAll; skipping it left the shield stuck until another indicator event.
-            self.colorHold = nil
+            if not self.colorFromGroup then self.colorHold = nil end
             ns.markPaint(self, "info")
             ns.markPaint(self, "health")
             if event == "UNIT_FACTION" then updateIndicators(self) end
@@ -5234,7 +5316,7 @@ local function createSmallFrame(unit, wf, index)
             or event == "UNIT_NAME_UPDATE" then
             ns.markPaint(self, "info")
         elseif event == "UNIT_FACTION" or event == "UNIT_CONNECTION" then
-            self.colorHold = nil
+            if not self.colorFromGroup then self.colorHold = nil end
             ns.markPaint(self, "info")
             ns.markPaint(self, "health")
             -- (PvP shield on player/target/focus: small frames have none, updateIndicators returns)
@@ -5960,6 +6042,7 @@ init:SetScript("OnEvent", function(_, event)
     pcall(Opt.setupMinimap)
     if DB.enabled == false then return end
 
+    pcall(ns.rebuildGroupClass)
     for _, unit in ipairs(UNITS) do
         if unit == "party" then
             for i = 1, Party.SLOTS do createSmallFrame("party", "party" .. i, i) end
