@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.17.2
 - Target of target (and focus target) keeps a group member's class colour. The class is read from the party or raid roster when the group changes, then held, so a late or hidden class on targettarget can no longer leave the bar green.
 
 ## 1.17.1
