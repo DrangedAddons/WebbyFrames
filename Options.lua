@@ -580,7 +580,7 @@ Opt.SEARCH_WORDS = {
     rpDispelStyle = "cleanse decurse debuff", rpDispelIcon = "cleanse decurse magic curse poison disease debuff",
     auraBuffs = "hots auras", auraDebuffs = "dots auras", rpBuffs = "hots auras", rpDebuffs = "dots auras", auraMine = "dots my debuffs", auraMineBig = "dots my debuffs",
     auraTimer = "cooldown duration timer countdown swipe", auraPos = "auras buffs debuffs",
-    castShow = "castbar casting spell interrupt kick", castText = "castbar spell", castIcon = "castbar spell",
+    castShow = "castbar casting spell interrupt kick purple cooldown", castText = "castbar spell", castIcon = "castbar spell",
     castTexture = "castbar statusbar", castSpark = "castbar", castFade = "castbar fade flash", castFadeTime = "castbar fade",
     partyGap = "gap padding", rpGap = "gap padding", rangeFade = "range distance alpha", rangeAlpha = "range distance alpha fade",
     partyTooltip = "mouseover hover", partyStyle = "raid frames compact grid tiles portrait", partySort = "order role sort",
@@ -2138,7 +2138,7 @@ local function buildSettings()
         -- Cast bar and threat -------------------------------------------------------------
         if hasCastAndThreat(unit) then
             B.section("Cast bar and threat", false)
-            local cast = B.check("castShow", "Cast bar", "What the unit is casting, under its mana bar: yellow for a cast, green for a channel, grey when you can't interrupt it, red when interrupted.", true)
+            local cast = B.check("castShow", "Cast bar", "What the unit is casting, under its mana bar: yellow for a cast, green for a channel, purple while your interrupt is on cooldown, grey when you can't interrupt it, red when interrupted.", true)
             local castOn = isOn("castShow")
             B.under(cast, castOn,
                 B.pair({ "castText", "Spell name", "The spell's name on the bar.", true },
@@ -2161,9 +2161,10 @@ local function buildSettings()
                     function(r, g, b) setSetting(unit, key, { r, g, b }) end, tip .. " Click to change it.")
             end
             B.under(cast, castOn,
-                castSwatch("castColorCast", "Casting colour", "The bar while the unit casts.", { 1.0, 0.70, 0.0 }),
-                castSwatch("castColorChannel", "Channel colour", "The bar while the unit channels.", { 0.0, 0.85, 0.2 }),
-                castSwatch("castColorLocked", "Can't interrupt colour", "The bar for a cast that can't be interrupted.", { 0.6, 0.6, 0.6 }),
+                castSwatch("castColorCast", "Casting colour", "The bar while the unit casts and your interrupt is ready.", { 1.0, 0.70, 0.0 }),
+                castSwatch("castColorChannel", "Channel colour", "The bar while the unit channels and your interrupt is ready.", { 0.0, 0.85, 0.2 }),
+                castSwatch("castColorKickCD", "Kick on cooldown colour", "The bar while you could interrupt the cast, but your interrupt is still recharging (Kick, Counterspell, Pummel and the rest).", { 0.60, 0.20, 0.90 }),
+                castSwatch("castColorLocked", "Can't interrupt colour", "The bar for a cast that can't be interrupted. This comes from the game's own flag, and it covers the other colours.", { 0.6, 0.6, 0.6 }),
                 castSwatch("castColorInterrupted", "Interrupted colour", "The bar when a cast is interrupted or fails.", { 0.9, 0.1, 0.1 }))
             local threat = B.check("threatOn", "Threat", "Your threat on hostile mobs: a glow round the frame and / or your threat %, both in your threat colour.", true)
             B.under(threat, function() return get("threatShow") ~= "off" end,

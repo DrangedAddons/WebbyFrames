@@ -91,7 +91,7 @@ local DEFAULT_SETTINGS = {
     castShow = true, castText = true, castIcon = true,
     -- the cast bar's looks: its texture ("default": the frame's health texture), a spark on the fill's
     -- edge, how it goes when a cast ends (off / fade / flash) and how long that takes. Its colours
-    -- (castColorCast, Channel, Locked, Interrupted) are unset until picked: CAST_COLORS then.
+    -- (castColorCast, Channel, KickCD, Locked, Interrupted) are unset until picked: CAST_COLORS then.
     castTexture = "default", castSpark = true, castFade = "fade", castFadeTime = 0.5,
     -- frame art colour: "default" (gold, as drawn), "class" or "custom" (frameColor = { r, g, b })
     frameTint = "default",
@@ -2809,11 +2809,14 @@ local CAST_ART = {
     inset = { left = 2.5, top = 1, bottom = 5 },
 }
 
--- fill colour by Blizzard's cast type
+-- fill colour by Blizzard's cast type, plus purple while your own interrupt is recharging.
+-- Grey (uninterruptable) is the game's notInterruptible flag, not something we decide.
+-- Purple is the game's cooldown on your kick (GetSpellCooldownDuration), not a timer we keep.
 local CAST_COLORS = {
     standard        = { 1.0, 0.70, 0.0 },   -- casting: yellow
     empowered       = { 1.0, 0.70, 0.0 },
     channel         = { 0.0, 0.85, 0.2 },   -- channelling: green
+    kickcd          = { 0.60, 0.20, 0.90 }, -- your interrupt is on cooldown: purple
     uninterruptable = { 0.6, 0.6, 0.6 },    -- can't be interrupted: grey
     interrupted     = { 0.9, 0.1, 0.1 },    -- interrupted / failed: red
 }
@@ -2821,7 +2824,8 @@ local CAST_COLORS = {
 -- (each cast type's own colour option; unset, its CAST_COLORS one)
 ns.CAST_COLOR_KEY = {
     [CAST_COLORS.standard] = "castColorCast", [CAST_COLORS.empowered] = "castColorCast",
-    [CAST_COLORS.channel] = "castColorChannel", [CAST_COLORS.uninterruptable] = "castColorLocked",
+    [CAST_COLORS.channel] = "castColorChannel", [CAST_COLORS.kickcd] = "castColorKickCD",
+    [CAST_COLORS.uninterruptable] = "castColorLocked",
     [CAST_COLORS.interrupted] = "castColorInterrupted",
 }
 function ns.castRGB(unit, c)
@@ -2894,6 +2898,14 @@ local function newCastBar(f)
     cb.spark:SetBlendMode("ADD")
     cb.spark:AddMaskTexture(cb.boxMask)
     cb.spark:Hide()
+    -- grey laid over the fill while the cast can't be interrupted. It follows the fill (so the empty
+    -- trough stays clear) and its alpha comes from the game's notInterruptible flag, which may be secret:
+    -- SetAlphaFromBoolean applies it without Lua reading the flag.
+    cb.lock = top:CreateTexture(nil, "ARTWORK")
+    cb.lock:SetTexture("Interface\\Buttons\\WHITE8X8")
+    cb.lock:AddMaskTexture(cb.boxMask)
+    cb.lock:SetAlpha(0)
+    cb.lock:Hide()
     box:Hide()
     return cb
 end
@@ -3120,12 +3132,263 @@ local function placeCastbar(f)
     cb.text:SetShown(getSetting(f.baseUnit, "castText") and true or false)
 end
 
--- The cast's colour: Retail bars name their cast type in barType; older ones have channeling /
--- notInterruptible flags. (Run in pcall: a flag could be hidden.)
-function ns.castColor(bar)
-    if CAST_COLORS[bar.barType] then return CAST_COLORS[bar.barType] end
-    if bar.notInterruptible then return CAST_COLORS.uninterruptable end
-    if bar.channeling then return CAST_COLORS.channel end
+-- Your interrupt, so the bar can go purple while it is recharging.
+-- There is no API that names "the player's kick". The spell id is the one the spellbook actually
+-- knows (EllesmereUI's lookup when that addon is loaded, since it already tracks the same kicks).
+-- The cooldown itself is the game's: C_Spell.GetSpellCooldownDuration, never start + duration math.
+-- WoW Forever (toc 1.60.x) has its own ranked, stance-gated kicks and must not share retail ids
+-- (16979 is Wild Charge there, Feral Charge here).
+
+function ns.clientIsForever()
+    if ns._forever == nil then
+        local iface = select(4, GetBuildInfo())
+        ns._forever = type(iface) == "number" and iface >= 16000 and iface < 20000 or false
+    end
+    return ns._forever
+end
+
+-- Retail: every interrupt of the class, main kick last so a character who knows both (Pummel and
+-- Disrupting Shout, Rebuke and Avenger's Shield) follows the main one. A warlock's list ends with the
+-- Grimoire of Sacrifice Spell Lock; a summoned demon's kick is preferred over it (see refreshKick).
+ns.KICK_RETAIL = {
+    WARRIOR = { 386071, 6552 },             -- Disrupting Shout, Pummel
+    PALADIN = { 31935, 96231 },             -- Avenger's Shield, Rebuke
+    HUNTER = { 187707, 147362 },            -- Muzzle, Counter Shot
+    ROGUE = { 1766 },                       -- Kick
+    PRIEST = { 15487 },                     -- Silence
+    DEATHKNIGHT = { 47528 },                -- Mind Freeze
+    SHAMAN = { 57994 },                     -- Wind Shear
+    MAGE = { 2139 },                        -- Counterspell
+    WARLOCK = { 89766, 19647, 119910, 119914, 132409 }, -- Axe Toss, Spell Lock, the two demon commands, Sacrifice
+    MONK = { 116705 },                      -- Spear Hand Strike
+    DRUID = { 78675, 106839 },              -- Solar Beam, Skull Bash
+    DEMONHUNTER = { 183752 },               -- Disrupt
+    EVOKER = { 351338 },                    -- Quell
+}
+-- Forever: ranks low to high (the cooldown is shared; the last known rank wins). A group with stances
+-- or form ids only counts while that stance or form is up.
+ns.KICK_FOREVER = {
+    WARRIOR = {
+        { 72, 1671, 1672, stances = { 1, 2 } },  -- Shield Bash: Battle, Defensive
+        { 6552, 6554, stances = { 3 } },         -- Pummel: Berserker
+    },
+    ROGUE = { { 1766, 1767, 1768, 1769 } },      -- Kick
+    MAGE = { { 2139 } },                         -- Counterspell
+    SHAMAN = { { 8042, 8044, 8045, 8046, 10412, 10413, 10414 } }, -- Earth Shock
+    PRIEST = { { 15487 } },                      -- Silence
+    WARLOCK = { { 19244, 19647 } },              -- Spell Lock (Felhunter)
+    DRUID = { { 16979, formIds = { 5, 8 } } },   -- Feral Charge: Bear, Dire Bear
+}
+
+local function kickListed(list, value)
+    if not list then return false end
+    for i = 1, #list do if list[i] == value then return true end end
+    return false
+end
+
+local function kickGroupOk(group)
+    if group.stances then
+        if type(GetShapeshiftForm) ~= "function" then return false end
+        local ok, form = pcall(GetShapeshiftForm)
+        return ok and kickListed(group.stances, form or 0)
+    end
+    if group.formIds then
+        if type(GetShapeshiftFormID) ~= "function" then return false end
+        local ok, id = pcall(GetShapeshiftFormID)
+        return ok and kickListed(group.formIds, id or 0)
+    end
+    return true
+end
+
+-- "pet" if a summoned demon's book has it, "player" if the player's book does, else nil.
+local function kickBank(spellId)
+    local book = C_SpellBook
+    if book and book.IsSpellKnownOrInSpellBook then
+        local pet = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Pet
+        local player = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
+        if pet then
+            local ok, known = pcall(book.IsSpellKnownOrInSpellBook, spellId, pet)
+            if ok and known then return "pet" end
+        end
+        if player then
+            local ok, known = pcall(book.IsSpellKnownOrInSpellBook, spellId, player)
+            if ok and known then return "player" end
+        end
+        local ok, known = pcall(book.IsSpellKnownOrInSpellBook, spellId)
+        if ok and known then return "player" end
+        return nil
+    end
+    if IsSpellKnown then
+        local ok, known = pcall(IsSpellKnown, spellId, true)
+        if ok and known then return "pet" end
+        ok, known = pcall(IsSpellKnown, spellId)
+        if ok and known then return "player" end
+    end
+end
+
+function ns.refreshKick()
+    local E = rawget(_G, "EllesmereUI")
+    if E and type(E.RefreshKickAbility) == "function" then pcall(E.RefreshKickAbility) end
+    -- (theirs when it has resolved one, so both bars follow the same kick; otherwise our own list)
+    if E and type(E.GetActiveKickSpell) == "function" then
+        local ok, id = pcall(E.GetActiveKickSpell)
+        if ok and id then ns.activeKick = id; return end
+    end
+    local class = ns.playerClass()
+    local petHit, playerHit
+    if ns.clientIsForever() then
+        local groups = ns.KICK_FOREVER[class]
+        if groups then
+            for i = 1, #groups do
+                local group = groups[i]
+                if kickGroupOk(group) then
+                    for j = 1, #group do
+                        local bank = kickBank(group[j])
+                        if bank == "pet" then petHit = group[j] elseif bank == "player" then playerHit = group[j] end
+                    end
+                end
+            end
+        end
+    else
+        local spells = ns.KICK_RETAIL[class]
+        if spells then
+            for i = 1, #spells do
+                local bank = kickBank(spells[i])
+                if bank == "pet" then petHit = spells[i] elseif bank == "player" then playerHit = spells[i] end
+            end
+        end
+    end
+    ns.activeKick = petHit or playerHit
+end
+
+-- notInterruptible for this unit, straight from UnitCastingInfo / UnitChannelInfo. A secret boolean
+-- is returned as-is (never compared). nil when nothing is being cast.
+function ns.castLockFlag(unit)
+    local function from(fn, index)
+        if type(fn) ~= "function" then return nil end
+        local pack = { pcall(fn, unit) }
+        if not pack[1] then return nil end
+        local ni = pack[index]
+        if isSecret(ni) then return ni end
+        if ni == true or ni == false then return ni end
+    end
+    local ni = from(UnitCastingInfo, 9)   -- pcall's ok, then the 8th return
+    if isSecret(ni) or ni ~= nil then return ni end
+    return from(UnitChannelInfo, 8)       -- ok, then the 7th return
+end
+
+-- Yellow (or green, for a channel) while your kick is ready; purple while its cooldown is running.
+-- The ready flag may be secret, so the colour is chosen by the curve, not an if.
+function ns.kickTintRGB(unit, channel)
+    local base = channel and CAST_COLORS.channel or CAST_COLORS.standard
+    local br, bg, bb = ns.castRGB(unit, base)
+    local spell = ns.activeKick
+    if not spell then return br, bg, bb end
+    local cr, cg, cblue = ns.castRGB(unit, CAST_COLORS.kickcd)
+    local curve = C_CurveUtil and C_CurveUtil.EvaluateColorValueFromBoolean
+    local getDur = C_Spell and C_Spell.GetSpellCooldownDuration
+    if curve and getDur then
+        local ok, dur = pcall(getDur, spell, true)   -- ignore the global cooldown (12.0.5+; older ignores the arg)
+        if not ok or not (dur and dur.IsZero) then ok, dur = pcall(getDur, spell) end
+        if ok and dur and dur.IsZero then
+            local ready = dur:IsZero()
+            return curve(ready, br, cr), curve(ready, bg, cg), curve(ready, bb, cblue)
+        end
+    end
+    if C_Spell and C_Spell.GetSpellCooldown then
+        local ok, info = pcall(C_Spell.GetSpellCooldown, spell)
+        -- isActive and isOnGCD are plain. A kick that is only on the global cooldown stays the ready colour.
+        if ok and type(info) == "table" and info.isActive and not info.isOnGCD then return cr, cg, cblue end
+    end
+    return br, bg, bb
+end
+
+-- Paints the fill (yellow / green / purple) and the grey lock over it. Safe to call every frame of a
+-- cast: a kick coming off cooldown has to recolour the bar, and the colour values may be secret, so
+-- they are handed to setters and never compared.
+function ns.paintCastColor(f, bar)
+    local cb = f.cb
+    if not cb then return end
+    local live = bar.casting or bar.channeling or bar.reverseChanneling
+    if live then
+        if not f.castKickFresh then
+            f.castKickFresh = true
+            f.castLocked = false
+            pcall(ns.refreshKick)
+        end
+        f.castInterrupted = nil
+        f.castWasChannel = bar.channeling and true or false
+        local ni = ns.castLockFlag(f.wfUnit)
+        if not (isSecret(ni) or ni ~= nil) and bar then
+            if not isSecret(bar.notInterruptible) and (bar.notInterruptible == true or bar.notInterruptible == false) then
+                ni = bar.notInterruptible
+            elseif not isSecret(bar.barType) and bar.barType == "uninterruptable" then
+                ni = true
+            end
+        end
+        if isSecret(ni) or ni ~= nil then f.castLocked = ni end
+    else
+        f.castKickFresh = nil
+    end
+    local interrupted = f.castInterrupted or (not isSecret(bar.barType) and bar.barType == "interrupted")
+    local channel = (live and bar.channeling) or (not live and f.castWasChannel)
+    -- (a plain table for the fade: red, green, or the usual cast. Purple is not its own fade.)
+    if interrupted then f.castColor = CAST_COLORS.interrupted
+    elseif channel then f.castColor = CAST_COLORS.channel
+    elseif not isSecret(f.castLocked) and f.castLocked == true then f.castColor = CAST_COLORS.uninterruptable
+    else f.castColor = CAST_COLORS.standard end
+    local r, g, b
+    if interrupted then
+        r, g, b = ns.castRGB(f.baseUnit, CAST_COLORS.interrupted)
+    else
+        r, g, b = ns.kickTintRGB(f.baseUnit, channel and true or false)
+    end
+    cb:SetStatusBarColor(r, g, b, 1)
+    local tex = cb:GetStatusBarTexture()
+    if tex then pcall(tex.SetDesaturated, tex, cb.fillPlain and true or false) end
+    if cb.spark then
+        if isSecret(r) or isSecret(g) or isSecret(b) then
+            cb.spark:SetVertexColor(1, 0.92, 0.75)
+        else
+            cb.spark:SetVertexColor(math.min(1, r * 0.5 + 0.6), math.min(1, g * 0.5 + 0.6), math.min(1, b * 0.5 + 0.6))
+        end
+        -- a locked cast is a flat grey fill: the spark belongs to the colour underneath
+        local held = f.castLocked
+        if isSecret(held) then
+            if cb.spark.SetAlphaFromBoolean then cb.spark:SetAlphaFromBoolean(held, 0, 1) end
+        elseif held == true then
+            cb.spark:SetAlpha(0)
+        else
+            cb.spark:SetAlpha(1)
+        end
+    end
+    local lock = cb.lock
+    if not lock then return end
+    local lr, lg, lb = ns.castRGB(f.baseUnit, CAST_COLORS.uninterruptable)
+    lock:SetVertexColor(lr, lg, lb, 1)
+    if tex and lock.fill ~= tex then
+        lock.fill = tex
+        lock:ClearAllPoints()
+        lock:SetAllPoints(tex)
+    end
+    if interrupted then
+        lock:SetAlpha(0)
+        lock:Hide()
+        return
+    end
+    local ni = f.castLocked
+    lock:Show()
+    if isSecret(ni) then
+        if lock.SetAlphaFromBoolean then
+            lock:SetAlphaFromBoolean(ni, 1, 0)
+        elseif C_CurveUtil and C_CurveUtil.EvaluateColorValueFromBoolean then
+            lock:SetAlpha(C_CurveUtil.EvaluateColorValueFromBoolean(ni, 1, 0))
+        end
+    elseif ni == true then
+        lock:SetAlpha(1)
+    else
+        lock:SetAlpha(0)
+    end
 end
 
 -- Copies Blizzard's bar onto ours while that bar is shown. Every frame of a cast, so no throwaway
@@ -3153,18 +3416,9 @@ local function mirrorCastbar(f)
     pcall(cb.SetMinMaxValues, cb, bar:GetMinMaxValues())
     pcall(cb.SetValue, cb, bar:GetValue())
     box:SetAlpha(bar:GetAlpha())
-    local ok, c = pcall(ns.castColor, bar)
-    if not (ok and c) then c = CAST_COLORS.standard end
-    -- colour, spell name and icon hold still for the whole cast. Value and alpha do not.
-    if f.castColor ~= c then
-        f.castColor = c
-        -- (in your own colour for this cast type, if you picked one)
-        local r, g, b = ns.castRGB(f.baseUnit, c)
-        cb:SetStatusBarColor(r, g, b, 1)
-        local tex = cb:GetStatusBarTexture()
-        if tex then tex:SetDesaturated(cb.fillPlain and true or false) end
-        cb.spark:SetVertexColor(math.min(1, r * 0.5 + 0.6), math.min(1, g * 0.5 + 0.6), math.min(1, b * 0.5 + 0.6))
-    end
+    -- colour can change during a cast (a kick comes off cooldown; a cast becomes uninterruptible).
+    -- The values may be secret, so they only go to setters. Spell name and icon still hold still.
+    pcall(ns.paintCastColor, f, bar)
     -- the spark on the fill's edge (re-anchored when the fill texture changes)
     if getSetting(f.baseUnit, "castSpark") then
         local tex = cb:GetStatusBarTexture()
@@ -3211,6 +3465,18 @@ local function adoptCastbar(f, barName)
     f.portraitHolder = holder
     -- (Blizzard's bar stays in its own frame, which hideAllBlizzard keeps running but invisible)
     bar:HookScript("OnShow", function() pcall(placeCastbar, f) end)
+    -- interrupted / failed is a plain flag. barType is often a secret by the time the cast ends, so
+    -- the red colour can't be read off it. The hook runs after Blizzard's own handler.
+    bar:HookScript("OnEvent", function(self, event)
+        if event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_CHANNEL_START" or event == "UNIT_SPELLCAST_EMPOWER_START" then
+            f.castInterrupted = nil
+        elseif event == "UNIT_SPELLCAST_INTERRUPTED" or event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" then
+            f.castInterrupted = true
+        else
+            local bt = self.barType
+            if not isSecret(bt) and bt == "interrupted" then f.castInterrupted = true end
+        end
+    end)
     -- Their OnUpdate runs only while their bar is shown, and it stops when the bar hides. The old
     -- unit-frame poll noticed a hide because our frame stayed shown. This hook needs OnHide, or our
     -- box stays up after you switch away, or after the cast ends and the fade finishes.
@@ -3229,6 +3495,18 @@ local function adoptCastbar(f, barName)
     end)
     placeCastbar(f)
 end
+
+-- Which kick the bar should read. Again when the spellbook, the demon, or (on Forever) the stance changes.
+ns.kickWatch = CreateFrame("Frame")
+ns.kickWatch:RegisterEvent("PLAYER_LOGIN")
+ns.kickWatch:RegisterEvent("SPELLS_CHANGED")
+ns.kickWatch:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+if ns.kickWatch.RegisterUnitEvent then ns.kickWatch:RegisterUnitEvent("UNIT_PET", "player") else ns.kickWatch:RegisterEvent("UNIT_PET") end
+ns.kickWatch:SetScript("OnEvent", function(_, event, unit)
+    if event == "UNIT_PET" and unit and unit ~= "player" then return end
+    pcall(ns.refreshKick)
+end)
+if UnitGUID and UnitGUID("player") then pcall(ns.refreshKick) end
 
 ---------------------------------------------------------------------------
 -- Buffs and debuffs: Auras.lua (AuraKit)
@@ -5383,7 +5661,7 @@ end
 local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture", "powerTexture", "font", "threatShow", "threatStyle", "threatColors",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
-                    "castColorCast", "castColorChannel", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healTexture", "healColor", "healAlpha","absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damageTrailTexture", "damageTrailColor", "damageTrailAlpha", "damageTrailDelay", "damagePredict",
+                    "castColorCast", "castColorChannel", "castColorKickCD", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healTexture", "healColor", "healAlpha","absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damageTrailTexture", "damageTrailColor", "damageTrailAlpha", "damageTrailDelay", "damagePredict",
                     "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }
 

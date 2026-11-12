@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Cast bars (target, focus): purple while your interrupt is recharging (Kick, Counterspell, Pummel and the rest), and grey when the cast can't be interrupted. Grey is the game's own interrupt flag. Purple is the game's cooldown on your kick, not a timer the addon keeps. New swatch: Kick on cooldown colour.
+
 ## 1.17.0
 - Launch build for WoW Forever. The version number goes above every earlier release, so everyone on 1.16.x is offered the update (1.2.0 counted as older than them).
 - Heal border glow and Shield border glow work on their own again, with Heal glow or Shield glow off.

@@ -36,8 +36,7 @@ number), `/webby export` / `import`,
 - **Buffs and debuffs:** buffs and debuffs sized separately, only your debuffs, below / above the frame or
   dragged anywhere in Edit Mode, row direction, gap, per row, how many, stack size, and time left as a sweep,
   numbers, both or nothing
-- **Cast bar and threat** (target, focus): a cast bar built into the frame art (spell name and icon), and
-  threat as a glow and / or a % (by the raid marker or in a box), green to red or in Blizzard's colours
+- **Cast bar and threat** (target, focus): a cast bar built into the frame art (spell name and icon). Yellow for a cast, green for a channel, purple while your interrupt is on cooldown, grey when the cast can't be interrupted, red when interrupted. Threat is a glow and / or a % (by the raid marker or in a box), green to red or in Blizzard's colours
 
 Always on: the player's corner accent, raid markers, combat swords and resting Zzz, the PvP shield, enemy level
 colours (and the skull for unknown levels). Combat numbers on you, your pet and the focus have one switch on
