@@ -2017,7 +2017,7 @@ local function buildSettings()
             B.dropdown("petColor", "Health colour", "Default: the bar as the game draws it (green). Or the same as your player frame's (your class colour, if that's what the player frame uses).", "player",
                 { { "plain", "Default" }, { "player", "Match the player frame" } })
         else
-            local colour = B.dropdown("colorMode", "Health colour", "Default: the bar as the game draws it (green).\nClass for players, reaction for NPCs: players in their class colour, NPCs red, yellow or green by how they feel about you.\nClass colour: players in their class colour, NPCs as drawn.\nBy reaction: NPCs red, yellow or green by how they feel about you. Other players stay their class colour.\nDark: a flat dark bar.", "smart", COLOR_MODES)
+            local colour = B.dropdown("colorMode", "Health colour", "Default: the bar as the game draws it (green).\nClass for players, reaction for NPCs: players in their class colour, NPCs red, yellow or green by how they feel about you.\nClass colour: players in their class colour, NPCs as drawn.\nBy reaction: everyone red, yellow or green by how they feel about you.\nDark: a flat dark bar.", "smart", COLOR_MODES)
             if not isPlayer then
                 local function byReaction() local m = get("colorMode"); return m == "smart" or m == "reaction" end
                 local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs. Green (or your own colour) lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",

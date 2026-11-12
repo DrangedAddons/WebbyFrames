@@ -1576,9 +1576,6 @@ end
 ---------------------------------------------------------------------------
 -- A member's class, when they're a player and the game will say.
 function RP.classOf(u)
-    -- the roster, taken when the group changes: not UnitClass on every tile paint
-    local token = ns.groupClassToken and ns.groupClassToken(u)
-    if token then return token end
     if not plain(UnitIsPlayer, u) then return nil end
     local ok, _, class = pcall(UnitClass, u)
     if ok and not isSecret(class) then return class end
