@@ -454,10 +454,24 @@ end)
 
 -- (both run on every health change: no throwaway functions)
 local function classColorOf(u)
-    if not plain(UnitIsPlayer, u) then return end
     local ok, _, token = pcall(UnitClass, u)
-    if not ok or isSecret(token) then return end
-    local c = token and RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
+    if not ok then return end
+    if isSecret(token) then
+        -- Battleground enemies: the class file is hidden from addons. Indexing RAID_CLASS_COLORS
+        -- with it throws, so the game's own lookup turns it into a colour. That colour may itself
+        -- be hidden; it is only ever handed to SetStatusBarColor.
+        local color
+        if C_ClassColor and C_ClassColor.GetClassColor then
+            pcall(function() color = C_ClassColor.GetClassColor(token) end)
+        end
+        if isSecret(color) or not color then return end
+        local r, g, b
+        ok, r, g, b = pcall(function() return color:GetRGB() end)
+        if ok and (isSecret(r) or r ~= nil) then return r, g, b end
+        return
+    end
+    if token == "" or not plain(UnitIsPlayer, u) then return end
+    local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
     if c then return c.r, c.g, c.b end
 end
 
@@ -477,10 +491,14 @@ end
 local PLAYER_AS_FRAME = { wfUnit = "player", baseUnit = "player" }
 
 -- Another player, friendly or hostile. Not you. Their bar stays their class colour.
+-- In a battleground, UnitIsPlayer on an enemy is often hidden. A hidden class file is still a player.
 local function otherPlayer(u)
-    if plain(UnitIsPlayer, u) ~= true then return false end
     if plain(UnitIsUnit, u, "player") then return false end
-    return true
+    local ok, player = pcall(UnitIsPlayer, u)
+    if not ok then return false end
+    if not isSecret(player) then return player == true end
+    local classOk, _, token = pcall(UnitClass, u)
+    return (classOk and isSecret(token)) and true or false
 end
 
 local function healthColor(f)
@@ -526,8 +544,8 @@ local function healthColor(f)
         end
     end
     if mode == "smart" or mode == "class" then r, g, b = classColorOf(u) end
-    -- smart: NPCs (no class) fall back to their reaction colour
-    if not r and (mode == "smart" or mode == "reaction") then r, g, b = reactionColorOf(u) end
+    -- smart: NPCs (no class) fall back to their reaction colour. A hidden class colour is kept.
+    if not isSecret(r) and not r and (mode == "smart" or mode == "reaction") then r, g, b = reactionColorOf(u) end
     return r, g, b
 end
 
@@ -719,7 +737,8 @@ end
 -- Returns true when the fade painted the bar.
 local function applyHealthFade(f, r, g, b)
     -- Other players stay their class colour. No fade, and no green-yellow-red.
-    if otherPlayer(f.wfUnit) then return false end
+    -- A hidden class colour can't be read into a curve either.
+    if isSecret(r) or otherPlayer(f.wfUnit) then return false end
     -- on: the health colour chosen above (class, reaction or plain green) fades to red as health drops
     -- (Health colour "By health" is this fade too, along a fixed green - yellow - red)
     local byHealth = getSetting(f.baseUnit, "colorMode") == "gradient"
@@ -757,8 +776,10 @@ local function updateHealthColor(f)
     local tex = f.hp:GetStatusBarTexture()
     -- the tintable fill for a colour or a fade (tinting the green fill meant greying it first, which
     -- dulled every colour); the plain green fill otherwise
-    local fading = getSetting(f.baseUnit, "healthFade") and not otherPlayer(f.wfUnit) and true or false
-    local want = ((r or fading) and f.hpStatusAtlas) or f.hpAtlas
+    local secret = isSecret(r)
+    local has = secret or r ~= nil
+    local fading = (not secret) and getSetting(f.baseUnit, "healthFade") and not otherPlayer(f.wfUnit) and true or false
+    local want = ((has or fading) and f.hpStatusAtlas) or f.hpAtlas
     if f.customTex then
         if f.hpCurrent ~= f.customTex then
             f.hpCurrent = f.customTex
@@ -767,7 +788,7 @@ local function updateHealthColor(f)
             useClip(f.hp, true)
         end
         if tex then tex:SetDesaturated(false) end
-        if r then f.hp:SetStatusBarColor(r, g, b, 1) else f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) end
+        if has then f.hp:SetStatusBarColor(r, g, b, 1) else f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) end
         applyHealthFade(f, r, g, b)
         return
     end
@@ -779,8 +800,8 @@ local function updateHealthColor(f)
         useClip(f.hp, false)
         tex = f.hp:GetStatusBarTexture()
     end
-    if r then
-        if tex then tex:SetDesaturated(want == f.hpAtlas) end   -- plain art needs desaturating to tint cleanly
+    if has then
+        if tex and not secret then tex:SetDesaturated(want == f.hpAtlas) end   -- plain art needs desaturating to tint cleanly
         f.hp:SetStatusBarColor(r, g, b, 1)
     else
         if tex then tex:SetDesaturated(false) end

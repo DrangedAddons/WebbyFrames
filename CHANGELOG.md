@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Battleground enemies show their class colour on the target frame. Their class is hidden from addons, so the bar uses the game's own class-colour lookup instead of dropping it and staying green.
+
 ## 1.17.1
 - Cast bars (target, focus): purple while your interrupt is recharging (Kick, Counterspell, Pummel and the rest), and grey when the cast can't be interrupted. Grey is the game's own interrupt flag. Purple is the game's cooldown on your kick, not a timer the addon keeps. New swatch: Kick on cooldown colour.
 
