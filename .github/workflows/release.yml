@@ -12,6 +12,8 @@
 # - If the .toc already has a newer version than the last tag (you bumped it by hand), that one is used.
 # - If CHANGELOG.md has no section for the new version, one is written from the commit messages.
 # - Pushing a v* tag yourself still releases that tag as it is (no bump).
+# - A tag with a hyphen (v1.17.2-beta) is a prerelease: it does not become Latest, and it is
+#   ignored when the next real version is chosen.
 # - The version commit is pushed with the workflow's own token, which doesn't start another run.
 name: Release
 
@@ -45,7 +47,8 @@ jobs:
       - name: Pick the version
         id: ver
         run: |
-          LAST=$(git tag -l 'v*' | sed 's/^v//' | sort -V | tail -1)
+          # prerelease tags (v1.17.2-beta) are not a base for the next number
+          LAST=$(git tag -l 'v*' | sed 's/^v//' | grep -Ev -- '-' | sort -V | tail -1)
           echo "last=${LAST}" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
@@ -128,4 +131,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ steps.ver.outputs.version }}
         run: |
-          gh release create "${TAG}" "WebbyFrames-${TAG}.zip" --title "WebbyFrames ${TAG}" --notes-file notes.md
+          # a hyphen in the tag (v1.17.2-beta) stays a prerelease, so it does not replace Latest
+          PRE=()
+          if [[ "${TAG}" == *-* ]]; then PRE=(--prerelease); fi
+          gh release create "${TAG}" "WebbyFrames-${TAG}.zip" --title "WebbyFrames ${TAG}" --notes-file notes.md "${PRE[@]}"

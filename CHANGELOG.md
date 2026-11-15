@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.17.2-beta
 - Battleground enemies show their class colour on the target frame. Their class is hidden from addons, so the bar uses the game's own class-colour lookup instead of dropping it and staying green.
 
 ## 1.17.1
