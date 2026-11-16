@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.17.3-beta
 - Revelation glow (General): while the Revelation enchant is up, the Heating Up flames sit at the centre of the screen. They fade across the buff's 15 seconds, and disappear the moment the next spell spends it.
 
 ## 1.17.2-beta
