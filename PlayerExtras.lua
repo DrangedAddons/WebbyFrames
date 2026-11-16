@@ -298,112 +298,10 @@ function PX.place()
 end
 
 ---------------------------------------------------------------------------
--- Revelation. The weapon enchant's buff: the next non-periodic spell is a
--- critical hit. While it is up, the Heating Up flames sit at the centre of
--- the screen and fade across its time. The moment the spell spends it, they
--- are gone. (The game's own overlay does not fade a buff, so these are ours.)
----------------------------------------------------------------------------
-local REVELATION = 1248808
-local HEAT_LONG, HEAT_SHORT = 256 * 0.8, 128 * 0.8
--- the client ships the flame under one of these; the first that loads is kept
-local HEAT_PATHS = {
-    "Interface\\SpellActivationOverlay\\Heating_Up",
-    "Interface\\SpellActivationOverlay\\heating_up",
-    "Interface\\SPELLS\\SPELLACTIVATIONOVERLAYS\\HEATING_UP",
-    "SPELLS\\SPELLACTIVATIONOVERLAYS\\HEATING_UP",
-}
-
-local function heatPath()
-    if PX.heatPath ~= nil then return PX.heatPath or nil end
-    local probe = UIParent:CreateTexture(nil, "BACKGROUND")
-    local found
-    for _, path in ipairs(HEAT_PATHS) do
-        probe:SetTexture(path)
-        if probe:GetTexture() then found = path break end
-    end
-    probe:SetTexture(nil)
-    PX.heatPath = found or false
-    return found
-end
-
--- the player's Revelation, or nil once the next spell has spent it
-local function revelationAura()
-    local auras = C_UnitAuras
-    if not auras then return end
-    if auras.GetPlayerAuraBySpellID then
-        local ok, aura = pcall(auras.GetPlayerAuraBySpellID, REVELATION)
-        if ok then return type(aura) == "table" and aura or nil end
-    end
-    if not auras.GetAuraDataByIndex then return end
-    for i = 1, 40 do
-        local ok, aura = pcall(auras.GetAuraDataByIndex, "player", i, "HELPFUL")
-        if not ok or type(aura) ~= "table" then return end
-        local id = aura.spellId
-        if id and not isSecret(id) and id == REVELATION then return aura end
-    end
-end
-
--- 1 at the start of the buff, 0 as its time runs out. A hidden duration stays full
--- until the buff itself is gone.
-local function revelationAlpha(aura)
-    local dur, exp = aura.duration, aura.expirationTime
-    if isSecret(dur) or isSecret(exp) then return 1 end
-    dur, exp = tonumber(dur), tonumber(exp)
-    if not dur or dur <= 0 or not exp then return 1 end
-    local left = exp - GetTime()
-    if left <= 0 then return 0 end
-    if left > dur then left = dur end
-    return left / dur
-end
-
-function PX.updateRevelation()
-    local heat = PX.heat
-    if not heat then return end
-    local off = WebbyFramesDB and WebbyFramesDB.revelationGlow == false
-    local aura = (not off) and revelationAura()
-    local alpha = aura and revelationAlpha(aura) or 0
-    if not aura or alpha <= 0 then
-        heat:SetScript("OnUpdate", nil)
-        heat:Hide()
-        return
-    end
-    heat:SetAlpha(alpha)
-    if not heat:IsShown() then
-        heat:SetScript("OnUpdate", PX.updateRevelation)
-        heat:Show()
-    end
-end
-
-local function makeRevelation()
-    if PX.heat then return end
-    local path = heatPath()
-    local heat = CreateFrame("Frame", nil, UIParent)
-    heat:SetFrameStrata("BACKGROUND")
-    heat:SetSize(HEAT_LONG, HEAT_LONG)
-    heat:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-    heat:EnableMouse(false)
-    heat:Hide()
-    local function side(point, rel, flip)
-        local tex = heat:CreateTexture(nil, "ARTWORK")
-        tex:SetSize(HEAT_SHORT, HEAT_LONG)
-        tex:SetPoint(point, heat, rel, 0, 0)
-        tex:SetBlendMode("ADD")
-        if path then
-            tex:SetTexture(path)
-            if flip then tex:SetTexCoord(1, 0, 0, 1) else tex:SetTexCoord(0, 1, 0, 1) end
-        end
-    end
-    side("RIGHT", "LEFT", false)   -- left flame, sitting against the centre
-    side("LEFT", "RIGHT", true)    -- the same flame, flipped, on the right
-    PX.heat = heat
-end
-
----------------------------------------------------------------------------
 -- Start (at login, from the main file)
 ---------------------------------------------------------------------------
 function PX.init()
     if PX.box then return end
-    makeRevelation()
     local box = CreateFrame("Frame", "WebbyFrames_BuffBars", UIParent)
     box:SetFrameStrata("LOW")
     box:SetClampedToScreen(true)
@@ -449,11 +347,10 @@ function PX.init()
         if event == "UNIT_AURA" then
             if not pending then
                 pending = true
-                C_Timer.After(0, function() pending = false; pcall(PX.updateBars); pcall(PX.updateRevelation) end)
+                C_Timer.After(0, function() pending = false; pcall(PX.updateBars) end)
             end
         else
             pcall(PX.updateEnchants)
-            if event == "PLAYER_ENTERING_WORLD" then pcall(PX.updateRevelation) end
         end
     end)
     -- (the enchants' time left, once a second; their end comes as an event)
@@ -463,7 +360,6 @@ function PX.init()
         end
     end)
     PX.apply()
-    pcall(PX.updateRevelation)
 end
 
 -- An option changed.

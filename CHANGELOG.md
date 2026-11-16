@@ -1,8 +1,5 @@
 # Changelog
 
-## 1.17.3-beta
-- Revelation glow (General): while the Revelation enchant is up, the Heating Up flames sit at the centre of the screen. They fade across the buff's 15 seconds, and disappear the moment the next spell spends it.
-
 ## 1.17.2-beta
 - Battleground enemies show their class colour on the target frame. Their class is hidden from addons, so the bar uses the game's own class-colour lookup instead of dropping it and staying green.
 
