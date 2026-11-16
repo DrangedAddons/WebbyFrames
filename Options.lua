@@ -560,7 +560,8 @@ Opt.SEARCH_WORDS = {
     enabled = "enable disable turn off addon", combatNumbers = "floating combat text fct damage numbers",
     combatStyle = "straight fountain static animation scroll combat numbers",
     combatTarget = "target combat numbers other players damage",
-    minimapButton = "minimap icon", scale = "size bigger smaller", font = "text typeface",
+    minimapButton = "minimap icon", revelationGlow = "revelation heating up proc enchant crit spell activation overlay glow",
+    scale = "size bigger smaller", font = "text typeface",
     frameTint = "border color gold class", portraitStyle = "class icon face picture",
     barTexture = "hp health statusbar", powerTexture = "mana rage energy focus power statusbar",
     hpAlpha = "hp transparent see-through alpha", mpAlpha = "mana rage energy transparent see-through alpha",
@@ -1582,7 +1583,7 @@ local function buildSettings()
         local general = setmetatable({}, {
             -- addon-wide switches, both on unless turned off; "show_<unit>" is that frame's Show
             __index = function(_, k)
-                if k == "enabled" or k == "combatNumbers" or k == "combatTarget" then return WebbyFramesDB[k] ~= false end
+                if k == "enabled" or k == "combatNumbers" or k == "combatTarget" or k == "revelationGlow" then return WebbyFramesDB[k] ~= false end
                 if k == "combatStyle" then
                     local v = WebbyFramesDB.combatStyle
                     if v == "straight" or v == "fountain" then return v end
@@ -1593,7 +1594,11 @@ local function buildSettings()
                 if unit then return frameOn(unit) end
             end,
             __newindex = function(_, k, v)
-                if k == "enabled" or k == "combatNumbers" or k == "combatTarget" then WebbyFramesDB[k] = v and true or false; return end
+                if k == "enabled" or k == "combatNumbers" or k == "combatTarget" or k == "revelationGlow" then
+                    WebbyFramesDB[k] = v and true or false
+                    if k == "revelationGlow" and ns.PlayerExtras and ns.PlayerExtras.updateRevelation then ns.PlayerExtras.updateRevelation() end
+                    return
+                end
                 if k == "combatStyle" then
                     if v ~= "straight" and v ~= "fountain" then v = "static" end
                     WebbyFramesDB.combatStyle = v
@@ -1613,6 +1618,7 @@ local function buildSettings()
         local targetRow = B.check("combatTarget", "Target numbers", "Numbers on the target's portrait.\n\nEvery hit on the target shows, yours and everyone else's. The game no longer says which are yours.\n\nOff: the target frame draws none, and does not run their animation. You and your pet keep theirs.", true)
         B.under(combatRow, function() return general.combatNumbers end, styleRow, targetRow)
         B.pair({ "minimapButton", "Minimap button", "A Webby Frames button on the minimap: click it for these options, right-click it for Edit Mode. Drag it round the minimap to move it.", true })
+        B.check("revelationGlow", "Revelation glow", "While Revelation is up, the Heating Up flames sit at the centre of the screen. They fade across the buff (15 seconds), and vanish the moment the next spell spends it.", true)
 
         B.header("Frames")
         -- which of the optional frames are used (player and target always are)
