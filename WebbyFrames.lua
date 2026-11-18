@@ -31,14 +31,6 @@ local function hasCorner(unit) return unit == "player" end
 -- your own frames (class colour = yours; no "your debuffs" on them)
 local OWN_CLASS = { player = true, pet = true }
 
-local COLOR_MODES = {
-    { "plain",    "Default" },          -- (the bar as the game draws it: green)
-    { "smart",    "Class for players, reaction for NPCs" },
-    { "class",    "Class colour (players only)" },
-    { "reaction", "By reaction" },
-    { "dark",     "Dark" },
-}
-
 local DEFAULT_POS = {
     player = { point = "TOPLEFT", x = 20,  y = -40 },
     target = { point = "TOPLEFT", x = 270, y = -40 },
@@ -79,9 +71,10 @@ local DEFAULT_SETTINGS = {
     scale = 1, showName = true, healthFade = false, textMode = "always", textFormat = "value", barTexture = "default", font = "default", threatShow = "both",
     threatStyle = "text",       -- the threat %: "text" (just the number, by the raid marker) or "box" (above the name)
     threatColors = "gradient",  -- "gradient" (green to red) or "blizzard"
-    -- health bar colour: "smart" (class colour for players, reaction colour for NPCs), "class", "reaction" or "plain"
+    -- (older health-colour choices, still stored, no longer read: every player is class colour,
+    -- every NPC is yellow when neutral and green otherwise)
     colorMode = "smart",
-    npcColor = "reaction",   -- hostile NPCs: "reaction" (red), "green" or "custom" (npcColorRGB = { r, g, b })
+    npcColor = "reaction",
     -- buffs and debuffs (off unless a frame's defaults turn them on)
     auraBuffs = false, auraDebuffs = false, auraMine = false,
     auraSize = 18, auraPerRow = 8, auraMax = 16, auraPos = "below", auraTimer = "both",   -- auraDebuffSize follows auraSize until set
@@ -134,7 +127,7 @@ local DEFAULT_SETTINGS = {
     costShade = 55,          -- player: how much lighter (above 0) or darker (below 0) the cost shows
     costGlow = "off", costGlowAlpha = 0.6,   -- player: glow on the cost while you cast (pulse / shimmer / snow / blizzard)
     cornerStyle = "retail",  -- player: the corner accent's art, Retail's or Forever's own
-    petColor = "player",     -- pet health bar: "player" (the player frame's colour) or "plain" (Default: as drawn)
+    petColor = "player",     -- (no longer read: a pet is an NPC, so its bar is green)
     petHappy = "corner",     -- hunter pet happiness: "corner" (over the corner accent), "badge" (in the level circle) or "off"
 }
 
@@ -452,7 +445,7 @@ end)
 -- Colours
 ---------------------------------------------------------------------------
 
--- (both run on every health change: no throwaway functions)
+-- A player's class colour. A hidden class file is turned into a colour by the game.
 local function classColorOf(u)
     local ok, _, token = pcall(UnitClass, u)
     if not ok then return end
@@ -488,12 +481,10 @@ function ns.playerClass()
 end
 
 
-local PLAYER_AS_FRAME = { wfUnit = "player", baseUnit = "player" }
-
--- Another player, friendly or hostile. Not you. Their bar stays their class colour.
--- In a battleground, UnitIsPlayer on an enemy is often hidden. A hidden class file is still a player.
-local function otherPlayer(u)
-    if plain(UnitIsUnit, u, "player") then return false end
+-- A player, friendly or hostile, including you. A plain "no" is an NPC even when the game
+-- also reports a class for them (a faction leader such as Drek'thar). A hidden answer with a
+-- hidden class file is a player: battleground enemies.
+local function unitIsPlayer(u)
     local ok, player = pcall(UnitIsPlayer, u)
     if not ok then return false end
     if not isSecret(player) then return player == true end
@@ -501,52 +492,19 @@ local function otherPlayer(u)
     return (classOk and isSecret(token)) and true or false
 end
 
+-- Neutral and passive NPCs are yellow. Every other NPC, friendly or hostile, stays the bar's own green.
+local function neutralNpc(u)
+    if plain(UnitReaction, u, "player") == 4 then return true end
+    local ok, r, g, b = pcall(UnitSelectionColor, u)
+    return ok and type(r) == "number" and r > 0.9 and g > 0.9 and b < 0.2
+end
+
 local function healthColor(f)
-    local u, base = f.wfUnit, f.baseUnit
-    local r, g, b
-
+    local u = f.wfUnit
+    -- a mob someone else has tagged: grey, as the default frames do
     if not plain(UnitPlayerControlled, u) and plain(UnitIsTapDenied, u) then return 0.5, 0.5, 0.5 end
-
-    -- the pet's own selection colour flips around (neutral / friendly / controlled), so its bar is either
-    -- the player frame's colour (as set on the player page: your class colour, say) or Default: the bar
-    -- as the game draws it
-    if base == "pet" then
-        if getSetting("pet", "petColor") == "player" then return healthColor(PLAYER_AS_FRAME) end
-        return nil
-    end
-
-    -- Other players, friendly or hostile: class colour only. Health colour and the fade would paint over it.
-    if otherPlayer(u) then return classColorOf(u) end
-
-    local mode = getSetting(base, "colorMode")
-    if mode == "dark" then return 0.2, 0.2, 0.22 end      -- Dark: a flat dark bar
-    if mode == "custom" then                                -- Custom: one colour of your own
-        local c = getSetting(base, "healthColorRGB")
-        if type(c) == "table" then return c[1] or 0.15, c[2] or 0.75, c[3] or 0.25 end
-        return 0.15, 0.75, 0.25
-    end
-    if mode == "gradient" then return 0.15, 0.85, 0.25 end  -- By health: green when full (applyHealthFade does the rest)
-    -- friendly pets and guardians (on any frame, e.g. targeting your pet): their selection colour
-    -- flips between friendly, neutral and "controlled" blue, so they are always green
-    if mode ~= "plain" and mode ~= "class" then
-        if plain(UnitPlayerControlled, u) and plain(UnitIsPlayer, u) == false and plain(UnitCanAttack, "player", u) == false then
-            return 0.1, 0.8, 0.1
-        end
-        -- hostile NPCs can have their own colour instead of reaction red (green, say, so the fade to red
-        -- has somewhere to go); neutral ones keep their yellow
-        local npc = getSetting(base, "npcColor")
-        if npc == "green" or npc == "custom" then
-            if plain(UnitIsPlayer, u) == false and (plain(UnitReaction, u, "player") or 9) <= 3 then
-                local c = npc == "custom" and getSetting(base, "npcColorRGB")
-                if type(c) == "table" then return c[1] or 0.1, c[2] or 0.8, c[3] or 0.1 end
-                return 0.1, 0.8, 0.1
-            end
-        end
-    end
-    if mode == "smart" or mode == "class" then r, g, b = classColorOf(u) end
-    -- smart: NPCs (no class) fall back to their reaction colour. A hidden class colour is kept.
-    if not isSecret(r) and not r and (mode == "smart" or mode == "reaction") then r, g, b = reactionColorOf(u) end
-    return r, g, b
+    if unitIsPlayer(u) then return classColorOf(u) end
+    if neutralNpc(u) then return 1, 1, 0 end
 end
 
 -- Dead / ghost / offline, or nil. Status flags are plain booleans, but are still only read inside pcall.
@@ -705,71 +663,6 @@ local function applyFont(f)
     end
 end
 
--- Health colour fade: the colour is chosen by a curve the GAME evaluates from the unit's health
--- percent, so it works with protected values; the result is only ever passed to a setter. Above 66%
--- the bar keeps its own colour, then a smooth blend: yellow at 66%, orange at 33%, red at 1% and
--- below. Other players do not fade: their bar stays their class colour (see otherPlayer).
-local FADE_YELLOW = { 0.95, 0.90, 0.15 }
-local FADE_ORANGE = { 0.96, 0.55, 0.10 }
-local FADE_RED    = { 0.89, 0.19, 0.19 }
-local fadeCurves = {}
-
-local function getHealthFadeCurve(r, g, b)
-    r, g, b = r or 0.1, g or 0.8, b or 0.1
-    local key = string.format("%.2f:%.2f:%.2f", r, g, b)
-    local c = fadeCurves[key]
-    if c ~= nil then return c or nil end
-    fadeCurves[key] = false
-    pcall(function()
-        if not (C_CurveUtil and C_CurveUtil.CreateColorCurve and CreateColor) then return end
-        local curve = C_CurveUtil.CreateColorCurve()
-        pcall(function() curve:SetType(Enum.LuaCurveType.Linear) end)
-        curve:AddPoint(0, CreateColor(FADE_RED[1], FADE_RED[2], FADE_RED[3], 1))
-        curve:AddPoint(0.01, CreateColor(FADE_RED[1], FADE_RED[2], FADE_RED[3], 1))
-        curve:AddPoint(0.33, CreateColor(FADE_ORANGE[1], FADE_ORANGE[2], FADE_ORANGE[3], 1))
-        curve:AddPoint(0.66, CreateColor(FADE_YELLOW[1], FADE_YELLOW[2], FADE_YELLOW[3], 1))
-        curve:AddPoint(1, CreateColor(r, g, b, 1))
-        fadeCurves[key] = curve
-    end)
-    return fadeCurves[key] or nil
-end
-
--- Returns true when the fade painted the bar.
-local function applyHealthFade(f, r, g, b)
-    -- Other players stay their class colour. No fade, and no green-yellow-red.
-    -- A hidden class colour can't be read into a curve either.
-    if isSecret(r) or otherPlayer(f.wfUnit) then return false end
-    -- on: the health colour chosen above (class, reaction or plain green) fades to red as health drops
-    -- (Health colour "By health" is this fade too, along a fixed green - yellow - red)
-    local byHealth = getSetting(f.baseUnit, "colorMode") == "gradient"
-    if not getSetting(f.baseUnit, "healthFade") and not byHealth then return false end
-    if not (UnitHealthPercent and UnitExists(f.wfUnit)) then return false end
-    -- a mob someone else has tagged stays plain grey: its health is no business of yours
-    if not plain(UnitPlayerControlled, f.wfUnit) and plain(UnitIsTapDenied, f.wfUnit) then return false end
-    local curve
-    if byHealth then
-        if fadeCurves.byHealth == nil then
-            fadeCurves.byHealth = false
-            pcall(function()
-                local c = C_CurveUtil.CreateColorCurve()
-                pcall(function() c:SetType(Enum.LuaCurveType.Linear) end)
-                c:AddPoint(0, CreateColor(0.9, 0.12, 0.1, 1))
-                c:AddPoint(0.5, CreateColor(0.95, 0.82, 0.1, 1))
-                c:AddPoint(1, CreateColor(0.15, 0.85, 0.25, 1))
-                fadeCurves.byHealth = c
-            end)
-        end
-        curve = fadeCurves.byHealth or nil
-    else
-        curve = getHealthFadeCurve(r, g, b)
-    end
-    if not curve then return false end
-    local ok, color = pcall(UnitHealthPercent, f.wfUnit, true, curve)
-    if ok and color then ok = pcall(f.hp.SetStatusBarColor, f.hp, color:GetRGB()) end
-    -- (the bar is on its tintable fill while fading, see updateHealthColor: no greying needed)
-    return ok
-end
-
 local function updateHealthColor(f)
     local ok, r, g, b = pcall(healthColor, f)
     if not ok then r, g, b = nil, nil, nil end
@@ -778,8 +671,7 @@ local function updateHealthColor(f)
     -- dulled every colour); the plain green fill otherwise
     local secret = isSecret(r)
     local has = secret or r ~= nil
-    local fading = (not secret) and getSetting(f.baseUnit, "healthFade") and not otherPlayer(f.wfUnit) and true or false
-    local want = ((has or fading) and f.hpStatusAtlas) or f.hpAtlas
+    local want = (has and f.hpStatusAtlas) or f.hpAtlas
     if f.customTex then
         if f.hpCurrent ~= f.customTex then
             f.hpCurrent = f.customTex
@@ -789,7 +681,6 @@ local function updateHealthColor(f)
         end
         if tex then tex:SetDesaturated(false) end
         if has then f.hp:SetStatusBarColor(r, g, b, 1) else f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) end
-        applyHealthFade(f, r, g, b)
         return
     end
     if f.hpCurrent ~= want and (f.hpFiles or hasAtlas(want)) then
@@ -808,7 +699,6 @@ local function updateHealthColor(f)
         -- the tintable fill (fading) starts out green; the plain green fill as drawn
         if want == f.hpStatusAtlas then f.hp:SetStatusBarColor(0.1, 0.8, 0.1, 1) else f.hp:SetStatusBarColor(1, 1, 1, 1) end
     end
-    applyHealthFade(f, r, g, b)
 end
 
 local refreshText   -- defined with the settings code below
@@ -1693,14 +1583,12 @@ local function updateHealth(f, lite)
     local u = f.wfUnit
     if not UnitExists(u) then return end
     local status = unitStatus(u)
-    -- Class and reaction colour do not follow the health number. Fade and "by health" do.
-    -- colorHold is cleared when the unit, faction or settings change (updateAll, setSetting).
+    -- The colour does not follow the health number. colorHold is cleared when the unit,
+    -- its faction or the settings change (updateAll, setSetting).
     if status ~= f.statusText then f.colorHold = nil end
-    local base = f.baseUnit
-    local liveColor = not otherPlayer(u) and (getSetting(base, "healthFade") or getSetting(base, "colorMode") == "gradient")
-    if liveColor or not f.colorHold then
+    if not f.colorHold then
         updateHealthColor(f)
-        if not liveColor then f.colorHold = true end
+        f.colorHold = true
     end
     local hpTex = f.hp:GetStatusBarTexture()
     if hpTex then hpTex:SetAlpha(tonumber(getSetting(f.baseUnit, "hpAlpha")) or 1) end
@@ -5683,7 +5571,7 @@ local COPY_KEYS = { "scale", "showName", "textMode", "textFormat", "barTexture",
                     "auraBuffs", "auraDebuffs", "auraMine", "auraSize", "auraDebuffSize", "auraPerRow", "auraMax", "auraPos", "auraTimer",
                     "castShow", "castText", "castIcon", "castTexture", "castSpark", "castFade", "castFadeTime",
                     "castColorCast", "castColorChannel", "castColorKickCD", "castColorLocked", "castColorInterrupted", "castFlashColor", "absorbTexture", "absorbAlpha", "absorbColor", "healTexture", "healColor", "healAlpha","absorbGlow", "absorbGlowAlpha", "healGlow", "healGlowAlpha", "absorbBorder", "healBorder", "healPrediction", "absorbs", "damageTrail", "damageTrailTexture", "damageTrailColor", "damageTrailAlpha", "damageTrailDelay", "damagePredict",
-                    "colorMode", "healthFade", "frameTint", "frameColor", "petHappy", "petColor", "comboPoints", "npcColor", "npcColorRGB",
+                    "frameTint", "frameColor", "petHappy", "comboPoints",
                     "auraGap", "auraGrowth", "auraStack", "portraitStyle" }
 
 function resetFrame(unit)
@@ -5706,10 +5594,7 @@ function copySettings(from, to)
     for _, key in ipairs(COPY_KEYS) do
         local v = getSetting(from, key)
         -- (the party's own names for the same choices: its members are players, each in their own class)
-        if to == "party" then
-            if key == "colorMode" and (v == "smart" or v == "reaction") then v = "class" end
-            if key == "frameTint" and v == "class" then v = "theirclass" end
-        end
+        if to == "party" and key == "frameTint" and v == "class" then v = "theirclass" end
         if v ~= nil then unitData(to, true)[key] = v end
     end
     local f = frames[to]
@@ -6171,7 +6056,7 @@ ns.unitData, ns.resolveTexture, ns.defaultFor, ns.updateIndicators = unitData, r
 -- (and for the settings window, Options.lua)
 ns.UNITS, ns.UNIT_LABEL, ns.frames, ns.Extras, ns.setSetting = UNITS, UNIT_LABEL, frames, Extras, setSetting
 ns.styleOverlay = styleOverlay     -- (the settings' heal and shield preview draws with it)
-ns.DEFAULT_SETTINGS, ns.ALWAYS_SHOWN, ns.OWN_CLASS, ns.COLOR_MODES = DEFAULT_SETTINGS, ALWAYS_SHOWN, OWN_CLASS, COLOR_MODES
+ns.DEFAULT_SETTINGS, ns.ALWAYS_SHOWN, ns.OWN_CLASS = DEFAULT_SETTINGS, ALWAYS_SHOWN, OWN_CLASS
 ns.hasCastAndThreat, ns.textureChoices, ns.fontChoices, ns.Profiles = hasCastAndThreat, textureChoices, fontChoices, Profiles
 ns.moveTipToDefault, ns.addonVersion = moveTipToDefault, addonVersion
 ns.CAST_BOX, ns.castBoxHeight, ns.setBarText = CAST_BOX, castBoxHeight, setBarText

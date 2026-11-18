@@ -9,7 +9,7 @@ local Opt = ns.Opt
 Opt.sections = {}       -- (every collapsible section on every page: opened as you left them, Opt.state)
 local UNITS, UNIT_LABEL, frames, Party, Extras = ns.UNITS, ns.UNIT_LABEL, ns.frames, ns.Party, ns.Extras
 local getSetting, setSetting, defaultFor, frameOn, plain = ns.getSetting, ns.setSetting, ns.defaultFor, ns.frameOn, ns.plain
-local DEFAULT_SETTINGS, ALWAYS_SHOWN, OWN_CLASS, COLOR_MODES = ns.DEFAULT_SETTINGS, ns.ALWAYS_SHOWN, ns.OWN_CLASS, ns.COLOR_MODES
+local DEFAULT_SETTINGS, ALWAYS_SHOWN, OWN_CLASS = ns.DEFAULT_SETTINGS, ns.ALWAYS_SHOWN, ns.OWN_CLASS
 local hasCastAndThreat, textureChoices, fontChoices, Profiles = ns.hasCastAndThreat, ns.textureChoices, ns.fontChoices, ns.Profiles
 local defaultTip, moveTipToDefault, addonVersion = ns.defaultTip, ns.moveTipToDefault, ns.addonVersion
 -- (the actions: assigned late in the main file, so read when used)
@@ -565,8 +565,6 @@ Opt.SEARCH_WORDS = {
     barTexture = "hp health statusbar", powerTexture = "mana rage energy focus power statusbar",
     hpAlpha = "hp transparent see-through alpha", mpAlpha = "mana rage energy transparent see-through alpha",
     textMode = "hp mana values text", textFormat = "percent percentage values text",
-    colorMode = "hp color class reaction", rpHealthColor = "hp color class", petColor = "hp color",
-    npcColor = "hp color mob enemy", healthFade = "hp red low health gradient color",
     healPrediction = "heal prediction hots", healTexture = "heal prediction incoming statusbar", healGlow = "heal glow pulse shimmer snowglobe blizzard snowstorm sparkle", absorbGlow = "shield absorb glow pulse shimmer snowglobe blizzard snowstorm sparkle",
     healBorder = "heal glow edge outline proc", absorbBorder = "shield absorb glow edge outline proc", healAlpha = "heal incoming transparent", absorbs = "shield absorb", absorbTexture = "shield absorb statusbar stripes",
     absorbAlpha = "shield absorb transparent", damageTrail = "hit lost red hp trail",
@@ -1570,10 +1568,6 @@ local function buildSettings()
             B.slider("auraStack", "Stack count size", "How big the stack count is, as a share of the icon.", 50, 30, 90, 5,
                 function(v) return string.format("%d%%", math.floor(v + 0.5)) end)
         end
-        -- Fade to red: one switch. The curve is fixed (yellow, orange, red).
-        function B.fade(_, _, tip)
-            B.check("healthFade", "Fade to red as health drops", tip, false)
-        end
         return B
     end
 
@@ -1649,16 +1643,6 @@ local function buildSettings()
                 if unit == "party" and k == "frameTint" and v == "class" then setSetting(unit, k, "theirclass")
                 else setSetting(unit, k, v) end
             end
-            -- Health colour: the pet and the party's raid-style tiles have their own choices; they follow
-            -- as closely as they can (the pet: Default, or the player frame's colour; the tiles: Default,
-            -- Dark, or class colour)
-            if k == "colorMode" then
-                if v == "smart" or v == "reaction" then setSetting("party", "colorMode", "class") end
-                setSetting("pet", "petColor", v == "plain" and "plain" or "player")
-                if v == "dark" then setSetting("party", "rpHealthColor", "dark")
-                elseif v == "plain" then setSetting("party", "rpHealthColor", "default")
-                else setSetting("party", "rpHealthColor", "class") end
-            end
         end
         local proxy = setmetatable({}, {
             __index = function(_, k) return getSetting("player", k) end,
@@ -1689,19 +1673,6 @@ local function buildSettings()
         local trail = B.pair({ "damageTrail", "Recent damage", "When health drops, the part just lost stays for a moment, then slides away.", true })
         local trailTex, trailColour, trailDelay, trailAlpha = B.trailLooks("player", function(k, v) setAll(nil, k, v) end)
         B.under(trail, function() return getSetting("player", "damageTrail") and true or false end, trailTex, trailColour, trailDelay, trailAlpha)
-
-        B.section("Health colour", false)
-        local colour = B.dropdown("colorMode", "Health colour", "Every frame's health colour at once (the pet and the party's raid-style tiles follow as closely as their own choices allow). Each frame's page can then differ.", "smart", COLOR_MODES)
-        local function byReaction() local m = getSetting("player", "colorMode"); return m == "smart" or m == "reaction" end
-        local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs on every frame. Green lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
-            { { "reaction", "Red" }, { "green", "Green" }, { "custom", "Custom" } })
-        local npcCustom = B.swatch("Custom NPC colour", function()
-            local c = getSetting("target", "npcColorRGB")
-            return type(c) == "table" and c or { 0.1, 0.8, 0.1 }
-        end, function(r, g, b) setAll(nil, "npcColorRGB", { r, g, b }) end, "The health colour for hostile NPCs on every frame. Click to change it.")
-        B.under(colour, byReaction, npc)
-        B.under(npc, function() return byReaction() and getSetting("target", "npcColor") == "custom" end, npcCustom)
-        B.fade("player", setAll, "As health drops, the bar keeps its colour until 66%, then blends through yellow, orange at 33% and red at 1%. Other players stay their class colour.")
 
         B.shields("player", function(k, v) setAll(nil, k, v) end, function()
             -- (every frame)
@@ -1830,34 +1801,12 @@ local function buildSettings()
                    { "rpPowerHealer", "Healer power bars", "A slim mana bar along the bottom of healers' tiles.", true }),
             B.pair({ "rpPowerDPS", "Damage power bars", "A slim power bar along the bottom of damage dealers' tiles (and anyone with no role).", false }))
 
-        -- Health colour -------------------------------------------------------------------
-        B.section("Health colour", false)
-        -- (colours: each style has its own)
-        -- (party members are players: no reaction or NPC choices. An older "class for players, reaction
-        -- for NPCs" or "by reaction" shows, and works, as Class colour.)
-        local u = ns.unitData("party")
-        if u and (u.colorMode == "smart" or u.colorMode == "reaction") then u.colorMode = "class" end
-        -- (the same choices in both styles; the portrait frames keep theirs in colorMode, the tiles in
-        -- rpHealthColor)
-        B.showIf(portrait,
-            B.dropdown("colorMode", "Health colour", "Default: the bar as the game draws it. Class colour: each member in their class's colour. Dark: a flat dark bar. Custom: a colour of your own. By health: green to yellow to red as health drops.", "class",
-                { { "plain", "Default" }, { "class", "Class colour" }, { "dark", "Dark" }, { "custom", "Custom" }, { "gradient", "By health" } }))
-        B.showIf(both(portrait, function() return get("colorMode") == "custom" end),
-            swatch("healthColorRGB", "Custom health colour", "The health colour for every member. Click to change it.", { 0.15, 0.75, 0.25 }))
-        B.showIf(raid,
-            B.dropdown("rpHealthColor", "Health colour", "Default: Blizzard's raid-frame green. Class colour; Dark: dark bars with the missing part in their class colour; a colour of your own; or green to yellow to red as health drops.", "class",
-                { { "default", "Default" }, { "class", "Class colour" }, { "dark", "Dark" }, { "custom", "Custom" }, { "gradient", "By health" } }))
-        B.showIf(both(raid, function() return get("rpHealthColor") == "custom" end),
-            swatch("rpHealthCustom", "Custom health colour", "The health colour for every tile. Click to change it.", { 0.15, 0.75, 0.25 }))
-        B.showIf(both(raid, function() local m = get("rpHealthColor"); return m ~= "dark" and m ~= "gradient" end),
-            B.slider("rpMissingDark", "Missing health shade", "How much darker the missing part of the bar is than the health.", defaultFor("party", "rpMissingDark"), 0, 100, 5, pct))
-        local fadeFrom = #B.page.rows
-        B.fade("party", setSetting, "As health drops, the bar keeps its colour until 66%, then blends through yellow, orange at 33% and red at 1%. Other players stay their class colour.")
-        -- (By health already is a fade: Fade to red only for the other colours)
-        B.showIf(both(portrait, function() return get("colorMode") ~= "gradient" end), unpack(B.page.rows, fadeFrom + 1))
-        B.showIf(raid,
-            swatch("rpDeadColor", "Dead colour", "The tile's colour while a member is dead or a ghost.", { 0.3, 0.1, 0.1 }),
-            swatch("rpOfflineColor", "Offline colour", "The tile's colour while a member is offline.", { 0.35, 0.35, 0.35 }))
+        -- Raid tiles stay class coloured. The missing part, and dead or offline, can still be shaded.
+        local colourHead = B.section("Health colour", false)
+        local missing = B.slider("rpMissingDark", "Missing health shade", "How much darker the missing part of the bar is than the health.", defaultFor("party", "rpMissingDark"), 0, 100, 5, pct)
+        local dead = swatch("rpDeadColor", "Dead colour", "The tile's colour while a member is dead or a ghost.", { 0.3, 0.1, 0.1 })
+        local offline = swatch("rpOfflineColor", "Offline colour", "The tile's colour while a member is offline.", { 0.35, 0.35, 0.35 })
+        B.showIf(raid, colourHead, missing, dead, offline)
 
         -- Incoming heals, Shields: the portrait frames' looks; the tiles' shields have
         -- their own; the glows go on both
@@ -2010,27 +1959,6 @@ local function buildSettings()
                (unit == "target" or unit == "focus") and { "damagePredict", "Preview spell damage", "While you cast at it, the damage your spell will do shows lighter at the end of its health (the tooltip's damage; crits, resists and armour aren't counted).", true } or nil)
         local trailTex, trailColour, trailDelay, trailAlpha = B.trailLooks(unit, function(k, v) setSetting(unit, k, v) end)
         B.under(trail, isOn("damageTrail"), trailTex, trailColour, trailDelay, trailAlpha)
-
-        -- Health colour -------------------------------------------------------------------
-        B.section("Health colour", false)
-        if isPet then   -- (the pet's own reaction colour flips around, so these two)
-            B.dropdown("petColor", "Health colour", "Default: the bar as the game draws it (green). Or the same as your player frame's (your class colour, if that's what the player frame uses).", "player",
-                { { "plain", "Default" }, { "player", "Match the player frame" } })
-        else
-            local colour = B.dropdown("colorMode", "Health colour", "Default: the bar as the game draws it (green).\nClass for players, reaction for NPCs: players in their class colour, NPCs red, yellow or green by how they feel about you.\nClass colour: players in their class colour, NPCs as drawn.\nBy reaction: everyone red, yellow or green by how they feel about you.\nDark: a flat dark bar.", "smart", COLOR_MODES)
-            if not isPlayer then
-                local function byReaction() local m = get("colorMode"); return m == "smart" or m == "reaction" end
-                local npc = B.dropdown("npcColor", "Enemy NPC colour", "The health colour for hostile NPCs. Green (or your own colour) lets Fade to red show their health dropping. Neutral NPCs stay yellow.", "reaction",
-                    { { "reaction", "Red" }, { "green", "Green" }, { "custom", "Custom" } })
-                local npcCustom = B.swatch("Custom NPC colour", function()
-                    local c = get("npcColorRGB")
-                    return type(c) == "table" and c or { 0.1, 0.8, 0.1 }
-                end, function(r, g, b) setSetting(unit, "npcColorRGB", { r, g, b }) end, "The health colour for hostile NPCs. Click to change it.")
-                B.under(colour, byReaction, npc)
-                B.under(npc, both(byReaction, function() return get("npcColor") == "custom" end), npcCustom)
-            end
-        end
-        B.fade(unit, setSetting, "As health drops, the bar keeps its colour until 66%, then blends through yellow, orange at 33% and red at 1%. Other players stay their class colour.")
 
         -- Incoming heals, Shields -----------------------------------------------------------
         B.shields(unit, function(k, v) setSetting(unit, k, v) end, function() return { frames[unit] } end)

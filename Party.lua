@@ -475,8 +475,7 @@ function Party.paintSample(f)
     end)
     pcall(function() if f.hpText:IsShown() then f.hpText:SetFormattedText("%d%%", s.hp * 100) end end)
     pcall(function() if f.mpText:IsShown() then f.mpText:SetFormattedText("%d%%", s.mp * 100) end end)
-    -- Other players stay their class colour. The frame underneath is you, so paint the sample's class
-    -- over your own. Health colour and the fade to red do not apply.
+    -- The frame underneath is you, so paint the sample member's class colour over your own.
     local c = (RAID_CLASS_COLORS or {})[s.class]
     local r, g, b
     if c then r, g, b = c.r, c.g, c.b end
@@ -1597,27 +1596,9 @@ function RP.state(u)
     if get("rpAFK") and plain(UnitIsAFK, u) then return "AFK" end
 end
 
--- Health from green (full) through yellow to red (empty): the colour the game works out, so it's right
--- even when the health itself is hidden from addons.
-function RP.gradient()
-    if RP.curve == nil then
-        RP.curve = false
-        pcall(function()
-            local c = C_CurveUtil.CreateColorCurve()
-            pcall(function() c:SetType(Enum.LuaCurveType.Linear) end)
-            c:AddPoint(0, CreateColor(0.9, 0.12, 0.1, 1))
-            c:AddPoint(0.5, CreateColor(0.95, 0.82, 0.1, 1))
-            c:AddPoint(1, CreateColor(0.15, 0.85, 0.25, 1))
-            RP.curve = c
-        end)
-    end
-    return RP.curve or nil
-end
-
--- The bar's colours: class / dark / custom / by health, the missing part darker (Missing health shade).
--- s: a sample member, else the tile's unit. state: dead / offline etc.
-function RP.colorHealth(t, state, class, frac)
-    local mode = get("rpHealthColor") or "class"
+-- Every member is a player, so the bar is their class colour. The missing part is darker
+-- (Missing health shade). state: dead / offline etc.
+function RP.colorHealth(t, state, class)
     local dark = (tonumber(get("rpMissingDark")) or 75) / 100
     if state == "Dead" or state == "Ghost" or state == "Offline" then
         local c = state == "Offline" and get("rpOfflineColor") or get("rpDeadColor")
@@ -1629,30 +1610,6 @@ function RP.colorHealth(t, state, class, frac)
     local cc = (RAID_CLASS_COLORS or {})[class or ""]
     local r, g, b = 0.2, 0.8, 0.2
     if cc then r, g, b = cc.r, cc.g, cc.b end
-    if mode == "dark" then
-        t.hp:SetStatusBarColor(0.16, 0.16, 0.18)
-        t.hpBg:SetVertexColor(r * 0.85, g * 0.85, b * 0.85)
-        return
-    elseif mode == "default" then
-        r, g, b = 0.1, 0.8, 0.1            -- (Blizzard's raid-frame green)
-    elseif mode == "custom" then
-        local c = get("rpHealthCustom")
-        if type(c) == "table" then r, g, b = c[1], c[2], c[3] end
-    elseif mode == "gradient" then
-        t.hpBg:SetVertexColor(0.1, 0.1, 0.1)
-        if frac then
-            -- (a sample: worked out here)
-            local f = math.max(0, math.min(1, frac))
-            if f > 0.5 then local k = (f - 0.5) * 2; t.hp:SetStatusBarColor(0.95 + (0.15 - 0.95) * k, 0.82 + (0.85 - 0.82) * k, 0.1 + 0.15 * k)
-            else local k = f * 2; t.hp:SetStatusBarColor(0.9 + 0.05 * k, 0.12 + 0.7 * k, 0.1) end
-            return
-        end
-        local curve = RP.gradient()
-        if curve then
-            local ok, col = pcall(UnitHealthPercent, t.wfUnit, true, curve)
-            if ok and col and pcall(t.hp.SetStatusBarColor, t.hp, col:GetRGB()) then return end
-        end
-    end
     t.hp:SetStatusBarColor(r, g, b)
     t.hpBg:SetVertexColor(r * (1 - dark), g * (1 - dark), b * (1 - dark))
 end

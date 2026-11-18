@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Health bars no longer have a colour to pick. Every player, Alliance or Horde, is their class colour. Every NPC is yellow while neutral or passive, and green otherwise, friendly and hostile alike. Fade to red, Enemy NPC colour, and the other health-colour choices are gone.
+
 ## 1.17.2
 - Battleground enemies show their class colour on the target frame. Their class is hidden from addons, so the bar uses the game's own class-colour lookup instead of dropping it and staying green.
 

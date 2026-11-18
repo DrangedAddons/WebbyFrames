@@ -28,8 +28,7 @@ number), `/webby export` / `import`,
   and cat form, movable in Edit Mode (player; druids), pet happiness (pet)
 - **Bars:** health and power textures, font (SharedMedia ones too), numbers always / on mouseover / never as
   totals, percentages or both
-- **Health bar:** class or reaction colour (other players keep their class colour), enemy NPC colour, fade to red
-  as health drops, recent damage with its own look, spell damage preview (target, focus; channelled spells too)
+- **Health bar:** class colour for every player, yellow for a neutral or passive NPC, green for every other NPC. Recent damage with its own look, spell damage preview (target, focus; channelled spells too)
 - **Incoming heals and shields:** texture, colour, opacity and a live preview on the frame, with glows (soft pulse,
   shimmer, snowglobe or blizzard) and a border glow. A shield bigger than the missing health grows back over the
   health from the bar's right end, and its amount shows as a number with the Numbers setting
