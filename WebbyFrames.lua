@@ -427,17 +427,24 @@ end
 -- Our buff and debuff icons (b.webbyAura): the game shows and refreshes their tooltips itself, next to
 -- the icon; each time, it's moved to the default spot.
 pcall(function()
+    -- In combat the owner can be hidden from addon code. Reading it must not throw: a throw here
+    -- runs on every tooltip update and stops the aura tooltip refreshing.
+    local function auraOwner(tt)
+        local ok, o = pcall(tt.GetOwner, tt)
+        if not ok or not o then return end
+        local okM, mark = pcall(function() return o.webbyAura end)
+        if okM and mark then return o end
+    end
     local function check(tt)
-        local o = tt:GetOwner()
-        if not (o and o.webbyAura) then return end
-        local _, rel = tt:GetPoint(1)
-        if rel == o then moveTipToDefault(o) end
+        local o = auraOwner(tt)
+        if not o then return end
+        local ok, _, rel = pcall(tt.GetPoint, tt, 1)
+        if ok and rel == o then pcall(moveTipToDefault, o) end
     end
     GameTooltip:HookScript("OnShow", check)
     -- Blizzard re-anchors an aura tooltip beside the icon on later frames. Only ours get here.
     GameTooltip:HookScript("OnUpdate", function(tt)
-        local o = tt:GetOwner()
-        if o and o.webbyAura then check(tt) end
+        if auraOwner(tt) then check(tt) end
     end)
 end)
 

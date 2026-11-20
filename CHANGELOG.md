@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.17.4-beta
+- Buff and debuff tooltips stay with the icon under the cursor. Each icon is laid out at its real size, so a buff and a debuff, or one of your bigger debuffs, no longer covers the next icon. When an aura is applied or falls off, the tooltip follows the icon the mouse is actually on.
+
 ## 1.17.3-beta
 - Health bars no longer have a colour to pick. Every player, Alliance or Horde, is their class colour. Every NPC is yellow while neutral or passive, and green otherwise, friendly and hostile alike. Fade to red, Enemy NPC colour, and the other health-colour choices are gone.
 

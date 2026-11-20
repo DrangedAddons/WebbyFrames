@@ -102,9 +102,13 @@ function AuraKit.styleButton(f, b)
     pcall(cd.SetDrawBling, cd, false)            -- no flash when the aura ends
     pcall(b.SetDurationCooldown, b, cd)
     b.webbyCD = cd
+    -- The sweep and the stack sit on top of the icon. They must not take the mouse, or the
+    -- button never sees the hover and the icon has no tooltip. Motion still reaches the button.
+    AuraKit.passMouse(cd)
     local top = CreateFrame("Frame", nil, b)
     top:SetAllPoints()
     top:SetFrameLevel(cd:GetFrameLevel() + 1)
+    AuraKit.passMouse(top)
     local count = top:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
     count:SetPoint("BOTTOMRIGHT", 1, 0)
     pcall(b.SetApplicationCount, b, count)
@@ -120,7 +124,19 @@ function AuraKit.styleButton(f, b)
         customDispelColorMap = AuraKit.dispelColors(),
     })
     if not ok then b.webbyEdge:Hide() end
+    local list = f.auraButtons
+    if not list then list = {}; f.auraButtons = list end
+    list[#list + 1] = b
     AuraKit.sizeButton(f, b)
+end
+
+-- A child of an aura button (the sweep, the stack count) must not be the thing the mouse hits.
+function AuraKit.passMouse(frame)
+    if not frame then return end
+    pcall(frame.EnableMouse, frame, false)
+    pcall(frame.SetMouseMotionEnabled, frame, false)
+    pcall(frame.SetMouseClickEnabled, frame, false)
+    pcall(frame.SetPropagateMouseMotion, frame, true)
 end
 
 -- Size, sweep, countdown numbers and stack text to the frame's current options.
@@ -135,7 +151,10 @@ function AuraKit.sizeButton(f, b)
         pcall(function()
             local fs = b.webbyCD:GetCountdownFontString()
             fs:SetFont(fs:GetFont() or STANDARD_TEXT_FONT, math.max(8, math.floor(size * 0.45)), "OUTLINE")
+            local host = fs.GetParent and fs:GetParent()
+            if host and host ~= b and host ~= b.webbyCD then AuraKit.passMouse(host) end
         end)
+        AuraKit.passMouse(b.webbyCD)
     end
     if b.webbyCount then
         -- stack count: a share of the icon's size (Stack count size, 30 - 90%)
@@ -351,7 +370,24 @@ end
 -- A frame's unit's auras changed (UNIT_AURA), or its unit did: only the player frame's glow colour
 -- needs the debuff's type itself; everything else redraws on its own. `info` is the event payload
 -- when the client sends one. A duration tick does not rescan.
+-- True when icons may have moved. A duration tick does not. A hidden payload counts as moved:
+-- comparing it would throw, and that is when the tooltip most often goes stale.
+local function aurasMoved(info)
+    if type(info) ~= "table" then return true end
+    local ok, moved = pcall(function()
+        if info.isFullUpdate ~= false then return true end
+        local removed, added = info.removedAuraInstanceIDs, info.addedAuras
+        if type(removed) == "table" and removed[1] ~= nil then return true end
+        if type(added) == "table" and added[1] ~= nil then return true end
+        return false
+    end)
+    return (not ok) or moved
+end
+
 function AuraKit.auraChanged(f, info)
+    -- An aura added or removed reflows the icons. The tooltip stays on the old button unless
+    -- something asks again.
+    if aurasMoved(info) then AuraKit.tipDirtyUntil = GetTime() + 0.25 end
     if not f.status then return end
     if f.dglowWant and not dispelTouched(info) then return end
     local typ = false
@@ -522,9 +558,11 @@ function AuraKit.update(f)
     local showB = getSetting(base, "auraBuffs") and true or false
     local showD = getSetting(base, "auraDebuffs") and true or false
     local perRow, max = getSetting(base, "auraPerRow"), getSetting(base, "auraMax")
-    -- rows are as wide as perRow of the bigger icons, so neither group spills past them
-    local size = math.max(showB and getSetting(base, "auraSize") or 0, showD and getSetting(base, "auraDebuffSize") or 0)
-    if size == 0 then size = getSetting(base, "auraSize") end
+    local buffSize = getSetting(base, "auraSize")
+    local debuffSize = getSetting(base, "auraDebuffSize")
+    -- "Bigger own debuffs" draws yours at 1.35x. The row has to be wide enough for those, or
+    -- each one covers the next icon and the mouse reads the neighbour.
+    local mineSize = math.floor((debuffSize or buffSize or 18) * 1.35 + 0.5)
     local pos = getSetting(base, "auraPos")
     if pos == "side" and not f.small then pos = "below" end      -- (only the small frames have room beside them)
     -- beside the frame there's room for two rows: buffs and debuffs a row's worth each at most, so
@@ -558,9 +596,29 @@ function AuraKit.update(f)
         pcall(c.SetAuraGroupSortMethod, c, "debuffsMine", order)
     end
     pcall(AuraKit.dispelGlow, f)
+    -- Size the buttons before the flow runs, and tell the flow each group's real size. The flow
+    -- otherwise keeps the size from the previous pass, and a resized button overlaps the next one.
+    local size = 0
+    if showB then size = math.max(size, buffSize or 0) end
+    if showD and big then size = math.max(size, mineSize) end
+    if showD and not (big and onlyMine) then size = math.max(size, debuffSize or 0) end
+    if size == 0 then size = buffSize or 18 end
     for _, g in ipairs(AuraKit.GROUPS) do
+        local n = 0
+        pcall(function() n = c:GetAuraGroupFrameCount(g) end)
+        for i = 1, n do
+            local b
+            pcall(function() b = c:GetAuraGroupFrame(g, i) end)
+            if b then pcall(AuraKit.sizeButton, f, b) end
+        end
         pcall(c.SetAuraGroupMaxFrameCount, c, g, max)
-        pcall(c.SetAuraGroupLayout, c, g, { elementSpacing = gap, lineSpacing = gap, groupSpacing = gap, groupLineSpacing = gap })
+        local w = (g == "buffs" and buffSize) or (g == "debuffsMine" and mineSize) or debuffSize
+        local spaced = { elementSpacing = gap, lineSpacing = gap, groupSpacing = gap, groupLineSpacing = gap,
+                         elementWidth = w, elementHeight = w }
+        if not pcall(c.SetAuraGroupLayout, c, g, spaced) then
+            spaced.elementWidth, spaced.elementHeight = nil, nil
+            pcall(c.SetAuraGroupLayout, c, g, spaced)
+        end
     end
     -- flow: rows of perRow icons, growing right (or filling from the right, growing left) and down (up
     -- when above the frame); the block keeps the same spot either way
@@ -579,19 +637,135 @@ function AuraKit.update(f)
     -- one row's size, so the first row sits exactly on the anchor (more rows grow on past it)
     pcall(c.SetSize, c, perRow * (size + gap), size)
     AuraKit.placeMover(f, perRow * (size + gap) - gap, size)
-    -- resize the buttons made so far (new ones are sized as they're made)
-    for _, g in ipairs(AuraKit.GROUPS) do
-        local n = 0
-        pcall(function() n = c:GetAuraGroupFrameCount(g) end)
-        for i = 1, n do
-            local b
-            pcall(function() b = c:GetAuraGroupFrame(g, i) end)
-            if b then pcall(AuraKit.sizeButton, f, b) end
-        end
-    end
     c:SetShown(showB or showD)
     f.auraBox = c
     f.auraHeight = 0
 end
+
+---------------------------------------------------------------------------
+-- Tooltip follows the icon under the cursor.
+---------------------------------------------------------------------------
+-- The game fills a button's tooltip on enter, from that button's aura. It does not ask again when
+-- the icons reflow, and in combat GetOwner() is nil for these buttons, so its own refresh stops.
+-- The button under the cursor is asked to show its tooltip again. Children of the button are
+-- walked, because the sweep can be the frame the mouse is actually on.
+
+local function auraFromFrame(fr)
+    for _ = 1, 8 do
+        if not fr then return end
+        local ok, mark = pcall(function() return fr.webbyAura end)
+        if ok and mark then return fr end
+        if not ok then return end
+        local okP, parent = pcall(fr.GetParent, fr)
+        if not okP then return end
+        fr = parent
+    end
+end
+
+local function buttonUnderCursor()
+    if GetMouseFoci then
+        local ok, foci = pcall(GetMouseFoci)
+        if ok and type(foci) == "table" then
+            for i = 1, #foci do
+                local b = auraFromFrame(foci[i])
+                if b then return b end
+            end
+        end
+    elseif GetMouseFocus then
+        local ok, fr = pcall(GetMouseFocus)
+        if ok then
+            local b = auraFromFrame(fr)
+            if b then return b end
+        end
+    end
+    -- The button can be hidden from the mouse-focus list while auras are secret. The ones we
+    -- styled are still ours to test.
+    local hit
+    local function scan(f)
+        local list = f and f.auraButtons
+        if not list or not f:IsShown() then return end
+        for i = 1, #list do
+            local b = list[i]
+            local ok, over = pcall(function() return b:IsShown() and b:IsMouseOver() end)
+            if ok and over then
+                local okH, has = pcall(b.HasAuraInstance, b)
+                if not okH or has ~= false then hit = b end
+            end
+        end
+    end
+    for _, f in pairs(frames) do scan(f) end
+    local members = Party and Party.members
+    if members then
+        for i = 2, Party.SLOTS or 0 do scan(members[i]) end
+    end
+    return hit
+end
+
+-- refill: the tooltip is already up for this icon. Rewrite its text from the button's aura.
+-- ShowTooltip anchors the frame again, so it is only used when the icon under the cursor changed.
+local function showButtonTip(b, refill)
+    local ok = pcall(function()
+        if GameTooltip:IsShown() and GameTooltip:IsOwned(b) and b.UpdateTooltip then
+            b:UpdateTooltip()
+            return
+        end
+        if refill and GameTooltip:IsShown() and b.PopulateTooltip and b.GetAuraInstance then
+            local unit, data = b:GetAuraInstance()
+            if data then
+                b:PopulateTooltip(GameTooltip, unit, data)
+                if not GameTooltip:IsShown() then GameTooltip:Show() end
+            end
+            return
+        end
+        b:ShowTooltip()
+    end)
+    if ok then return end
+    if refill then return end
+    -- A client without ShowTooltip: let the button's own enter run. Never leave the mouse off.
+    local has = false
+    pcall(function() has = type(b.ShowTooltip) == "function" end)
+    if has then return end
+    pcall(b.EnableMouse, b, false)
+    pcall(b.EnableMouse, b, true)
+end
+
+function AuraKit.followTooltip()
+    local b = buttonUnderCursor()
+    if not b then
+        local prev = AuraKit.tipButton
+        if prev then
+            AuraKit.tipButton = nil
+            pcall(function()
+                if GameTooltip:IsShown() and GameTooltip:GetOwner() == prev then GameTooltip:Hide() end
+            end)
+        end
+        return
+    end
+    local dirty = GetTime() < (AuraKit.tipDirtyUntil or 0)
+    local shown = GameTooltip:IsShown()
+    -- Same icon, and nothing was added or removed: leave the tooltip the game already filled.
+    if b == AuraKit.tipButton and shown and not dirty then return end
+    -- One refill per reflow. Repeating it would fight the game's own tooltip.
+    if b == AuraKit.tipButton and shown and AuraKit.tipTried == AuraKit.tipDirtyUntil then return end
+    if b == AuraKit.tipButton and not shown and AuraKit.tipMissed then return end
+    local changed = b ~= AuraKit.tipButton
+    AuraKit.tipButton = b
+    if dirty then AuraKit.tipTried = AuraKit.tipDirtyUntil end
+    if changed or not shown then
+        showButtonTip(b, false)
+        AuraKit.tipMissed = not GameTooltip:IsShown()
+    elseif dirty then
+        showButtonTip(b, true)
+    end
+end
+
+local tipWatch = CreateFrame("Frame")
+local tipWait = 0
+tipWatch:SetScript("OnUpdate", function(_, elapsed)
+    tipWait = tipWait + elapsed
+    if tipWait < 0.1 then return end
+    tipWait = 0
+    pcall(AuraKit.followTooltip)
+end)
 
 
